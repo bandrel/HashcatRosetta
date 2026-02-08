@@ -37,7 +37,7 @@ If you're using [uv](https://github.com/astral-sh/uv), you can run without insta
 ```bash
 # Clone the repository
 git clone https://github.com/bandrel/HashcatRosetta.git
-cd rule_make
+cd HashcatRosetta
 
 # Run as a module (recommended)
 uv run python -m hashcat_rosetta --help
@@ -168,7 +168,7 @@ hashcat -m [hash-mode] -a 0 --debug-mode=4 -r rules.rule hashes.txt wordlist.txt
 ## Project Structure
 
 ```
-rule_make/
+HashcatRosetta/
 ├── hashcat_rosetta/     # Main package
 │   ├── __init__.py           # Package initialization
 │   ├── parser.py             # Rule and debug log parsing
