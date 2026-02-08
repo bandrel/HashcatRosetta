@@ -36,7 +36,7 @@ If you're using [uv](https://github.com/astral-sh/uv), you can run without insta
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/rule_make.git
+git clone https://github.com/bandrel/HashcatRosetta.git
 cd rule_make
 
 # Run as a module (recommended)
