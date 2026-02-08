@@ -19,13 +19,8 @@ A Python project designed to analyze hashcat debug mode 4 output files to identi
 ### From source
 
 ```bash
-<<<<<<< HEAD
 git clone https://github.com/bandrel/HashcatRosetta.git
 cd HashcatRosetta
-=======
-git clone https://github.com/yourusername/rule_make.git
-cd rule_make
->>>>>>> a1b5232 (Initial commit - HashcatRosetta rule analyzer)
 pip install -e .
 ```
 
@@ -41,13 +36,8 @@ If you're using [uv](https://github.com/astral-sh/uv), you can run without insta
 
 ```bash
 # Clone the repository
-<<<<<<< HEAD
 git clone https://github.com/bandrel/HashcatRosetta.git
 cd HashcatRosetta
-=======
-git clone https://github.com/yourusername/rule_make.git
-cd rule_make
->>>>>>> a1b5232 (Initial commit - HashcatRosetta rule analyzer)
 
 # Run as a module (recommended)
 uv run python -m hashcat_rosetta --help
@@ -178,11 +168,7 @@ hashcat -m [hash-mode] -a 0 --debug-mode=4 -r rules.rule hashes.txt wordlist.txt
 ## Project Structure
 
 ```
-<<<<<<< HEAD
 HashcatRosetta/
-=======
-rule_make/
->>>>>>> a1b5232 (Initial commit - HashcatRosetta rule analyzer)
 ├── hashcat_rosetta/     # Main package
 │   ├── __init__.py           # Package initialization
 │   ├── parser.py             # Rule and debug log parsing
