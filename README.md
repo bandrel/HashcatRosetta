@@ -20,7 +20,7 @@ A Python project designed to analyze hashcat debug mode 4 output files to identi
 
 ```bash
 git clone https://github.com/bandrel/HashcatRosetta.git
-cd rule_make
+cd HashcatRosetta
 pip install -e .
 ```
 
