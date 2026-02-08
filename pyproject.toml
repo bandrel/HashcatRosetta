@@ -34,7 +34,7 @@ dev = [
 rosetta = "hashcat_rosetta.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hashcat_rosetta"]
+packages = ["hashcat_rosetta"]
 
 [tool.black]
 line-length = 100
