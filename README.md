@@ -12,11 +12,6 @@
 
 A Python project designed to analyze hashcat debug mode 4 output files to identify the most efficient rules and track baseword frequency patterns used during password cracking attacks.
 
-// ...existing code...
-# HashcatRosetta
-
-A Python project designed to analyze hashcat debug mode 4 output files to identify the most efficient rules and track baseword frequency patterns used during password cracking attacks.
-
 ## Features
 
 - **Parse hashcat debug files** (--debug-mode 4 format) with automatic baseword and rule extraction
