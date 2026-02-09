@@ -1,0 +1,22 @@
+# Sample hashcat debug mode 4 output (colon-separated format)
+# Format: baseword:rule:candidate
+summer:} } } } t:rEmmus
+example:sa@ se3 so0 ss5 T1 T0:3x@mpl3
+website.com:$1 $9 c ^@:@Website.com19
+password:c:Password
+password:u:PASSWORD
+password:l:password
+password:$1:password1
+password:$2 $0 $2 $0:password2020
+admin:c:Admin
+admin:u:ADMIN
+admin:^1 ^2 ^3:123admin
+letmein:[:[etmein
+letmein:]:letmein]
+letmein:} } }:einletm
+test:c:Test
+test:u:TEST
+test:$! c:Test!
+welcome:c:Welcome
+welcome:u:WELCOME
+welcome:^@:@welcome

@@ -1,0 +1,89 @@
+password c P@ssword
+password u PASSWORD
+password l password
+password d passwordpassword
+password $1 password1
+password $1$2 password12
+password r drowssap
+password ^! !password
+password ^@ @password
+password ^# #password
+password [ assword
+password ] passwor
+password sso @  p@ssw@rd
+password [ ] passwor
+password c u PASSWORD
+password [ c Passwor
+password d l passwordpassword
+password $1 u PASSWORD1
+admin c Admin
+admin u ADMIN
+admin l admin
+admin d adminadmin
+admin $1 admin1
+admin $1$2 admin12
+admin r nimda
+admin ^! !admin
+admin ^@ @admin
+admin [ dmin
+admin ] admi
+admin c u ADMIN
+admin [ c Admin
+admin d c adminadmin
+password123 c P@ssword123
+password123 u PASSWORD123
+password123 l password123
+password123 d password123password123
+password123 $1 password1231
+password123 [ assword123
+password123 r 321drowssap
+password123 sss3ss p@3w0rd
+password123 c [ Passwor123
+Password c Password
+Password u PASSWORD
+Password l password
+Password d PasswordPassword
+Password r drowssaP
+Password ^@ @Password
+Password $! Password!
+Password [ assword
+welcome c Welcome
+welcome u WELCOME
+welcome l welcome
+welcome d welcomewelcome
+welcome r emoclew
+welcome ^# #welcome
+welcome $1 welcome1
+welcome $1$2 welcome12
+welcome c u WELCOME
+welcome [ c Welcom
+letmein c Letmein
+letmein u LETMEIN
+letmein l letmein
+letmein d letmeinletmein
+letmein [ etmein
+letmein ] letmei
+letmein r niemtel
+letmein seiim @i letmein -> letm@in
+abc c Abc
+abc u ABC
+abc l abc
+abc d abcabc
+abc r cba
+abc $1 abc1
+abc [ bc
+abc ] ab
+password [ c Passwor
+password d u passwordpassword
+password r ] drowsaps
+password u d PASSWORD
+password sso@  p@ssw@rd
+password [ $2 ass2word
+admin c u ADMIN
+admin r u nimda
+admin $1$2 admin12
+welcome c u WELCOME
+welcome [ ] elc
+welcome $$1 welcome11
+letmein r u NIEMTEL
+letmein [ u ETMEIN
