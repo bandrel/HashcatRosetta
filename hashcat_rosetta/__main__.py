@@ -5,29 +5,17 @@ import json
 import csv
 from pathlib import Path
 from .debug_analyzer import DebugAnalyzer
+from .formatting import display_rule_opcodes_summary
 
 @click.command(cls=click.Group, invoke_without_command=True)
-@click.argument('file', type=click.Path(exists=True), required=False)
 @click.pass_context
-def main(ctx, file):
+def main(ctx):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
     
-    If FILE is provided without a command, it will analyze the debug file.
+    Use 'hashcat-rosetta COMMAND [OPTIONS]' to run specific commands.
     """
-    if file:
-        # Direct file argument provided, run analyze
-        analyzer = DebugAnalyzer()
-        result = analyzer.analyze_debug_file(file)
-        
-        click.echo(f"\n📊 Debug File Analysis: {file}")
-        click.echo(f"{'='*60}")
-        click.echo(f"Total lines processed: {result['total_lines']}")
-        click.echo(f"Unique rules found: {result['unique_rules']}")
-        click.echo(f"Unique basewords: {result['unique_basewords']}")
-        click.echo(f"Total candidates generated: {result['total_candidates']}")
-        click.echo(f"{'='*60}\n")
-    elif ctx.invoked_subcommand is None:
-        # No file and no subcommand, show help
+    if ctx.invoked_subcommand is None:
+        # No subcommand, show help
         click.echo(ctx.get_help())
 
 @main.command('analyze')
@@ -133,6 +121,19 @@ def export_report(file, output, format):
                 ])
         
         click.echo(f"✅ CSV report exported to: {output_path}")
+
+@main.command('analyze-rules')
+@click.argument('rule_file', type=click.Path(exists=True))
+def analyze_rules(rule_file):
+    """Analyze rule file and display opcode statistics.
+    
+    Show frequency and distribution of rule opcodes in a rule file.
+    
+    Examples:
+        hashcat-rosetta analyze-rules rules.txt
+        hashcat-rosetta analyze-rules /hash/rules/buka_400k.rule
+    """
+    display_rule_opcodes_summary(rule_file)
 
 if __name__ == '__main__':
     main()

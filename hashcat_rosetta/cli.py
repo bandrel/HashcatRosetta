@@ -5,6 +5,7 @@ import os
 import sys
 import click
 from .debug_analyzer import DebugAnalyzer
+from .formatting import display_rule_opcodes_summary
 
 
 def explain_rule(rule_str, baseword='password'):
@@ -309,6 +310,20 @@ def _export_to_csv(analyzer, filepath):
                 detail['unique_rules'],
                 detail['unique_candidates']
             ])
+
+
+@click.command()
+@click.argument('rule_file', type=click.Path(exists=True))
+def analyze_rules(rule_file):
+    """Analyze hashcat rule file and display opcode statistics.
+    
+    Show frequency and distribution of rule opcodes in a rule file.
+    
+    Examples:
+        hashcat-analyzer analyze-rules rules.txt
+        hashcat-analyzer analyze-rules /hash/rules/buka_400k.rule
+    """
+    display_rule_opcodes_summary(rule_file)
 
 
 if __name__ == "__main__":
