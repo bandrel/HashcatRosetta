@@ -20,7 +20,12 @@ class RuleAnalyzer:
 
         Returns:
             Dictionary containing analysis results
+
+        Raises:
+            TypeError: If rule_string is not a string
         """
+        if not isinstance(rule_string, str):
+            raise TypeError(f"Expected str, got {type(rule_string).__name__}")
         parsed = self.parser.parse_rule(rule_string)
         if not parsed:
             return None
@@ -33,7 +38,7 @@ class RuleAnalyzer:
             "characteristics": self._extract_characteristics(parsed),
         }
 
-    def analyze_ruleset(self, rules: list) -> dict | None:
+    def analyze_ruleset(self, rules: list | None) -> dict | None:
         """
         Analyze a complete ruleset for efficiency and coverage.
 
@@ -43,6 +48,9 @@ class RuleAnalyzer:
         Returns:
             Dictionary containing ruleset analysis
         """
+        if not rules:
+            return None
+
         analyses = []
         for rule in rules:
             analysis = self.analyze_rule(rule)
@@ -98,13 +106,13 @@ class RuleAnalyzer:
         characteristics = []
         components = parsed_rule["components"]
 
-        if any(c in ["i", "u", "l"] for c in components):
+        if any(c and c[0] in ("u", "l", "c", "C", "t", "T") for c in components):
             characteristics.append("case_transform")
-        if any(c.startswith(("d", "p", "x", "X")) for c in components):
+        if any(c and c[0] in ("s", "i", "o") for c in components):
             characteristics.append("substitution")
-        if any(c.startswith(("^", "$")) for c in components):
+        if any(c and c[0] in ("^", "$") for c in components):
             characteristics.append("position_based")
-        if any(c in ["r", "R"] for c in components):
+        if any(c and c[0] == "r" for c in components):
             characteristics.append("reversal")
         if len(components) > 5:
             characteristics.append("complex")

@@ -60,37 +60,44 @@ uv run rosetta --help
 
 ### Analyzing Debug Files
 
-Analyze a hashcat debug file:
+Analyze a hashcat debug file (shows summary by default):
 ```bash
-rosetta analyze-debug-file debug_output.txt
-# or with uv: uv run python -m hashcat_rosetta analyze-debug-file debug_output.txt
+rosetta debug_output.txt
 ```
 
 Show top rules by frequency:
 ```bash
-rosetta show-rules debug_output.txt --top 10 --metric frequency
+rosetta debug_output.txt --rules --top 10 --metric frequency
 ```
 
 Show top rules by other metrics:
 ```bash
-rosetta show-rules debug_output.txt --metric basewords
-rosetta show-rules debug_output.txt --metric candidates
+rosetta debug_output.txt --rules --metric basewords
+rosetta debug_output.txt --rules --metric candidates
 ```
 
 Show basewords appearing multiple times:
 ```bash
-rosetta show-basewords debug_output.txt --top 10
+rosetta debug_output.txt --basewords --top 10
 ```
 
 Show detailed baseword analysis:
 ```bash
-rosetta show-basewords debug_output.txt --top 10 --detail --min-occurrences 2
+rosetta debug_output.txt --basewords --top 10 --detail --min-occurrences 2
 ```
 
 Export complete analysis report:
 ```bash
-rosetta export-report debug_output.txt report.json --format json
-rosetta export-report debug_output.txt report.csv --format csv
+rosetta debug_output.txt --export report.json --format json
+rosetta debug_output.txt --export report.csv --format csv
+```
+
+### Explaining Rules
+
+Explain what a hashcat rule does step-by-step:
+```bash
+rosetta --explain "c$1" --baseword admin
+rosetta --explain "u$!" --baseword myword
 ```
 
 ### Using the Python API
@@ -210,16 +217,11 @@ pytest
 pytest --cov=hashcat_rosetta tests/
 ```
 
-### Code formatting
+### Linting and formatting
 
 ```bash
-black hashcat_rosetta/ tests/ examples/
-```
-
-### Linting
-
-```bash
-flake8 hashcat_rosetta/ tests/ examples/
+ruff check hashcat_rosetta/ tests/
+ruff format hashcat_rosetta/ tests/
 ```
 
 ## Understanding the Analysis
@@ -247,14 +249,11 @@ This helps identify:
 ## Commands Reference
 
 ```
-rosetta analyze-rule RULE              Analyze a single rule
-rosetta analyze-file FILE              Analyze rules from a file
-rosetta compare-rules RULE1 RULE2      Compare two rules
-
-rosetta analyze-debug-file FILE        Analyze a debug file
-rosetta show-rules FILE                Show top rules from debug file
-rosetta show-basewords FILE            Show basewords from debug file
-rosetta export-report FILE OUTPUT      Export full analysis report
+rosetta FILE                                  Show analysis summary
+rosetta FILE --rules --metric frequency       Show top rules by metric
+rosetta FILE --basewords --detail             Show baseword analysis
+rosetta FILE --export report.json             Export analysis report
+rosetta --explain "c$1" --baseword admin      Explain a rule step-by-step
 ```
 
 ## Advanced Usage
@@ -262,7 +261,7 @@ rosetta export-report FILE OUTPUT      Export full analysis report
 ### Filtering basewords by minimum occurrences
 
 ```bash
-rosetta show-basewords debug.txt --min-occurrences 5
+rosetta debug.txt --basewords --min-occurrences 5
 ```
 
 ### Getting detailed metrics for a specific baseword
@@ -300,11 +299,11 @@ print(f"Total basewords: {baseword_stats['total_basewords']}")
 
 **✅ Use instead**:
 ```bash
-# Method 1: Use the CLI command name (with hyphen)
-uv run rosetta analyze-debug-file debug.txt
+# Method 1: Use the CLI command name
+uv run rosetta debug.txt
 
-# Method 2: Run as a Python module (with underscore)  
-uv run python -m hashcat_rosetta analyze-debug-file debug.txt
+# Method 2: Run as a Python module
+uv run python -m hashcat_rosetta debug.txt
 ```
 
 **Why?** `hashcat_rosetta` is the Python package name (for imports), while `rosetta` is the CLI command name (for running). The package name `hashcat_rosetta` is not executable on its own.

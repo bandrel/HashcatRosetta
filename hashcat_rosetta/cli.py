@@ -1,9 +1,12 @@
 """Command-line interface for the hashcat rule analyzer."""
 
+import csv
 import json
 import os
 import sys
+
 import click
+
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
 
@@ -25,7 +28,7 @@ def explain_rule(rule_str, baseword='password'):
         ']': ('Remove last', lambda x: x[:-1] if x else x),
         '{': ('Rotate left', lambda x: x[1:] + x[0] if x else x),
         '}': ('Rotate right', lambda x: x[-1] + x[:-1] if x else x),
-        'f': ('Reverse + dup', lambda x: (x + x[::-1]) if x else x),
+        'f': ('Reflect (duplicate reversed)', lambda x: (x + x[::-1]) if x else x),
         'p': ('Purge dupes', lambda x: ''.join(dict.fromkeys(x))),
     }
     
@@ -141,28 +144,35 @@ def explain_rule(rule_str, baseword='password'):
 @click.option('--top', default=10, help='Number of top items to show')
 @click.option('--min-occurrences', default=2, help='Minimum occurrences for basewords')
 @click.option('--detail', is_flag=True, help='Show detailed rule applications for basewords')
+@click.option(
+    '--analyze-rules', is_flag=True,
+    help='Analyze rule file opcodes (FILE should be a rule file, not debug output)',
+)
 @click.pass_context
-def main(ctx, file, explain, baseword, rules, basewords, export, metric, format, top, min_occurrences, detail):
+def main(ctx, file, explain, baseword, rules, basewords, export, metric, format, top, min_occurrences, detail, analyze_rules):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
-    
+
     Basic usage:
-        hashcat-analyzer debug.txt
-        hashcat-analyzer debug.txt --rules --metric frequency
-        hashcat-analyzer debug.txt --basewords --detail
-        hashcat-analyzer debug.txt --export report.json --format json
-        
+        rosetta debug.txt
+        rosetta debug.txt --rules --metric frequency
+        rosetta debug.txt --basewords --detail
+        rosetta debug.txt --export report.json --format json
+
     Explain rules:
-        hashcat-analyzer --explain "c"
-        hashcat-analyzer --explain "i74i81i92iA3"
-        hashcat-analyzer --explain "cD0sao" --baseword "admin"
-        hashcat-analyzer --explain "u$!" --baseword "myword"
-        hashcat-analyzer --explain rules.txt --baseword "admin"
+        rosetta --explain "c"
+        rosetta --explain "i74i81i92iA3"
+        rosetta --explain "cD0sao" --baseword "admin"
+        rosetta --explain "u$!" --baseword "myword"
+        rosetta --explain rules.txt --baseword "admin"
+
+    Analyze rule file opcodes:
+        rosetta rules.txt --analyze-rules
     """
     
     # Handle rule explanation
     if explain:
         if os.path.isfile(explain):
-            click.echo(f"\n📖 Rule File Explanation: '{explain}' applied to '{baseword}'")
+            click.echo(f"\nRule File Explanation: '{explain}' applied to '{baseword}'")
             click.echo("=" * 70)
             with open(explain, "r", encoding="utf-8") as rule_file:
                 for line_number, raw_line in enumerate(rule_file, 1):
@@ -176,13 +186,13 @@ def main(ctx, file, explain, baseword, rules, basewords, export, metric, format,
                             click.echo(f"  {explanation}")
                     else:
                         click.echo(f"\nLine {line_number}: {rule_line}")
-                        click.echo("  ⚠️  Unknown rule or no explanation available")
+                        click.echo("  [!] Unknown rule or no explanation available")
             click.echo("\nNote: Each character is a rule operation applied sequentially.")
             click.echo("      Complex rules combine multiple operations from left to right.")
         else:
             explanations = explain_rule(explain, baseword)
             if explanations:
-                click.echo(f"\n📖 Rule Explanation: '{explain}' applied to '{baseword}'")
+                click.echo(f"\nRule Explanation: '{explain}' applied to '{baseword}'")
                 click.echo("=" * 70)
                 for explanation in explanations:
                     click.echo(f"  {explanation}")
@@ -190,7 +200,7 @@ def main(ctx, file, explain, baseword, rules, basewords, export, metric, format,
                 click.echo("\nNote: Each character is a rule operation applied sequentially.")
                 click.echo("      Complex rules combine multiple operations from left to right.")
             else:
-                click.echo(f"⚠️  Unknown rule or no explanation available for: '{explain}'")
+                click.echo(f"[!] Unknown rule or no explanation available for: '{explain}'")
         return
     
     # Require file for other operations
@@ -198,16 +208,32 @@ def main(ctx, file, explain, baseword, rules, basewords, export, metric, format,
         click.echo("Error: FILE is required (unless using --explain)\n")
         click.echo(ctx.get_help())
         sys.exit(1)
-    
+
+    # Handle rule opcode analysis
+    if analyze_rules:
+        try:
+            display_rule_opcodes_summary(file)
+        except (FileNotFoundError, ValueError) as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(1)
+        return
+
     analyzer = DebugAnalyzer()
-    result = analyzer.analyze_debug_file(file)
+    try:
+        result = analyzer.analyze_debug_file(file)
+    except FileNotFoundError:
+        click.echo(f"Error: File not found: {file}", err=True)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     
     # Default behavior: show analysis summary
     if not rules and not basewords and not export:
         stats = analyzer.get_rule_statistics_summary()
         bw_stats = analyzer.get_baseword_statistics_summary()
 
-        click.echo(f"\n📊 Debug File Analysis: {file}")
+        click.echo(f"\nDebug File Analysis: {file}")
         click.echo(f"   Total Entries: {result['total_entries']}")
         click.echo(f"   Unique Rules: {result['unique_rules']}")
         click.echo(f"   Unique Basewords: {result['unique_basewords']}")
@@ -235,7 +261,7 @@ def main(ctx, file, explain, baseword, rules, basewords, export, metric, format,
             rule_list = analyzer.get_top_rules_by_unique_candidates(top)
             title = "by Unique Candidates"
         
-        click.echo(f"\n📋 Top {top} Rules {title}")
+        click.echo(f"\nTop {top} Rules {title}")
         click.echo("-" * 50)
         for i, (rule, count) in enumerate(rule_list, 1):
             click.echo(f"{i:2}. Rule: {rule:20} ({count})")
@@ -245,7 +271,7 @@ def main(ctx, file, explain, baseword, rules, basewords, export, metric, format,
         baseword_list = analyzer.get_basewords_with_min_occurrences(min_occurrences)
         baseword_list = baseword_list[:top]
         
-        click.echo(f"\n📝 Basewords (min {min_occurrences} occurrences, showing top {top}):")
+        click.echo(f"\nBasewords (min {min_occurrences} occurrences, showing top {top}):")
         click.echo("=" * 80)
         
         for baseword, count in baseword_list:
@@ -261,33 +287,18 @@ def main(ctx, file, explain, baseword, rules, basewords, export, metric, format,
     if export:
         if format == 'json':
             data = analyzer.export_to_dict()
-            data_serializable = _make_serializable(data)
             with open(export, 'w') as f:
-                json.dump(data_serializable, f, indent=2)
-            click.echo(f"✓ JSON report exported to: {export}")
+                json.dump(data, f, indent=2)
+            click.echo(f"Done: JSON report exported to: {export}")
         
         else:  # csv
             _export_to_csv(analyzer, export)
-            click.echo(f"✓ CSV report exported to: {export}")
+            click.echo(f"Done: CSV report exported to: {export}")
 
-
-
-def _make_serializable(obj):
-    """Convert sets and other non-serializable objects to serializable types."""
-    if isinstance(obj, set):
-        return list(obj)
-    elif isinstance(obj, dict):
-        return {k: _make_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_make_serializable(item) for item in obj]
-    else:
-        return obj
 
 
 def _export_to_csv(analyzer, filepath):
     """Export analysis to CSV format."""
-    import csv
-
     with open(filepath, 'w', newline='') as f:
         # Rules section
         f.write("# RULES ANALYSIS\n")
@@ -310,20 +321,6 @@ def _export_to_csv(analyzer, filepath):
                 detail['unique_rules'],
                 detail['unique_candidates']
             ])
-
-
-@click.command()
-@click.argument('rule_file', type=click.Path(exists=True))
-def analyze_rules(rule_file):
-    """Analyze hashcat rule file and display opcode statistics.
-    
-    Show frequency and distribution of rule opcodes in a rule file.
-    
-    Examples:
-        hashcat-analyzer analyze-rules rules.txt
-        hashcat-analyzer analyze-rules /hash/rules/buka_400k.rule
-    """
-    display_rule_opcodes_summary(rule_file)
 
 
 if __name__ == "__main__":

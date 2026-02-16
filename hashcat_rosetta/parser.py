@@ -1,5 +1,7 @@
 """Parser module for hashcat rules and debug files."""
 
+import warnings
+
 
 class DebugLogParser:
     """Parse hashcat debug mode 4 output files."""
@@ -39,11 +41,13 @@ class DebugLogParser:
                         entries.append(parsed)
         except FileNotFoundError:
             raise FileNotFoundError(f"Debug file not found: {filepath}")
+        except (TypeError, AttributeError, IsADirectoryError, PermissionError, ValueError):
+            raise
         except Exception as e:
             raise Exception(f"Error parsing debug file: {e}")
 
         # Validate that we parsed something meaningful
-        if total_lines > 10 and len(entries) == 0:
+        if len(entries) == 0:
             raise ValueError(
                 f"No valid debug entries found in {filepath}.\n"
                 f"Expected format: baseword rule candidate (one per line)\n"
@@ -53,7 +57,6 @@ class DebugLogParser:
             )
         elif total_lines > 10 and len(entries) < total_lines * 0.1:
             # Less than 10% of lines parsed successfully
-            import warnings
             warnings.warn(
                 f"Only {len(entries)} of {total_lines} lines were parsed successfully. "
                 f"This file may not be in the expected --debug-mode 4 format."
@@ -157,6 +160,9 @@ class RuleParser:
             return None
 
         rule_string = rule_string.strip()
+        if not rule_string:
+            return None
+
         components = self._tokenize_rule(rule_string)
 
         return {
@@ -183,31 +189,55 @@ class RuleParser:
         return parsed_rules
 
     def _tokenize_rule(self, rule_string: str) -> list:
-        """Tokenize a rule string into individual operations."""
+        """Tokenize a rule string into individual operations.
+
+        Supports the full hashcat rule opcode set:
+        - No-arg ops: : l u c C t d f r { } [ ] k K q E
+        - 1-arg ops (opcode + 1 char): T D p O z Z ^ $ @ ! > < ' + - . , L R
+        - 2-arg ops (opcode + 2 chars): s o i * x X
+        """
+        # No-argument operations (single character, no parameters)
+        no_arg_ops = set(":lucCtdfr{}[]kKqE")
+        # 1-argument operations (opcode + 1 parameter character)
+        one_arg_ops = set("TDpOzZ^$@!><'+-.,%LR")
+        # 2-argument operations (opcode + 2 parameter characters)
+        two_arg_ops = set("soix*X")
+
         tokens = []
         i = 0
         while i < len(rule_string):
             char = rule_string[i]
-            if char in "^$!@":
-                # Position-based operations
-                if i + 1 < len(rule_string):
-                    tokens.append(f"{char}{rule_string[i+1]}")
-                    i += 2
-                else:
-                    i += 1
-            elif char in "iuslAcCrR":
-                # Case/transform operations
-                tokens.append(char)
+
+            if char == ' ':
+                # Spaces are separators, skip
                 i += 1
-            elif char in "dpmxX":
-                # Substitution operations
+            elif char in two_arg_ops:
                 if i + 2 < len(rule_string):
-                    tokens.append(f"{char}{rule_string[i+1]}{rule_string[i+2]}")
+                    tokens.append(rule_string[i:i + 3])
                     i += 3
                 else:
+                    warnings.warn(
+                        f"Incomplete 2-arg opcode '{char}' at position {i} "
+                        f"in rule '{rule_string}' - missing parameter(s), skipping"
+                    )
                     i += 1
-            else:
+            elif char in one_arg_ops:
+                if i + 1 < len(rule_string):
+                    tokens.append(rule_string[i:i + 2])
+                    i += 2
+                else:
+                    warnings.warn(
+                        f"Incomplete 1-arg opcode '{char}' at position {i} "
+                        f"in rule '{rule_string}' - missing parameter, skipping"
+                    )
+                    i += 1
+            elif char in no_arg_ops:
+                tokens.append(char)
                 i += 1
+            else:
+                # Unknown opcode, skip
+                i += 1
+
         return tokens
 
     def _calculate_complexity(self, components: list) -> float:
@@ -224,11 +254,22 @@ class RuleParser:
             return 0.0
 
         complexity = len(components) * 10.0
-        # Bonus for certain operations
+        # Bonus for operations that significantly transform the word
         for component in components:
-            if component.startswith(("d", "p", "x", "X")):
+            if not component:
+                continue
+            op = component[0]
+            if op in ("d", "f", "p"):
+                # Duplication/reflection ops
                 complexity += 5
-            elif component.startswith(("r", "R")):
+            elif op in ("x", "X", "O"):
+                # Extraction/omission ops
+                complexity += 5
+            elif op in ("r",):
+                # Reverse
+                complexity += 3
+            elif op in ("s", "*", "i", "o"):
+                # Substitution/insertion/swap ops
                 complexity += 3
 
         return min(complexity, 100.0)

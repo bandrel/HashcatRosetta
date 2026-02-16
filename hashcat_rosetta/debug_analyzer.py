@@ -80,8 +80,8 @@ class DebugAnalyzer:
             'total_entries': len(self.entries),
             'unique_rules': len(self.rule_stats),
             'unique_basewords': len(self.baseword_stats),
-            'rule_stats': dict(self.rule_stats),
-            'baseword_stats': dict(self.baseword_stats),
+            'rule_stats': self._make_serializable(dict(self.rule_stats)),
+            'baseword_stats': self._make_serializable(dict(self.baseword_stats)),
         }
 
     def get_top_rules_by_frequency(self, top_n: int = 10) -> list:
@@ -262,12 +262,12 @@ class DebugAnalyzer:
 
     def export_to_dict(self) -> dict:
         """
-        Export complete analysis data as a dictionary.
+        Export complete analysis data as a JSON-serializable dictionary.
 
         Returns:
-            Complete analysis data structure
+            Complete analysis data structure (all values are JSON-safe)
         """
-        return {
+        data = {
             'summary': {
                 'total_entries': len(self.entries),
                 'rules': self.get_rule_statistics_summary(),
@@ -283,3 +283,16 @@ class DebugAnalyzer:
                 for rule in sorted(self.rule_stats.keys())
             },
         }
+        return self._make_serializable(data)
+
+    @staticmethod
+    def _make_serializable(obj):
+        """Convert sets and other non-serializable objects to JSON-safe types."""
+        if isinstance(obj, set):
+            return sorted(list(obj))
+        elif isinstance(obj, dict):
+            return {k: DebugAnalyzer._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [DebugAnalyzer._make_serializable(item) for item in obj]
+        else:
+            return obj
