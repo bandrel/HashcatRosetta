@@ -11,21 +11,25 @@ class DebugAnalyzer:
         """Initialize the debug analyzer."""
         self.parser = DebugLogParser()
         self.entries = []
-        
+
         # Rule statistics
-        self.rule_stats = defaultdict(lambda: {
-            'count': 0,           # Total applications
-            'basewords': set(),   # Unique basewords used with this rule
-            'candidates': set(),  # Unique candidates generated
-            'match_count': 0,     # Successful matches
-        })
-        
+        self.rule_stats = defaultdict(
+            lambda: {
+                "count": 0,  # Total applications
+                "basewords": set(),  # Unique basewords used with this rule
+                "candidates": set(),  # Unique candidates generated
+                "match_count": 0,  # Successful matches
+            }
+        )
+
         # Baseword statistics
-        self.baseword_stats = defaultdict(lambda: {
-            'occurrences': [],    # List of {rule, candidate, matched}
-            'count': 0,
-            'match_count': 0,
-        })
+        self.baseword_stats = defaultdict(
+            lambda: {
+                "occurrences": [],  # List of {rule, candidate, matched}
+                "count": 0,
+                "match_count": 0,
+            }
+        )
 
     def analyze_debug_file(self, filepath: str) -> dict:
         """
@@ -59,29 +63,31 @@ class DebugAnalyzer:
         self.baseword_stats.clear()
 
         for entry in self.entries:
-            baseword = entry['baseword']
-            rule = entry['rule']
-            candidate = entry['candidate']
+            baseword = entry["baseword"]
+            rule = entry["rule"]
+            candidate = entry["candidate"]
 
             # Update rule statistics
-            self.rule_stats[rule]['count'] += 1
-            self.rule_stats[rule]['basewords'].add(baseword)
-            self.rule_stats[rule]['candidates'].add(candidate)
+            self.rule_stats[rule]["count"] += 1
+            self.rule_stats[rule]["basewords"].add(baseword)
+            self.rule_stats[rule]["candidates"].add(candidate)
 
             # Update baseword statistics
-            self.baseword_stats[baseword]['occurrences'].append({
-                'rule': rule,
-                'candidate': candidate,
-                'matched': entry.get('matched', False),
-            })
-            self.baseword_stats[baseword]['count'] += 1
+            self.baseword_stats[baseword]["occurrences"].append(
+                {
+                    "rule": rule,
+                    "candidate": candidate,
+                    "matched": entry.get("matched", False),
+                }
+            )
+            self.baseword_stats[baseword]["count"] += 1
 
         return {
-            'total_entries': len(self.entries),
-            'unique_rules': len(self.rule_stats),
-            'unique_basewords': len(self.baseword_stats),
-            'rule_stats': self._make_serializable(dict(self.rule_stats)),
-            'baseword_stats': self._make_serializable(dict(self.baseword_stats)),
+            "total_entries": len(self.entries),
+            "unique_rules": len(self.rule_stats),
+            "unique_basewords": len(self.baseword_stats),
+            "rule_stats": self._make_serializable(dict(self.rule_stats)),
+            "baseword_stats": self._make_serializable(dict(self.baseword_stats)),
         }
 
     def get_top_rules_by_frequency(self, top_n: int = 10) -> list:
@@ -94,12 +100,8 @@ class DebugAnalyzer:
         Returns:
             List of (rule, count) tuples
         """
-        rules = sorted(
-            self.rule_stats.items(),
-            key=lambda x: x[1]['count'],
-            reverse=True
-        )[:top_n]
-        return [(rule, stats['count']) for rule, stats in rules]
+        rules = sorted(self.rule_stats.items(), key=lambda x: x[1]["count"], reverse=True)[:top_n]
+        return [(rule, stats["count"]) for rule, stats in rules]
 
     def get_top_rules_by_unique_basewords(self, top_n: int = 10) -> list:
         """
@@ -111,12 +113,10 @@ class DebugAnalyzer:
         Returns:
             List of (rule, unique_baseword_count) tuples
         """
-        rules = sorted(
-            self.rule_stats.items(),
-            key=lambda x: len(x[1]['basewords']),
-            reverse=True
-        )[:top_n]
-        return [(rule, len(stats['basewords'])) for rule, stats in rules]
+        rules = sorted(self.rule_stats.items(), key=lambda x: len(x[1]["basewords"]), reverse=True)[
+            :top_n
+        ]
+        return [(rule, len(stats["basewords"])) for rule, stats in rules]
 
     def get_top_rules_by_unique_candidates(self, top_n: int = 10) -> list:
         """
@@ -129,11 +129,9 @@ class DebugAnalyzer:
             List of (rule, unique_candidate_count) tuples
         """
         rules = sorted(
-            self.rule_stats.items(),
-            key=lambda x: len(x[1]['candidates']),
-            reverse=True
+            self.rule_stats.items(), key=lambda x: len(x[1]["candidates"]), reverse=True
         )[:top_n]
-        return [(rule, len(stats['candidates'])) for rule, stats in rules]
+        return [(rule, len(stats["candidates"])) for rule, stats in rules]
 
     def get_top_basewords_by_frequency(self, top_n: int = 10) -> list:
         """
@@ -145,12 +143,10 @@ class DebugAnalyzer:
         Returns:
             List of (baseword, count) tuples
         """
-        basewords = sorted(
-            self.baseword_stats.items(),
-            key=lambda x: x[1]['count'],
-            reverse=True
-        )[:top_n]
-        return [(bw, stats['count']) for bw, stats in basewords]
+        basewords = sorted(self.baseword_stats.items(), key=lambda x: x[1]["count"], reverse=True)[
+            :top_n
+        ]
+        return [(bw, stats["count"]) for bw, stats in basewords]
 
     def get_baseword_detail(self, baseword: str) -> dict | None:
         """
@@ -167,11 +163,11 @@ class DebugAnalyzer:
 
         stats = self.baseword_stats[baseword]
         return {
-            'baseword': baseword,
-            'total_occurrences': stats['count'],
-            'occurrences': stats['occurrences'],
-            'unique_rules': len(set(occ['rule'] for occ in stats['occurrences'])),
-            'unique_candidates': len(set(occ['candidate'] for occ in stats['occurrences'])),
+            "baseword": baseword,
+            "total_occurrences": stats["count"],
+            "occurrences": stats["occurrences"],
+            "unique_rules": len(set(occ["rule"] for occ in stats["occurrences"])),
+            "unique_candidates": len(set(occ["candidate"] for occ in stats["occurrences"])),
         }
 
     def get_rule_detail(self, rule: str) -> dict | None:
@@ -189,12 +185,12 @@ class DebugAnalyzer:
 
         stats = self.rule_stats[rule]
         return {
-            'rule': rule,
-            'total_applications': stats['count'],
-            'unique_basewords': len(stats['basewords']),
-            'unique_candidates': len(stats['candidates']),
-            'basewords': sorted(list(stats['basewords'])),
-            'candidates': sorted(list(stats['candidates'])),
+            "rule": rule,
+            "total_applications": stats["count"],
+            "unique_basewords": len(stats["basewords"]),
+            "unique_candidates": len(stats["candidates"]),
+            "basewords": sorted(list(stats["basewords"])),
+            "candidates": sorted(list(stats["candidates"])),
         }
 
     def get_basewords_with_min_occurrences(self, min_occurrences: int = 2) -> list:
@@ -208,9 +204,9 @@ class DebugAnalyzer:
             List of (baseword, count) tuples, sorted by count descending
         """
         filtered = [
-            (bw, stats['count'])
+            (bw, stats["count"])
             for bw, stats in self.baseword_stats.items()
-            if stats['count'] >= min_occurrences
+            if stats["count"] >= min_occurrences
         ]
         return sorted(filtered, key=lambda x: x[1], reverse=True)
 
@@ -224,19 +220,23 @@ class DebugAnalyzer:
         if not self.rule_stats:
             return {}
 
-        counts = [stats['count'] for stats in self.rule_stats.values()]
-        unique_bw_counts = [len(stats['basewords']) for stats in self.rule_stats.values()]
-        unique_cand_counts = [len(stats['candidates']) for stats in self.rule_stats.values()]
+        counts = [stats["count"] for stats in self.rule_stats.values()]
+        unique_bw_counts = [len(stats["basewords"]) for stats in self.rule_stats.values()]
+        unique_cand_counts = [len(stats["candidates"]) for stats in self.rule_stats.values()]
 
         return {
-            'total_rules': len(self.rule_stats),
-            'total_applications': sum(counts),
-            'avg_applications_per_rule': sum(counts) / len(counts) if counts else 0,
-            'median_applications': sorted(counts)[len(counts)//2] if counts else 0,
-            'max_applications': max(counts) if counts else 0,
-            'min_applications': min(counts) if counts else 0,
-            'avg_basewords_per_rule': sum(unique_bw_counts) / len(unique_bw_counts) if unique_bw_counts else 0,
-            'avg_candidates_per_rule': sum(unique_cand_counts) / len(unique_cand_counts) if unique_cand_counts else 0,
+            "total_rules": len(self.rule_stats),
+            "total_applications": sum(counts),
+            "avg_applications_per_rule": sum(counts) / len(counts) if counts else 0,
+            "median_applications": sorted(counts)[len(counts) // 2] if counts else 0,
+            "max_applications": max(counts) if counts else 0,
+            "min_applications": min(counts) if counts else 0,
+            "avg_basewords_per_rule": sum(unique_bw_counts) / len(unique_bw_counts)
+            if unique_bw_counts
+            else 0,
+            "avg_candidates_per_rule": sum(unique_cand_counts) / len(unique_cand_counts)
+            if unique_cand_counts
+            else 0,
         }
 
     def get_baseword_statistics_summary(self) -> dict:
@@ -249,15 +249,15 @@ class DebugAnalyzer:
         if not self.baseword_stats:
             return {}
 
-        counts = [stats['count'] for stats in self.baseword_stats.values()]
+        counts = [stats["count"] for stats in self.baseword_stats.values()]
 
         return {
-            'total_basewords': len(self.baseword_stats),
-            'total_occurrences': sum(counts),
-            'avg_occurrences_per_baseword': sum(counts) / len(counts) if counts else 0,
-            'median_occurrences': sorted(counts)[len(counts)//2] if counts else 0,
-            'max_occurrences': max(counts) if counts else 0,
-            'min_occurrences': min(counts) if counts else 0,
+            "total_basewords": len(self.baseword_stats),
+            "total_occurrences": sum(counts),
+            "avg_occurrences_per_baseword": sum(counts) / len(counts) if counts else 0,
+            "median_occurrences": sorted(counts)[len(counts) // 2] if counts else 0,
+            "max_occurrences": max(counts) if counts else 0,
+            "min_occurrences": min(counts) if counts else 0,
         }
 
     def export_to_dict(self) -> dict:
@@ -268,19 +268,18 @@ class DebugAnalyzer:
             Complete analysis data structure (all values are JSON-safe)
         """
         data = {
-            'summary': {
-                'total_entries': len(self.entries),
-                'rules': self.get_rule_statistics_summary(),
-                'basewords': self.get_baseword_statistics_summary(),
+            "summary": {
+                "total_entries": len(self.entries),
+                "rules": self.get_rule_statistics_summary(),
+                "basewords": self.get_baseword_statistics_summary(),
             },
-            'top_rules_by_frequency': self.get_top_rules_by_frequency(20),
-            'top_rules_by_basewords': self.get_top_rules_by_unique_basewords(20),
-            'top_rules_by_candidates': self.get_top_rules_by_unique_candidates(20),
-            'top_basewords': self.get_top_basewords_by_frequency(20),
-            'basewords_with_duplicates': self.get_basewords_with_min_occurrences(2),
-            'all_rule_details': {
-                rule: self.get_rule_detail(rule)
-                for rule in sorted(self.rule_stats.keys())
+            "top_rules_by_frequency": self.get_top_rules_by_frequency(20),
+            "top_rules_by_basewords": self.get_top_rules_by_unique_basewords(20),
+            "top_rules_by_candidates": self.get_top_rules_by_unique_candidates(20),
+            "top_basewords": self.get_top_basewords_by_frequency(20),
+            "basewords_with_duplicates": self.get_basewords_with_min_occurrences(2),
+            "all_rule_details": {
+                rule: self.get_rule_detail(rule) for rule in sorted(self.rule_stats.keys())
             },
         }
         return self._make_serializable(data)

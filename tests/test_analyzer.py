@@ -81,9 +81,9 @@ class TestDebugLogParser:
         line = "password c P@ssword"
         result = parser._parse_line(line)
         assert result is not None
-        assert result['baseword'] == 'password'
-        assert result['rule'] == 'c'
-        assert result['candidate'] == 'P@ssword'
+        assert result["baseword"] == "password"
+        assert result["rule"] == "c"
+        assert result["candidate"] == "P@ssword"
 
     def test_parse_colon_separated_line(self):
         """Test parsing a colon-separated debug line (older hashcat format)."""
@@ -91,9 +91,9 @@ class TestDebugLogParser:
         line = "COMPUTER:} } } } t:retupmoc"
         result = parser._parse_line(line)
         assert result is not None
-        assert result['baseword'] == 'COMPUTER'
-        assert result['rule'] == '} } } } t'
-        assert result['candidate'] == 'retupmoc'
+        assert result["baseword"] == "COMPUTER"
+        assert result["rule"] == "} } } } t"
+        assert result["candidate"] == "retupmoc"
 
     def test_parse_empty_line(self):
         """Test parsing an empty line."""
@@ -117,14 +117,14 @@ class TestDebugLogParser:
         ]
         results = parser.parse_debug_lines(lines)
         assert len(results) == 3
-        assert results[0]['baseword'] == 'password'
-        assert results[1]['rule'] == 'u'
-        assert results[2]['candidate'] == 'admin'
+        assert results[0]["baseword"] == "password"
+        assert results[1]["rule"] == "u"
+        assert results[2]["candidate"] == "admin"
 
     def test_parse_debug_file(self):
         """Test parsing a debug file."""
         parser = DebugLogParser()
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as f:
             f.write("password c P@ssword\n")
             f.write("password u PASSWORD\n")
             f.write("admin l admin\n")
@@ -134,9 +134,9 @@ class TestDebugLogParser:
         try:
             results = parser.parse_debug_file(filepath)
             assert len(results) == 3
-            assert results[0]['baseword'] == 'password'
-            assert results[1]['rule'] == 'u'
-            assert results[2]['candidate'] == 'admin'
+            assert results[0]["baseword"] == "password"
+            assert results[1]["rule"] == "u"
+            assert results[2]["candidate"] == "admin"
         finally:
             os.unlink(filepath)
 
@@ -161,9 +161,9 @@ class TestDebugAnalyzer:
             "admin u ADMIN",
         ]
         result = analyzer.analyze_debug_lines(lines)
-        assert result['total_entries'] == 5
-        assert result['unique_rules'] == 3  # c, u, l
-        assert result['unique_basewords'] == 2  # password, admin
+        assert result["total_entries"] == 5
+        assert result["unique_rules"] == 3  # c, u, l
+        assert result["unique_basewords"] == 2  # password, admin
 
     def test_get_top_rules_by_frequency(self):
         """Test getting top rules by frequency."""
@@ -194,7 +194,7 @@ class TestDebugAnalyzer:
         analyzer.analyze_debug_lines(lines)
         top_basewords = analyzer.get_top_basewords_by_frequency(10)
         assert len(top_basewords) == 2
-        assert top_basewords[0][0] == 'password'  # appears 3 times
+        assert top_basewords[0][0] == "password"  # appears 3 times
         assert top_basewords[0][1] == 3
 
     def test_get_basewords_with_min_occurrences(self):
@@ -212,7 +212,7 @@ class TestDebugAnalyzer:
         basewords = analyzer.get_basewords_with_min_occurrences(2)
         # password appears 3 times, admin appears 2 times
         assert len(basewords) == 2
-        assert basewords[0][0] == 'password'
+        assert basewords[0][0] == "password"
 
     def test_get_baseword_detail(self):
         """Test getting detailed baseword information."""
@@ -223,10 +223,10 @@ class TestDebugAnalyzer:
             "password l password",
         ]
         analyzer.analyze_debug_lines(lines)
-        detail = analyzer.get_baseword_detail('password')
-        assert detail['baseword'] == 'password'
-        assert detail['total_occurrences'] == 3
-        assert detail['unique_rules'] == 3  # c, u, l
+        detail = analyzer.get_baseword_detail("password")
+        assert detail["baseword"] == "password"
+        assert detail["total_occurrences"] == 3
+        assert detail["unique_rules"] == 3  # c, u, l
 
     def test_get_rule_detail(self):
         """Test getting detailed rule information."""
@@ -237,10 +237,10 @@ class TestDebugAnalyzer:
             "admin c Admin",
         ]
         analyzer.analyze_debug_lines(lines)
-        detail = analyzer.get_rule_detail('c')
-        assert detail['rule'] == 'c'
-        assert detail['total_applications'] == 2
-        assert detail['unique_basewords'] == 2
+        detail = analyzer.get_rule_detail("c")
+        assert detail["rule"] == "c"
+        assert detail["total_applications"] == 2
+        assert detail["unique_basewords"] == 2
 
     def test_rule_statistics_summary(self):
         """Test rule statistics summary."""
@@ -253,8 +253,8 @@ class TestDebugAnalyzer:
         ]
         analyzer.analyze_debug_lines(lines)
         summary = analyzer.get_rule_statistics_summary()
-        assert summary['total_rules'] == 3  # c, u, l
-        assert summary['total_applications'] == 4
+        assert summary["total_rules"] == 3  # c, u, l
+        assert summary["total_applications"] == 4
 
     def test_baseword_statistics_summary(self):
         """Test baseword statistics summary."""
@@ -267,8 +267,8 @@ class TestDebugAnalyzer:
         ]
         analyzer.analyze_debug_lines(lines)
         summary = analyzer.get_baseword_statistics_summary()
-        assert summary['total_basewords'] == 2
-        assert summary['total_occurrences'] == 4
+        assert summary["total_basewords"] == 2
+        assert summary["total_occurrences"] == 4
 
     def test_export_to_dict(self):
         """Test exporting analysis to dictionary."""
@@ -279,9 +279,9 @@ class TestDebugAnalyzer:
         ]
         analyzer.analyze_debug_lines(lines)
         export = analyzer.export_to_dict()
-        assert 'summary' in export
-        assert 'top_rules_by_frequency' in export
-        assert 'top_basewords' in export
+        assert "summary" in export
+        assert "top_rules_by_frequency" in export
+        assert "top_basewords" in export
 
 
 if __name__ == "__main__":
