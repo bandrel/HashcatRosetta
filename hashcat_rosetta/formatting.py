@@ -1,9 +1,7 @@
 """Formatting utilities for hashcat rule analysis."""
 
-import re
-from pathlib import Path
 from collections import Counter
-from typing import Dict, Tuple
+from typing import Dict
 
 
 # Hashcat rule opcode descriptions
@@ -16,8 +14,8 @@ OPCODE_DESCRIPTIONS = {
     't': 'Toggle case for all chars',
     'T': 'Toggle case at pos X',
     'd': 'Duplicate entire word',
-    'p': 'Duplicate word N times',
-    'f': 'Reverse word',
+    'p': 'Append duplicated word N times',
+    'f': 'Duplicate reversed (reflection)',
     '{': 'Rotate left',
     '}': 'Rotate right',
     '[': 'Delete first character',
@@ -27,18 +25,18 @@ OPCODE_DESCRIPTIONS = {
     'O': 'Omit character at pos X',
     's': 'Substitute character X with Y',
     '@': 'Purge all instances of char X',
-    'Z': 'Zap (remove) character at pos X',
-    'z': 'Zap character not at pos X',
+    'Z': 'Duplicate last character N times',
+    'z': 'Duplicate first character N times',
     'i': 'Insert character Y at pos X',
     'o': 'Overwrite character at pos X',
     'a': 'Append character X',
     '^': 'Prepend character X',
     'q': 'Invert exclamation marks',
-    'X': 'Swap char at pos X with pos 1',
+    'X': 'Extract M chars starting at pos N from memory and insert at pos I',
     '*': 'Swap 2 characters at pos X and Y',
-    'k': 'Swap position X with position Y',
-    'r': 'Rotate word right',
-    'R': 'Rotate word left',
+    'k': 'Swap first two characters',
+    'r': 'Reverse entire word',
+    'R': 'Bitwise shift right',
     'S': 'Case swap all',
     'E': 'Delete all duplicate chars',
     'v': 'Delete words of length <= X',
@@ -57,8 +55,6 @@ OPCODE_DESCRIPTIONS = {
     '(': 'Position check less than',
     ')': 'Position check greater than',
     '%': 'Check word contains char X',
-    '^': 'Check word starts with char X',
-    '$': 'Check word ends with char X',
     'w': 'Leet speak conversion',
     'W': 'Reverse leet speak',
 }

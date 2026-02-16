@@ -37,7 +37,7 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 - **`debug_analyzer.py`** - `DebugAnalyzer` wraps `DebugLogParser` and computes rule/baseword statistics (frequency, unique basewords per rule, unique candidates). This is the main entry point for debug file analysis.
 - **`analyzer.py`** - `RuleAnalyzer` wraps `RuleParser` for static rule analysis (complexity, efficiency scoring, characteristics extraction). Does not require debug output - analyzes rules in isolation.
 - **`formatting.py`** - Rule opcode descriptions and display formatting for the `analyze-rules` CLI command.
-- **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--export`, `--explain`). Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `rosetta` in pyproject.toml.
+- **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--export`, `--explain`, `--analyze-rules`). Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `rosetta` in pyproject.toml.
 
 The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `DebugAnalyzer` from `__init__.py`.
 
@@ -45,8 +45,8 @@ The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `Debu
 
 - Build system: hatchling
 - Line length: 100 (configured in pyproject.toml for ruff)
-- Python: >=3.8
-- Dependencies: pandas, matplotlib, click
+- Python: >=3.10
+- Dependencies: click
 - Dev dependencies: pytest, pytest-cov, ruff, mypy (in `[project.optional-dependencies] dev`)
 - Test paths configured to `tests/` directory
 - Tests marked with `@pytest.mark.integration` require the hashcat binary
@@ -61,4 +61,5 @@ rosetta FILE --rules --metric frequency   # top rules
 rosetta FILE --basewords --detail         # baseword analysis
 rosetta FILE --export report.json         # export report
 rosetta --explain "c$1" --baseword admin  # explain a rule
+rosetta rules.txt --analyze-rules        # analyze rule file opcodes
 ```
