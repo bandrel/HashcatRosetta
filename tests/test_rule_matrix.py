@@ -73,9 +73,9 @@ class TestRuleMatrixWithHashcat:
         # Format: "c: Capitalize → password → Password"
         final_result = result[-1].split("→")[-1].strip()
 
-        assert final_result == hashcat_result, (
-            f"Rule '{rule}' result mismatch: got '{final_result}', hashcat produced '{hashcat_result}'"
-        )
+        assert (
+            final_result == hashcat_result
+        ), f"Rule '{rule}' result mismatch: got '{final_result}', hashcat produced '{hashcat_result}'"
 
     @pytest.mark.integration
     def test_rule_u_against_hashcat(self):
@@ -708,6 +708,6 @@ class TestRuleComprehensiveCoverage:
         """Parameterized test for individual rules with expected output."""
         result = explain_rule(rule, baseword)
         assert result is not None, f"Rule '{rule}' returned None"
-        assert any(expected_in_output in step for step in result), (
-            f"Expected '{expected_in_output}' in output for rule '{rule}' with baseword '{baseword}': {result}"
-        )
+        assert any(
+            expected_in_output in step for step in result
+        ), f"Expected '{expected_in_output}' in output for rule '{rule}' with baseword '{baseword}': {result}"

@@ -10,7 +10,7 @@ print("=" * 70)
 analyzer = DebugAnalyzer()
 
 # Analyze the sample debug file
-result = analyzer.analyze_debug_file('examples/sample_debug.txt')
+result = analyzer.analyze_debug_file("examples/sample_debug.txt")
 
 print("\nFile Analysis Summary:")
 print(f"  Total Entries: {result['total_entries']}")
@@ -61,18 +61,21 @@ print("=" * 70)
 frequent_basewords = analyzer.get_basewords_with_min_occurrences(2)
 for baseword, count in frequent_basewords[:3]:
     detail = analyzer.get_baseword_detail(baseword)
-    print(f"\nBaseword: '{baseword}'")
-    print(f"  Total Occurrences: {count}")
-    print(f"  Unique Rules Applied: {detail['unique_rules']}")
-    print(f"  Unique Candidates: {detail['unique_candidates']}")
-    print(f"  Rules Used: {', '.join(sorted(set(occ['rule'] for occ in detail['occurrences'])))}")
+    if detail:
+        print(f"\nBaseword: '{baseword}'")
+        print(f"  Total Occurrences: {count}")
+        print(f"  Unique Rules Applied: {detail['unique_rules']}")
+        print(f"  Unique Candidates: {detail['unique_candidates']}")
+        print(
+            f"  Rules Used: {', '.join(sorted(set(occ['rule'] for occ in detail['occurrences'])))}"
+        )
 
 # Example 7: Detailed rule analysis
 print("\n" + "=" * 70)
 print("Example 7: Detailed Rule Analysis")
 print("=" * 70)
 
-rule_detail = analyzer.get_rule_detail('c')
+rule_detail = analyzer.get_rule_detail("c")
 if rule_detail:
     print(f"\nRule: '{rule_detail['rule']}'")
     print(f"  Total Applications: {rule_detail['total_applications']}")
@@ -104,12 +107,14 @@ print("Example 9: Low-level Debug Log Parsing")
 print("=" * 70)
 
 parser = DebugLogParser()
-entries = parser.parse_debug_file('examples/sample_debug.txt')
+entries = parser.parse_debug_file("examples/sample_debug.txt")
 
 print(f"\nParsed {len(entries)} entries from debug file")
 print("\nFirst 3 entries:")
 for entry in entries[:3]:
-    print(f"  Baseword: '{entry['baseword']:15}' Rule: '{entry['rule']:5}' -> '{entry['candidate']}'")
+    print(
+        f"  Baseword: '{entry['baseword']:15}' Rule: '{entry['rule']:5}' -> '{entry['candidate']}'"
+    )
 
 # Example 10: Exporting analysis data
 print("\n" + "=" * 70)
