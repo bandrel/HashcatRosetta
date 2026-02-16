@@ -70,7 +70,7 @@ def extract_rule_opcodes(rule_file: str) -> Dict[str, int]:
     Returns:
         Dictionary with opcode counts
     """
-    opcodes = Counter()
+    opcodes: Counter[str] = Counter()
 
     try:
         with open(rule_file, "r", encoding="utf-8", errors="ignore") as f:

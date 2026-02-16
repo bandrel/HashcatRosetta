@@ -126,9 +126,9 @@ class TestCharacteristicsExtraction:
         for rule in ["u", "l", "c", "t"]:
             result = analyzer.analyze_rule(rule)
             assert result is not None
-            assert "case_transform" in result["characteristics"], (
-                f"Rule '{rule}' should have case_transform characteristic"
-            )
+            assert (
+                "case_transform" in result["characteristics"]
+            ), f"Rule '{rule}' should have case_transform characteristic"
 
     def test_substitution_detected(self):
         analyzer = RuleAnalyzer()
@@ -147,9 +147,9 @@ class TestCharacteristicsExtraction:
         for rule in ["$1", "^a"]:
             result = analyzer.analyze_rule(rule)
             assert result is not None
-            assert "position_based" in result["characteristics"], (
-                f"Rule '{rule}' should have position_based characteristic"
-            )
+            assert (
+                "position_based" in result["characteristics"]
+            ), f"Rule '{rule}' should have position_based characteristic"
 
     def test_reversal_detected(self):
         analyzer = RuleAnalyzer()
@@ -313,9 +313,9 @@ class TestTokenizerOpcodes:
             rule = f"{op}3"
             result = parser.parse_rule(rule)
             assert result is not None, f"One-arg opcode '{op}' should parse"
-            assert result["components"] == [rule], (
-                f"One-arg opcode '{op}3' should tokenize as ['{rule}']"
-            )
+            assert result["components"] == [
+                rule
+            ], f"One-arg opcode '{op}3' should tokenize as ['{rule}']"
 
     def test_two_arg_ops(self):
         parser = RuleParser()
@@ -323,9 +323,9 @@ class TestTokenizerOpcodes:
             rule = f"{op}ab"
             result = parser.parse_rule(rule)
             assert result is not None, f"Two-arg opcode '{op}' should parse"
-            assert result["components"] == [rule], (
-                f"Two-arg opcode '{op}ab' should tokenize as ['{rule}']"
-            )
+            assert result["components"] == [
+                rule
+            ], f"Two-arg opcode '{op}ab' should tokenize as ['{rule}']"
 
     def test_append_prepend(self):
         parser = RuleParser()
