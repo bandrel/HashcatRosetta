@@ -361,13 +361,12 @@ class TestRuleMatrix:
         assert len(result) == 1
         assert "p@ssW0r" in result[0]
 
-    def test_rule_purge_duplicates(self):
-        """Rule 'p': Purge/remove all duplicate characters"""
-        result = explain_rule("p", "p@ssW0rd")
+    def test_rule_duplicate_word(self):
+        """Rule 'pN': Append duplicated word N times"""
+        result = explain_rule("p2", "abc")
         assert result is not None
         assert len(result) == 1
-        # Removes consecutive duplicate characters
-        assert "p@sW0rd" in result[0]
+        assert "abcabcabc" in result[0]
 
     # ===== POSITIONAL RULES =====
 

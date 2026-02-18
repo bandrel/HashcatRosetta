@@ -18,6 +18,7 @@ def explain_rule(rule_str, baseword="password"):
 
     # Rule explanations
     rule_map = {
+        ":": ("No-op", lambda x: x),
         "c": ("Capitalize", lambda x: x[0].upper() + x[1:].lower() if x else x),
         "u": ("Uppercase all", lambda x: x.upper()),
         "l": ("Lowercase all", lambda x: x.lower()),
@@ -29,7 +30,13 @@ def explain_rule(rule_str, baseword="password"):
         "{": ("Rotate left", lambda x: x[1:] + x[0] if x else x),
         "}": ("Rotate right", lambda x: x[-1] + x[:-1] if x else x),
         "f": ("Reflect (duplicate reversed)", lambda x: (x + x[::-1]) if x else x),
-        "p": ("Purge dupes", lambda x: "".join(dict.fromkeys(x))),
+        "k": ("Swap first two", lambda x: x[1] + x[0] + x[2:] if len(x) >= 2 else x),
+        "K": ("Swap last two", lambda x: x[:-2] + x[-1] + x[-2] if len(x) >= 2 else x),
+        "q": ("Duplicate every char", lambda x: "".join(c + c for c in x)),
+        "E": (
+            "Lowercase vowels, uppercase consonants",
+            lambda x: "".join(c.lower() if c.lower() in "aeiou" else c.upper() for c in x),
+        ),
     }
 
     # Parse and apply rules sequentially
@@ -86,6 +93,18 @@ def explain_rule(rule_str, baseword="password"):
             current = current.replace(src, dst)
             steps.append(f"s{src}{dst}: Substitute '{src}' with '{dst}' → {prev} → {current}")
             i += 3
+
+        elif char == "p" and i + 1 < len(rule_str):
+            # Duplicate word: pN - append duplicated word N times
+            n_char = rule_str[i + 1]
+            try:
+                n = int(n_char)
+                prev = current
+                current = current * (n + 1)
+                steps.append(f"p{n_char}: Append duplicated word {n} times -> {prev} -> {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
 
         elif char == "D" and i + 1 < len(rule_str):
             # Delete: DX where X is position
