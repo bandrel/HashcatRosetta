@@ -3,6 +3,10 @@
 from collections import Counter
 from typing import Dict
 
+import click
+
+from .parser import RuleParser
+
 
 # Hashcat rule opcode descriptions
 OPCODE_DESCRIPTIONS = {
@@ -71,21 +75,19 @@ def extract_rule_opcodes(rule_file: str) -> Dict[str, int]:
         Dictionary with opcode counts
     """
     opcodes: Counter[str] = Counter()
+    parser = RuleParser()
 
-    try:
-        with open(rule_file, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                # Skip empty lines and comments
-                if not line or line.startswith("#"):
-                    continue
+    with open(rule_file, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            # Skip empty lines and comments
+            if not line or line.startswith("#"):
+                continue
 
-                # Extract first character as the primary opcode
-                # This represents the operation being performed
-                primary_opcode = line[0]
-                opcodes[primary_opcode] += 1
-    except FileNotFoundError:
-        return {}
+            # Tokenize the full rule and count the opcode (first char) of each token
+            tokens = parser._tokenize_rule(line)
+            for token in tokens:
+                opcodes[token[0]] += 1
 
     return dict(opcodes)
 
@@ -101,7 +103,7 @@ def display_rule_opcodes_summary(rule_file: str, title: str = "Rule Opcode Analy
     opcodes = extract_rule_opcodes(rule_file)
 
     if not opcodes:
-        print(f"No opcodes found in {rule_file}")
+        click.echo(f"No opcodes found in {rule_file}")
         return
 
     total_occurrences = sum(opcodes.values())
@@ -110,19 +112,19 @@ def display_rule_opcodes_summary(rule_file: str, title: str = "Rule Opcode Analy
     sorted_opcodes = sorted(opcodes.items(), key=lambda x: x[1], reverse=True)
 
     # Print header
-    print(f"\n{title}")
-    print(f"File: {rule_file}")
-    print(f"Total rules: {total_occurrences}\n")
+    click.echo(f"\n{title}")
+    click.echo(f"File: {rule_file}")
+    click.echo(f"Total rules: {total_occurrences}\n")
 
     # Print table header
-    print(f"{'Opcode':<8} {'Count':<10} {'Percentage':<12} {'Description':<40}")
-    print("-" * 70)
+    click.echo(f"{'Opcode':<8} {'Count':<10} {'Percentage':<12} {'Description':<40}")
+    click.echo("-" * 70)
 
     # Print each opcode
     for opcode, count in sorted_opcodes:
         percentage = (count / total_occurrences) * 100
         description = OPCODE_DESCRIPTIONS.get(opcode, "Unknown opcode")
-        print(f"{opcode:<8} {count:<10} {percentage:>6.2f}%{' ':<4} {description:<40}")
+        click.echo(f"{opcode:<8} {count:<10} {percentage:>6.2f}%{' ':<4} {description:<40}")
 
-    print("-" * 70)
-    print(f"{'TOTAL':<8} {total_occurrences:<10}")
+    click.echo("-" * 70)
+    click.echo(f"{'TOTAL':<8} {total_occurrences:<10}")
