@@ -25,6 +25,9 @@ htmlcov/
 *.swp
 *.swo
 
+# Generated reports
+reports/
+
 # OS
 .DS_Store
 Thumbs.db

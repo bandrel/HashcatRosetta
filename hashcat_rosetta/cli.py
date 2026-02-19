@@ -11,7 +11,7 @@ from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
 
 
-def explain_rule(rule_str, baseword="password"):
+def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
     if not rule_str:
         return None
@@ -33,14 +33,23 @@ def explain_rule(rule_str, baseword="password"):
         "k": ("Swap first two", lambda x: x[1] + x[0] + x[2:] if len(x) >= 2 else x),
         "K": ("Swap last two", lambda x: x[:-2] + x[-1] + x[-2] if len(x) >= 2 else x),
         "q": ("Duplicate every char", lambda x: "".join(c + c for c in x)),
+        "C": (
+            "Invert capitalize",
+            lambda x: x[0].lower() + x[1:].upper() if x else x,
+        ),
         "E": (
-            "Lowercase vowels, uppercase consonants",
-            lambda x: "".join(c.lower() if c.lower() in "aeiou" else c.upper() for c in x),
+            "Title case",
+            lambda x: (
+                " ".join(w[0].upper() + w[1:].lower() if w else w for w in x.lower().split(" "))
+                if x
+                else x
+            ),
         ),
     }
 
     # Parse and apply rules sequentially
     current = baseword
+    memorized = baseword  # Default memorized word is the original input
     steps = []
     i = 0
 
@@ -77,7 +86,8 @@ def explain_rule(rule_str, baseword="password"):
                     pos = int(pos_char, 16)
 
                 prev = current
-                current = current[:pos] + val_char + current[pos:]
+                if pos <= len(current):
+                    current = current[:pos] + val_char + current[pos:]
                 steps.append(
                     f"i{pos_char}{val_char}: Insert '{val_char}' at pos {pos} → {prev} → {current}"
                 )
@@ -100,8 +110,10 @@ def explain_rule(rule_str, baseword="password"):
             try:
                 n = int(n_char)
                 prev = current
-                current = current * (n + 1)
-                steps.append(f"p{n_char}: Append duplicated word {n} times -> {prev} -> {current}")
+                # Hashcat no-ops if result would exceed RP_PASSWORD_SIZE (256)
+                if len(current) + len(current) * n < 256:
+                    current = current * (n + 1)
+                steps.append(f"p{n_char}: Append duplicated word {n} times → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
                 i += 1
@@ -138,6 +150,307 @@ def explain_rule(rule_str, baseword="password"):
             except (ValueError, IndexError):
                 i += 1
 
+        elif char == "O" and i + 2 < len(rule_str):
+            # Omit M characters starting at position N
+            pos_char = rule_str[i + 1]
+            len_char = rule_str[i + 2]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                length = int(len_char, 16) if not len_char.isdigit() else int(len_char)
+                prev = current
+                if pos < len(current) and pos + length <= len(current):
+                    current = current[:pos] + current[pos + length :]
+                steps.append(
+                    f"O{pos_char}{len_char}: Omit {length} chars at pos {pos} → {prev} → {current}"
+                )
+                i += 3
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "y" and i + 1 < len(rule_str):
+            # Duplicate first N characters (prepend)
+            n_char = rule_str[i + 1]
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                prev = current
+                if n <= len(current):
+                    current = current[:n] + current
+                steps.append(f"y{n_char}: Duplicate first {n} chars → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "Y" and i + 1 < len(rule_str):
+            # Duplicate last N characters (append)
+            n_char = rule_str[i + 1]
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                prev = current
+                if n <= len(current):
+                    current = current + current[-n:]
+                steps.append(f"Y{n_char}: Duplicate last {n} chars → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "z" and i + 1 < len(rule_str):
+            # Duplicate first character N times
+            n_char = rule_str[i + 1]
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                prev = current
+                if current:
+                    current = current[0] * n + current
+                steps.append(f"z{n_char}: Duplicate first char {n} times → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "Z" and i + 1 < len(rule_str):
+            # Duplicate last character N times
+            n_char = rule_str[i + 1]
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                prev = current
+                if current:
+                    current = current + current[-1] * n
+                steps.append(f"Z{n_char}: Duplicate last char {n} times → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "@" and i + 1 < len(rule_str):
+            # Purge all instances of char X
+            purge_char = rule_str[i + 1]
+            prev = current
+            current = current.replace(purge_char, "")
+            steps.append(f"@{purge_char}: Purge all '{purge_char}' → {prev} → {current}")
+            i += 2
+
+        elif char == "!" and i + 1 < len(rule_str):
+            # Reject if contains char X (rejection rule)
+            reject_char = rule_str[i + 1]
+            steps.append(f"!{reject_char}: Reject if contains '{reject_char}' (filter rule)")
+            i += 2
+
+        elif char == ">" and i + 1 < len(rule_str):
+            # Reject if word length > N
+            n_char = rule_str[i + 1]
+            steps.append(f">{n_char}: Reject if length > {n_char} (filter rule)")
+            i += 2
+
+        elif char == "<" and i + 1 < len(rule_str):
+            # Reject if word length < N
+            n_char = rule_str[i + 1]
+            steps.append(f"<{n_char}: Reject if length < {n_char} (filter rule)")
+            i += 2
+
+        elif char == "'" and i + 1 < len(rule_str):
+            # Truncate word at position N
+            pos_char = rule_str[i + 1]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                current = current[:pos]
+                steps.append(f"'{pos_char}: Truncate at pos {pos} → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "+" and i + 1 < len(rule_str):
+            # Increment character at position N by 1 (ASCII value)
+            pos_char = rule_str[i + 1]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                if pos < len(current):
+                    current = current[:pos] + chr(ord(current[pos]) + 1) + current[pos + 1 :]
+                steps.append(f"+{pos_char}: Increment ASCII at pos {pos} → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "-" and i + 1 < len(rule_str):
+            # Decrement character at position N by 1 (ASCII value)
+            pos_char = rule_str[i + 1]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                if pos < len(current):
+                    current = current[:pos] + chr(ord(current[pos]) - 1) + current[pos + 1 :]
+                steps.append(f"-{pos_char}: Decrement ASCII at pos {pos} → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "." and i + 1 < len(rule_str):
+            # Replace char at pos N with char at pos N+1
+            pos_char = rule_str[i + 1]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                if pos < len(current) - 1:
+                    current = current[:pos] + current[pos + 1] + current[pos + 1 :]
+                steps.append(
+                    f".{pos_char}: Replace char at pos {pos} with next → {prev} → {current}"
+                )
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "," and i + 1 < len(rule_str):
+            # Replace char at pos N with char at pos N-1
+            pos_char = rule_str[i + 1]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                if 0 < pos < len(current):
+                    current = current[:pos] + current[pos - 1] + current[pos + 1 :]
+                steps.append(
+                    f",{pos_char}: Replace char at pos {pos} with prev → {prev} → {current}"
+                )
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "%" and i + 1 < len(rule_str):
+            # Reject if word does not contain char X at least N times
+            check_char = rule_str[i + 1]
+            steps.append(f"%{check_char}: Reject unless contains '{check_char}' (filter rule)")
+            i += 2
+
+        elif char == "R" and i + 1 < len(rule_str):
+            # Bitwise shift right character at position N
+            pos_char = rule_str[i + 1]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                if pos < len(current):
+                    current = current[:pos] + chr(ord(current[pos]) >> 1) + current[pos + 1 :]
+                steps.append(f"R{pos_char}: Bitwise shift right at pos {pos} → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "L" and i + 1 < len(rule_str):
+            # Bitwise shift left character at position N
+            pos_char = rule_str[i + 1]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                if pos < len(current):
+                    current = (
+                        current[:pos] + chr((ord(current[pos]) << 1) & 0xFF) + current[pos + 1 :]
+                    )
+                steps.append(f"L{pos_char}: Bitwise shift left at pos {pos} → {prev} → {current}")
+                i += 2
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "o" and i + 2 < len(rule_str):
+            # Overwrite character at position X with character Y
+            pos_char = rule_str[i + 1]
+            val_char = rule_str[i + 2]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                prev = current
+                if pos < len(current):
+                    current = current[:pos] + val_char + current[pos + 1 :]
+                steps.append(
+                    f"o{pos_char}{val_char}: Overwrite pos {pos} with "
+                    f"'{val_char}' → {prev} → {current}"
+                )
+                i += 3
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "x" and i + 2 < len(rule_str):
+            # Extract N characters starting at position M
+            pos_char = rule_str[i + 1]
+            len_char = rule_str[i + 2]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                length = int(len_char, 16) if not len_char.isdigit() else int(len_char)
+                prev = current
+                if pos < len(current) and pos + length <= len(current):
+                    current = current[pos : pos + length]
+                steps.append(
+                    f"x{pos_char}{len_char}: Extract {length} chars from "
+                    f"pos {pos} → {prev} → {current}"
+                )
+                i += 3
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "*" and i + 2 < len(rule_str):
+            # Swap characters at positions X and Y
+            pos1_char = rule_str[i + 1]
+            pos2_char = rule_str[i + 2]
+            try:
+                pos1 = int(pos1_char, 16) if not pos1_char.isdigit() else int(pos1_char)
+                pos2 = int(pos2_char, 16) if not pos2_char.isdigit() else int(pos2_char)
+                prev = current
+                if pos1 < len(current) and pos2 < len(current):
+                    chars = list(current)
+                    chars[pos1], chars[pos2] = chars[pos2], chars[pos1]
+                    current = "".join(chars)
+                steps.append(
+                    f"*{pos1_char}{pos2_char}: Swap pos {pos1} and pos {pos2} → {prev} → {current}"
+                )
+                i += 3
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "M":
+            # Memorize current word for later use with X opcode
+            memorized = current
+            steps.append(f"M: Memorize current word '{current}'")
+            i += 1
+
+        elif char == "X" and i + 3 < len(rule_str):
+            # Insert substring from memorized word: XNML
+            # N = start pos in memorized word, M = length, L = insert pos in current word
+            n_char = rule_str[i + 1]
+            m_char = rule_str[i + 2]
+            l_char = rule_str[i + 3]
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                m = int(m_char, 16) if not m_char.isdigit() else int(m_char)
+                l_pos = int(l_char, 16) if not l_char.isdigit() else int(l_char)
+                prev = current
+                # Extract substring from memorized word
+                if n < len(memorized) and n + m <= len(memorized) and l_pos <= len(current):
+                    substring = memorized[n : n + m]
+                    current = current[:l_pos] + substring + current[l_pos:]
+                steps.append(
+                    f"X{n_char}{m_char}{l_char}: Insert {m} chars from memorized word"
+                    f" at pos {n} into pos {l_pos} → {prev} → {current}"
+                )
+                i += 4
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "=" and i + 2 < len(rule_str):
+            # Reject unless character at position N is X (filter rule)
+            pos_char = rule_str[i + 1]
+            check_char = rule_str[i + 2]
+            try:
+                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                steps.append(
+                    f"={pos_char}{check_char}: Reject unless char at pos {pos}"
+                    f" is '{check_char}' (filter rule)"
+                )
+                i += 3
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "B" and i + 2 < len(rule_str):
+            # B is not a documented hashcat opcode; skip as no-op
+            arg1 = rule_str[i + 1]
+            arg2 = rule_str[i + 2]
+            steps.append(f"B{arg1}{arg2}: Unknown opcode B (no-op)")
+            i += 3
+
         elif char in rule_map:
             name, transform_func = rule_map[char]
             prev = current
@@ -146,7 +459,18 @@ def explain_rule(rule_str, baseword="password"):
             i += 1
 
         else:
-            i += 1
+            # Arity-aware skip for unknown opcodes
+            _three_arg = set("X")
+            _two_arg = set("soix*=vOB")
+            _one_arg = set("TDpyYezZ^$@!><'+-.,%LRa()")
+            if char in _three_arg and i + 3 < len(rule_str):
+                i += 4
+            elif char in _two_arg and i + 2 < len(rule_str):
+                i += 3
+            elif char in _one_arg and i + 1 < len(rule_str):
+                i += 2
+            else:
+                i += 1
 
     return steps if steps else None
 
@@ -330,17 +654,18 @@ def main(
 
             if detail:
                 bw_detail = analyzer.get_baseword_detail(baseword)
-                click.echo(f"  Unique Rules: {bw_detail['unique_rules']}")
-                click.echo(f"  Unique Candidates: {bw_detail['unique_candidates']}")
-                click.echo(
-                    f"  Rules Applied: {', '.join(sorted(set(occ['rule'] for occ in bw_detail['occurrences'])))}"
-                )
+                if bw_detail:
+                    click.echo(f"  Unique Rules: {bw_detail['unique_rules']}")
+                    click.echo(f"  Unique Candidates: {bw_detail['unique_candidates']}")
+                    click.echo(
+                        f"  Rules Applied: {', '.join(sorted(set(occ['rule'] for occ in bw_detail['occurrences'])))}"
+                    )
 
     # Export report
     if export:
         if format == "json":
             data = analyzer.export_to_dict()
-            with open(export, "w") as f:
+            with open(export, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             click.echo(f"Done: JSON report exported to: {export}")
 
@@ -349,9 +674,9 @@ def main(
             click.echo(f"Done: CSV report exported to: {export}")
 
 
-def _export_to_csv(analyzer, filepath):
+def _export_to_csv(analyzer: DebugAnalyzer, filepath: str) -> None:
     """Export analysis to CSV format."""
-    with open(filepath, "w", newline="") as f:
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
         # Rules section
         f.write("# RULES ANALYSIS\n")
         writer = csv.writer(f)
@@ -369,14 +694,15 @@ def _export_to_csv(analyzer, filepath):
 
         for baseword in sorted(analyzer.baseword_stats.keys()):
             detail = analyzer.get_baseword_detail(baseword)
-            writer.writerow(
-                [
-                    baseword,
-                    detail["total_occurrences"],
-                    detail["unique_rules"],
-                    detail["unique_candidates"],
-                ]
-            )
+            if detail:
+                writer.writerow(
+                    [
+                        baseword,
+                        detail["total_occurrences"],
+                        detail["unique_rules"],
+                        detail["unique_candidates"],
+                    ]
+                )
 
 
 if __name__ == "__main__":
