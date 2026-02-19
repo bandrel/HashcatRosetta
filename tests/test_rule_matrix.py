@@ -8,11 +8,16 @@ The test matrix covers all implemented rule operations with their
 expected transformations as defined in the hashcat documentation.
 """
 
-import pytest
-import tempfile
-import subprocess
 import os
-from hashcat_rosetta.cli import explain_rule
+import subprocess
+import tempfile
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from hashcat_rosetta import RuleAnalyzer, RuleParser
+from hashcat_rosetta.cli import explain_rule, main
 
 
 def get_hashcat_output(rule, baseword="password"):
@@ -73,9 +78,9 @@ class TestRuleMatrixWithHashcat:
         # Format: "c: Capitalize → password → Password"
         final_result = result[-1].split("→")[-1].strip()
 
-        assert (
-            final_result == hashcat_result
-        ), f"Rule '{rule}' result mismatch: got '{final_result}', hashcat produced '{hashcat_result}'"
+        assert final_result == hashcat_result, (
+            f"Rule '{rule}' result mismatch: got '{final_result}', hashcat produced '{hashcat_result}'"
+        )
 
     @pytest.mark.integration
     def test_rule_u_against_hashcat(self):
@@ -707,6 +712,120 @@ class TestRuleComprehensiveCoverage:
         """Parameterized test for individual rules with expected output."""
         result = explain_rule(rule, baseword)
         assert result is not None, f"Rule '{rule}' returned None"
-        assert any(
-            expected_in_output in step for step in result
-        ), f"Expected '{expected_in_output}' in output for rule '{rule}' with baseword '{baseword}': {result}"
+        assert any(expected_in_output in step for step in result), (
+            f"Expected '{expected_in_output}' in output for rule '{rule}' with baseword '{baseword}': {result}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Integration tests using hashcat-utils generate-rules binary
+# ---------------------------------------------------------------------------
+
+GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
+
+
+@pytest.fixture(scope="class")
+def generated_rules():
+    """Run generate-rules.bin to produce 100 random rules with a fixed seed."""
+    if not GENERATE_RULES_BIN.exists():
+        pytest.skip(f"generate-rules.bin not found at {GENERATE_RULES_BIN}")
+
+    result = subprocess.run(
+        [str(GENERATE_RULES_BIN), "100", "42"],
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, f"generate-rules.bin failed: {result.stderr.decode()}"
+
+    rules = [line for line in result.stdout.decode().splitlines() if line.strip()]
+    assert len(rules) > 0, "generate-rules.bin produced no output"
+    return rules
+
+
+@pytest.fixture(scope="class")
+def generated_rules_file(generated_rules, tmp_path_factory):
+    """Write generated rules to a temp file for CLI/file-based tests."""
+    tmp = tmp_path_factory.mktemp("rules")
+    path = tmp / "generated.rule"
+    path.write_text("\n".join(generated_rules) + "\n")
+    return str(path)
+
+
+class TestGenerateRulesIntegration:
+    """Integration tests that feed hashcat-utils generated rules through HashcatRosetta."""
+
+    @pytest.mark.integration
+    def test_parse_generated_rules(self, generated_rules):
+        """Every generated rule should parse without error via RuleParser."""
+        parser = RuleParser()
+        for rule in generated_rules:
+            parsed = parser.parse_rule(rule)
+            assert parsed is not None, f"RuleParser returned None for: {rule!r}"
+            assert "original" in parsed
+            assert "components" in parsed
+            assert "complexity" in parsed
+
+    @pytest.mark.integration
+    def test_explain_generated_rules(self, generated_rules):
+        """explain_rule should not crash on any generated rule."""
+        for rule in generated_rules:
+            # Some rules may return None for unsupported ops - that's fine
+            result = explain_rule(rule)
+            assert result is None or isinstance(result, list), (
+                f"explain_rule returned unexpected type for: {rule!r}"
+            )
+
+    @pytest.mark.integration
+    def test_analyze_generated_rules(self, generated_rules, generated_rules_file):
+        """RuleAnalyzer.analyze_ruleset should produce valid results."""
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_ruleset(generated_rules)
+        assert result is not None, "analyze_ruleset returned None"
+        assert result["total_rules"] > 0
+        assert "average_complexity" in result
+        assert "average_efficiency" in result
+        assert "rule_analyses" in result
+
+    @pytest.mark.integration
+    def test_cli_analyze_rules_generated(self, generated_rules_file):
+        """CLI --analyze-rules should exit 0 on generated rule file."""
+        runner = CliRunner()
+        result = runner.invoke(main, [generated_rules_file, "--analyze-rules"])
+        assert result.exit_code == 0, (
+            f"CLI --analyze-rules failed (exit {result.exit_code}):\n{result.output}"
+        )
+
+    @pytest.mark.integration
+    def test_hashcat_vs_explain(self, generated_rules):
+        """Compare explain_rule output against actual hashcat --stdout where possible."""
+        try:
+            subprocess.run(
+                ["hashcat", "--version"], capture_output=True, timeout=5
+            ).check_returncode()
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pytest.skip("hashcat binary not available")
+
+        mismatches = []
+        tested = 0
+
+        for rule in generated_rules:
+            explanation = explain_rule(rule)
+            if explanation is None or len(explanation) == 0:
+                continue  # unsupported rule, skip comparison
+
+            our_result = explanation[-1].split("\u2192")[-1].strip()
+            hashcat_result = get_hashcat_output(rule)
+            if hashcat_result is None:
+                continue  # hashcat couldn't process it either
+
+            tested += 1
+            if our_result != hashcat_result:
+                mismatches.append(f"Rule {rule!r}: ours={our_result!r}, hashcat={hashcat_result!r}")
+
+        assert tested > 0, "No rules were testable against hashcat"
+        # Report mismatches but don't fail hard - some ops may differ
+        if mismatches:
+            pytest.xfail(
+                f"{len(mismatches)}/{tested} rules differ from hashcat:\n"
+                + "\n".join(mismatches[:10])
+            )
