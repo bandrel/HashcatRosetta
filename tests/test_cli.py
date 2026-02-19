@@ -243,11 +243,17 @@ class TestExplainRuleEdgeCases:
 
     def test_all_simple_ops(self):
         """Verify all simple ops in rule_map produce output."""
-        simple_ops = "culdrtp[]{}"
+        simple_ops = ":culdrt[]{}fkKqE"
         for op in simple_ops:
-            result = explain_rule(op)
+            result = explain_rule(op, "password")
             assert result is not None, f"Op '{op}' returned None"
             assert len(result) == 1
+
+    def test_p_opcode_duplicate_word(self):
+        """p is a 1-arg op: pN appends duplicated word N times."""
+        result = explain_rule("p2", "abc")
+        assert result is not None
+        assert "abcabcabc" in result[0]
 
     def test_hex_position_insert(self):
         """Insert at hex position (A = 10)."""

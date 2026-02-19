@@ -186,20 +186,22 @@ hashcat -m [hash-mode] -a 0 --debug-mode=4 -r rules.rule hashes.txt wordlist.txt
 
 ```
 HashcatRosetta/
-├── hashcat_rosetta/     # Main package
-│   ├── __init__.py           # Package initialization
+├── hashcat_rosetta/          # Main package
+│   ├── __init__.py           # Package initialization and public API
+│   ├── __main__.py           # Module entry point (python -m hashcat_rosetta)
 │   ├── parser.py             # Rule and debug log parsing
-│   ├── analyzer.py           # Rule analysis logic
+│   ├── analyzer.py           # Static rule analysis logic
 │   ├── debug_analyzer.py     # Debug file analysis logic
+│   ├── formatting.py         # Rule opcode descriptions and display
 │   └── cli.py                # Command-line interface
-├── tests/                     # Test suite
-│   └── test_analyzer.py      # Tests for all analyzers
-├── examples/                  # Example usage
-│   ├── basic_usage.py        # Basic API usage examples
-│   └── sample_debug.txt      # Sample debug file for testing
-├── requirements.txt           # Project dependencies
-├── setup.py                  # Setup configuration
-├── pyproject.toml            # Modern Python packaging
+├── tests/                    # Test suite
+│   ├── test_analyzer.py      # Tests for analyzers and parsers
+│   ├── test_cli.py           # CLI interface tests
+│   ├── test_edge_cases.py    # Edge case and regression tests
+│   ├── test_fixes.py         # Bug fix verification tests
+│   └── test_rule_matrix.py   # Rule matrix tests
+├── pyproject.toml            # Python packaging and tool config
+├── LICENSE                   # MIT license
 └── README.md                 # This file
 ```
 
@@ -254,6 +256,7 @@ rosetta FILE --rules --metric frequency       Show top rules by metric
 rosetta FILE --basewords --detail             Show baseword analysis
 rosetta FILE --export report.json             Export analysis report
 rosetta --explain "c$1" --baseword admin      Explain a rule step-by-step
+rosetta rules.txt --analyze-rules             Analyze rule file opcodes
 ```
 
 ## Advanced Usage
