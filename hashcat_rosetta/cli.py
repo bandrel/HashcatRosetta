@@ -505,10 +505,13 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 1
 
         elif char == "B" and i + 2 < len(rule_str):
-            # B is not a documented hashcat opcode; skip as no-op
+            # B: byte-wise add value to char at position — documented but not yet fully implemented
+            # RULE_OP_MANGLE_CHR_ADD: adds arg2 (byte value) to the byte at position arg1.
             arg1 = rule_str[i + 1]
             arg2 = rule_str[i + 2]
-            steps.append(f"B{arg1}{arg2}: Unknown opcode B (no-op)")
+            steps.append(
+                f"B{arg1}{arg2}: Byte-add {arg2!r} to char at pos {arg1} (not yet simulated)"
+            )
             i += 3
 
         elif char in rule_map:

@@ -72,6 +72,9 @@ OPCODE_DESCRIPTIONS = {
     ")": "Reject plains which do not end with char X",
     "w": "Leet speak conversion",
     "W": "Reverse leet speak conversion",
+    "6": "Prepend memory buffer to beginning of current word",
+    "Q": "Reject if current word matches memorized word",
+    "a": "No-op stub (RULE_OP_MANGLE_TOGGLECASE_REC unimplemented in hashcat)",
 }
 
 
