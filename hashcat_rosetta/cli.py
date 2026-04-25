@@ -230,19 +230,51 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         elif char == "!" and i + 1 < len(rule_str):
             # Reject if contains char X (rejection rule)
             reject_char = rule_str[i + 1]
-            steps.append(f"!{reject_char}: Reject if contains '{reject_char}' (filter rule)")
+            if reject_char in current:
+                sentinel = f"REJECTED: !{reject_char}: word contains '{reject_char}'"
+                steps.append(sentinel)
+                return steps
+            else:
+                steps.append(
+                    f"!{reject_char}: Reject-if-contains '{reject_char}'"
+                    f" \u2192 passed (word does not contain '{reject_char}')"
+                )
             i += 2
 
         elif char == ">" and i + 1 < len(rule_str):
             # Reject if word length > N
             n_char = rule_str[i + 1]
-            steps.append(f">{n_char}: Reject if length > {n_char} (filter rule)")
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                if len(current) > n:
+                    sentinel = f"REJECTED: >{n_char}: word length {len(current)} > {n}"
+                    steps.append(sentinel)
+                    return steps
+                else:
+                    steps.append(
+                        f">{n_char}: Reject-if-length-greater-than {n}"
+                        f" \u2192 passed (length {len(current)} \u2264 {n})"
+                    )
+            except ValueError:
+                steps.append(f">{n_char}: Reject if length > {n_char} (filter rule)")
             i += 2
 
         elif char == "<" and i + 1 < len(rule_str):
             # Reject if word length < N
             n_char = rule_str[i + 1]
-            steps.append(f"<{n_char}: Reject if length < {n_char} (filter rule)")
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                if len(current) < n:
+                    sentinel = f"REJECTED: <{n_char}: word length {len(current)} < {n}"
+                    steps.append(sentinel)
+                    return steps
+                else:
+                    steps.append(
+                        f"<{n_char}: Reject-if-length-less-than {n}"
+                        f" \u2192 passed (length {len(current)} \u2265 {n})"
+                    )
+            except ValueError:
+                steps.append(f"<{n_char}: Reject if length < {n_char} (filter rule)")
             i += 2
 
         elif char == "'" and i + 1 < len(rule_str):
@@ -314,9 +346,17 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 1
 
         elif char == "%" and i + 1 < len(rule_str):
-            # Reject if word does not contain char X at least N times
+            # Reject if word does not contain char X (simplified: 1-arg form)
             check_char = rule_str[i + 1]
-            steps.append(f"%{check_char}: Reject unless contains '{check_char}' (filter rule)")
+            if check_char not in current:
+                sentinel = f"REJECTED: %{check_char}: word does not contain '{check_char}'"
+                steps.append(sentinel)
+                return steps
+            else:
+                steps.append(
+                    f"%{check_char}: Reject-unless-contains '{check_char}'"
+                    f" \u2192 passed (word contains '{check_char}')"
+                )
             i += 2
 
         elif char == "R" and i + 1 < len(rule_str):
@@ -436,10 +476,22 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             check_char = rule_str[i + 2]
             try:
                 pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
-                steps.append(
-                    f"={pos_char}{check_char}: Reject unless char at pos {pos}"
-                    f" is '{check_char}' (filter rule)"
-                )
+                if len(current) <= pos or current[pos] != check_char:
+                    if len(current) <= pos:
+                        reason = f"word length {len(current)} \u2264 {pos} (pos out of range)"
+                    else:
+                        reason = f"char at pos {pos} is '{current[pos]}', not '{check_char}'"
+                    sentinel = (
+                        f"REJECTED: ={pos_char}{check_char}: Reject unless char at pos {pos}"
+                        f" is '{check_char}': {reason}"
+                    )
+                    steps.append(sentinel)
+                    return steps
+                else:
+                    steps.append(
+                        f"={pos_char}{check_char}: Reject-unless-char-at-pos {pos}"
+                        f" is '{check_char}' \u2192 passed (char at pos {pos} is '{check_char}')"
+                    )
                 i += 3
             except (ValueError, IndexError):
                 i += 1
