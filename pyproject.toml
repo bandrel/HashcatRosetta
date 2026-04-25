@@ -46,6 +46,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not integration and not validation'"
 markers = [
-    "integration: integration tests that verify against actual hashcat binary",
+    "integration: marks tests as integration tests requiring external binaries (deselect with '-m \"not integration\"')",
+    "validation: marks tests as heavyweight accuracy validation (deselect with '-m \"not validation\"')",
 ]

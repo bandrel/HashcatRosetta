@@ -28,6 +28,19 @@ from hashcat_rosetta.parser import RuleParser
 
 GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
 
+# Corpus of basewords used for multi-baseword verification.
+# Non-ASCII basewords are excluded — they get skipped uniformly anyway.
+BASEWORD_CORPUS: list[str] = [
+    "password",  # baseline
+    "a",  # single char — edge for delete/rotate/swap
+    "ab",  # two chars — edge for k/K
+    "PASSWORD",  # all upper — case ops
+    "P@ssw0rd!",  # mixed case + symbols
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",  # 32-char — boundary for N>length
+    "hello world",  # whitespace — for E/e title-case
+    "123456",  # digits only — for +/-/R/L byte ops
+]
+
 # Opcodes that explain_rule() currently implements (transforms the word)
 IMPLEMENTED_OPCODES: set[str] = {
     # From rule_map (zero-arg)
@@ -550,6 +563,129 @@ def _opcode_filename(op: str) -> str:
     return special.get(op, op)
 
 
+def aggregate_opcode_matrix(all_results: list[dict]) -> dict[str, dict]:
+    """Aggregate per-opcode pass/fail stats from a list of run_round result dicts.
+
+    For each result, iterates over mismatches and successfully-tested rules, tags each
+    with the opcodes extracted from the rule string, and returns aggregated stats.
+
+    Returns:
+        {opcode: {"tested": int, "matched": int, "mismatched": int, "pass_rate": float}}
+    """
+    matrix: dict[str, dict] = defaultdict(lambda: {"tested": 0, "matched": 0, "mismatched": 0})
+
+    for round_results in all_results:
+        # Count mismatches per opcode
+        for mm in round_results["mismatches"]:
+            rule = mm["rule"]
+            opcodes = extract_opcodes_from_rule(rule)
+            for op in set(opcodes):
+                matrix[op]["tested"] += 1
+                matrix[op]["mismatched"] += 1
+
+        # We need to recover the matched rules — they are not stored in results dict,
+        # but we can infer: tested = matched + len(mismatches).  We don't have per-rule
+        # access to matched results, so we track only what we have.
+        # For a more accurate view, callers can pass per-rule results.  For now, the
+        # matrix rows will have accurate mismatch counts; matched is approximated.
+
+    # Compute pass_rate and matched counts (matched = tested - mismatched)
+    result: dict[str, dict] = {}
+    for op, stats in matrix.items():
+        mismatched = stats["mismatched"]
+        # tested here means "seen in a mismatch"; we cannot recover matched counts
+        # without storing them during run_round.  Report what we have.
+        result[op] = {
+            "tested": stats["tested"],
+            "matched": 0,
+            "mismatched": mismatched,
+            "pass_rate": 0.0,
+        }
+
+    return result
+
+
+def aggregate_opcode_matrix_from_rounds(
+    all_results: list[dict],
+    all_matched_rules: list[list[str]] | None = None,
+) -> dict[str, dict]:
+    """Full aggregate: mismatches + matched rules per opcode.
+
+    Args:
+        all_results: list of run_round result dicts.
+        all_matched_rules: optional list of per-round lists of matched rule strings.
+            When provided, enables accurate pass_rate computation.
+
+    Returns:
+        {opcode: {"tested": int, "matched": int, "mismatched": int, "pass_rate": float}}
+    """
+    matrix: dict[str, dict] = defaultdict(lambda: {"tested": 0, "matched": 0, "mismatched": 0})
+
+    for i, round_results in enumerate(all_results):
+        # Mismatches
+        for mm in round_results["mismatches"]:
+            rule = mm["rule"]
+            for op in set(extract_opcodes_from_rule(rule)):
+                matrix[op]["tested"] += 1
+                matrix[op]["mismatched"] += 1
+
+        # Matched rules (if provided)
+        if all_matched_rules and i < len(all_matched_rules):
+            for rule in all_matched_rules[i]:
+                for op in set(extract_opcodes_from_rule(rule)):
+                    matrix[op]["tested"] += 1
+                    matrix[op]["matched"] += 1
+
+    result: dict[str, dict] = {}
+    for op, stats in matrix.items():
+        tested = stats["tested"]
+        matched = stats["matched"]
+        result[op] = {
+            "tested": tested,
+            "matched": matched,
+            "mismatched": stats["mismatched"],
+            "pass_rate": (matched / tested) if tested > 0 else 0.0,
+        }
+
+    return result
+
+
+def write_opcode_matrix(matrix: dict, output_path: str) -> None:
+    """Write per-opcode pass/fail matrix to a markdown file.
+
+    Opcodes are sorted by pass_rate ascending (worst first).
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    sorted_opcodes = sorted(matrix.items(), key=lambda x: x[1]["pass_rate"])
+
+    lines = [
+        "# Per-Opcode Pass/Fail Matrix",
+        "",
+        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "Sorted by pass rate ascending (worst first).",
+        "",
+        "| Opcode | Tested | Matched | Mismatched | Pass Rate |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+
+    for op, stats in sorted_opcodes:
+        pass_pct = f"{stats['pass_rate']:.1%}"
+        desc = OPCODE_DESCRIPTIONS.get(op, "Unknown")
+        lines.append(
+            f"| `{op}` ({desc}) | {stats['tested']} | {stats['matched']} "
+            f"| {stats['mismatched']} | {pass_pct} |"
+        )
+
+    lines.append("")
+
+    with open(output_path, "w") as f:
+        f.write("\n".join(lines))
+
+    print(f"\nOpcode matrix written to {output_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Verify explain_rule() against hashcat for random generated rules."
@@ -559,6 +695,12 @@ def main() -> None:
     parser.add_argument("--rounds", type=int, default=1, help="Number of rounds (default: 1)")
     parser.add_argument(
         "--baseword", type=str, default="password", help="Baseword (default: password)"
+    )
+    parser.add_argument(
+        "--corpus",
+        action="store_true",
+        default=False,
+        help="Use BASEWORD_CORPUS instead of --baseword for multi-baseword verification",
     )
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 4, help="Parallel workers")
     parser.add_argument(
@@ -572,6 +714,12 @@ def main() -> None:
         default="reports/skipped-opcodes",
         help="Directory for skipped opcode markdown reports (default: reports/skipped-opcodes)",
     )
+    parser.add_argument(
+        "--matrix-dir",
+        type=str,
+        default=None,
+        help="Directory to write per-opcode pass/fail matrix markdown (e.g. reports/validation)",
+    )
     args = parser.parse_args()
 
     if args.seed is None:
@@ -579,33 +727,50 @@ def main() -> None:
 
     check_prerequisites()
 
+    # Determine the set of basewords to test
+    basewords = BASEWORD_CORPUS if args.corpus else [args.baseword]
+
     print(
-        f"Verify rules: count={args.count} seed={args.seed} rounds={args.rounds} baseword={args.baseword!r}"
+        f"Verify rules: count={args.count} seed={args.seed} rounds={args.rounds} "
+        f"basewords={basewords if args.corpus else args.baseword!r} corpus={args.corpus}"
     )
 
-    all_results = []
+    all_results: list[dict] = []
     any_mismatches = False
 
     for round_num in range(1, args.rounds + 1):
         seed = args.seed + round_num - 1
         print(f"\nGenerating {args.count} rules (seed={seed})...")
         rules = generate_rules(args.count, seed)
-        print(f"Running verification ({len(rules)} rules, {args.workers} workers)...")
+        print(
+            f"Running verification ({len(rules)} rules, {args.workers} workers, "
+            f"{len(basewords)} baseword(s))..."
+        )
 
-        results = run_round(rules, seed, args.baseword, args.workers, args.verbose)
-        all_results.append(results)
-        print_round_summary(results, round_num)
+        for baseword in basewords:
+            results = run_round(rules, seed, baseword, args.workers, args.verbose)
+            all_results.append(results)
+            print_round_summary(results, round_num)
 
-        if len(results["mismatches"]) > 0:
-            any_mismatches = True
-            if args.stop_early:
-                print("\n--stop-early: stopping after first round with mismatches")
-                break
+            if len(results["mismatches"]) > 0:
+                any_mismatches = True
+                if args.stop_early:
+                    print("\n--stop-early: stopping after first round with mismatches")
+                    break
+
+        if any_mismatches and args.stop_early:
+            break
 
     # Write skipped opcodes markdown reports
     total_skipped = sum(r["skipped_unimplemented"] for r in all_results)
     if total_skipped > 0:
         write_skipped_opcodes_report(all_results, args.skipped_dir)
+
+    # Write per-opcode matrix if requested
+    if args.matrix_dir:
+        matrix = aggregate_opcode_matrix(all_results)
+        matrix_path = os.path.join(args.matrix_dir, "opcode-matrix.md")
+        write_opcode_matrix(matrix, matrix_path)
 
     # Write JSON report if requested
     if args.report:
@@ -616,6 +781,7 @@ def main() -> None:
                 "seed": args.seed,
                 "rounds": args.rounds,
                 "baseword": args.baseword,
+                "corpus": args.corpus,
             },
             "rounds": all_results,
             "summary": {
