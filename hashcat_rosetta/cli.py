@@ -10,6 +10,11 @@ import click
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
 
+# Prefix used by explain_rule() to signal that a word was rejected by a filter opcode.
+# Consumers (e.g. scripts/verify_rules.py) check for this prefix to distinguish a
+# rejection sentinel from a normal transformation step.
+REJECT_SENTINEL_PREFIX = "REJECTED: "
+
 
 def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
@@ -231,7 +236,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Reject if contains char X (rejection rule)
             reject_char = rule_str[i + 1]
             if reject_char in current:
-                sentinel = f"REJECTED: !{reject_char}: word contains '{reject_char}'"
+                sentinel = f"{REJECT_SENTINEL_PREFIX}!{reject_char}: word contains '{reject_char}'"
                 steps.append(sentinel)
                 return steps
             else:
@@ -247,7 +252,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             try:
                 n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
                 if len(current) > n:
-                    sentinel = f"REJECTED: >{n_char}: word length {len(current)} > {n}"
+                    sentinel = (
+                        f"{REJECT_SENTINEL_PREFIX}>{n_char}: word length {len(current)} > {n}"
+                    )
                     steps.append(sentinel)
                     return steps
                 else:
@@ -265,7 +272,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             try:
                 n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
                 if len(current) < n:
-                    sentinel = f"REJECTED: <{n_char}: word length {len(current)} < {n}"
+                    sentinel = (
+                        f"{REJECT_SENTINEL_PREFIX}<{n_char}: word length {len(current)} < {n}"
+                    )
                     steps.append(sentinel)
                     return steps
                 else:
@@ -349,7 +358,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Reject if word does not contain char X (simplified: 1-arg form)
             check_char = rule_str[i + 1]
             if check_char not in current:
-                sentinel = f"REJECTED: %{check_char}: word does not contain '{check_char}'"
+                sentinel = (
+                    f"{REJECT_SENTINEL_PREFIX}%{check_char}: word does not contain '{check_char}'"
+                )
                 steps.append(sentinel)
                 return steps
             else:
@@ -481,10 +492,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                         reason = f"word length {len(current)} \u2264 {pos} (pos out of range)"
                     else:
                         reason = f"char at pos {pos} is '{current[pos]}', not '{check_char}'"
-                    sentinel = (
-                        f"REJECTED: ={pos_char}{check_char}: Reject unless char at pos {pos}"
-                        f" is '{check_char}': {reason}"
-                    )
+                    sentinel = f"{REJECT_SENTINEL_PREFIX}={pos_char}{check_char}: {reason}"
                     steps.append(sentinel)
                     return steps
                 else:

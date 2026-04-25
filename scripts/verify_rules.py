@@ -23,7 +23,7 @@ from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from hashcat_rosetta.cli import explain_rule
+from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, explain_rule
 from hashcat_rosetta.parser import RuleParser
 
 GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
@@ -261,11 +261,35 @@ def run_round(
     def _check(item: tuple[int, str, list[str]]) -> dict | None:
         idx, rule, explanation = item
         hashcat_result = get_hashcat_output(rule, baseword)
+
+        # Handle rejection sentinel: explain_rule() signals rejection by appending a
+        # step that starts with REJECT_SENTINEL_PREFIX.  hashcat signals rejection by
+        # producing no output (None from get_hashcat_output).
+        last_step = explanation[-1]
+        if last_step.startswith(REJECT_SENTINEL_PREFIX):
+            if hashcat_result is None:
+                # Both sides agree: the word was rejected.
+                return {"status": "match", "rule": rule, "idx": idx}
+            # We predicted rejection but hashcat produced output → mismatch.
+            parsed = parser.parse_rule(rule)
+            components = parsed["components"] if parsed else []
+            return {
+                "status": "mismatch",
+                "rule": rule,
+                "idx": idx,
+                "ours": last_step,
+                "hashcat": hashcat_result,
+                "components": [
+                    {"opcode": c.get("opcode", "?"), "description": c.get("description", "?")}
+                    for c in components
+                ],
+            }
+
         if hashcat_result is None:
             return {"status": "skipped_hashcat", "rule": rule, "idx": idx}
         if not hashcat_result.isascii():
             return {"status": "skipped_nonascii", "rule": rule, "idx": idx}
-        our_result = explanation[-1].split("\u2192")[-1].strip()
+        our_result = last_step.split("\u2192")[-1].strip()
         if our_result == hashcat_result:
             return {"status": "match", "rule": rule, "idx": idx}
         # Mismatch - gather details
