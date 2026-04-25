@@ -195,7 +195,7 @@ def run_audit(reference_path: Path, report_path: Path) -> list[str]:
         "- `X` is in `two_arg_ops` in parser.py but is actually 3-arg (XNML format).",
         "- `3` is in `no_arg_ops` in parser.py but is actually 2-arg (3NX format).",
         "- `a` is in `one_arg_ops` in parser.py but is actually 0-arg (no-op stub in hashcat).",
-        "- `B` cli.py comment incorrectly says 'not a documented hashcat opcode'.",
+        "- `B` is documented (RULE_OP_MANGLE_CHR_ADD) but not yet simulated in explain_rule().",
         "- `6` is 0-arg but not in any parser arity set.",
         "- `Q` is 0-arg but not in any parser arity set.",
         "",

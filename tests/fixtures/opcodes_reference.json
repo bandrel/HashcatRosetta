@@ -1,6 +1,6 @@
 {
   "source": "hashcat source (OpenCL/inc_rp_common.h, src/rp_cpu.c) + hashcat wiki, corrected 2026-02-19",
-  "content_hash": "090e4a2a5bb952ef26892d6a454e2114700d7f8ceb08dee4a03d84ee1fa00e6d",
+  "content_hash": "6328bb77bcfafdff9d36d5a51f72bf2edbfb52ed321f7f1cd4726d0d2bfe8590",
   "opcodes": [
     {
       "char": ":",
@@ -205,7 +205,7 @@
     {
       "char": "w",
       "arity": 0,
-      "description": "Duplicate first N chars \u2014 legacy alias for y",
+      "description": "Duplicate first N chars — legacy alias for y",
       "implemented_in_explain_rule": false,
       "status": "legacy_only",
       "notes": "Legacy opcode; modern equivalent is y (RULE_OP_MANGLE_DUPEBLOCK_FIRST)"
@@ -213,7 +213,7 @@
     {
       "char": "W",
       "arity": 0,
-      "description": "Duplicate last N chars \u2014 legacy alias for Y",
+      "description": "Duplicate last N chars — legacy alias for Y",
       "implemented_in_explain_rule": false,
       "status": "legacy_only",
       "notes": "Legacy opcode; modern equivalent is Y (RULE_OP_MANGLE_DUPEBLOCK_LAST)"
@@ -221,7 +221,7 @@
     {
       "char": "5",
       "arity": 0,
-      "description": "Duplicate first char N times \u2014 legacy alias for z",
+      "description": "Duplicate first char N times — legacy alias for z",
       "implemented_in_explain_rule": false,
       "status": "legacy_only",
       "notes": "Legacy opcode; modern equivalent is z (RULE_OP_MANGLE_DUPECHAR_FIRST)"
@@ -229,7 +229,7 @@
     {
       "char": "7",
       "arity": 0,
-      "description": "Duplicate last char N times \u2014 legacy alias for Z",
+      "description": "Duplicate last char N times — legacy alias for Z",
       "implemented_in_explain_rule": false,
       "status": "legacy_only",
       "notes": "Legacy opcode; modern equivalent is Z (RULE_OP_MANGLE_DUPECHAR_LAST)"
@@ -237,7 +237,7 @@
     {
       "char": "9",
       "arity": 0,
-      "description": "Duplicate every character in place \u2014 legacy alias for q",
+      "description": "Duplicate every character in place — legacy alias for q",
       "implemented_in_explain_rule": false,
       "status": "legacy_only",
       "notes": "Legacy opcode; modern equivalent is q (RULE_OP_MANGLE_DUPECHAR_ALL)"
@@ -336,7 +336,7 @@
       "description": "Reject if word contains character X",
       "implemented_in_explain_rule": true,
       "status": "implemented",
-      "notes": "Reject opcode \u2014 returns sentinel"
+      "notes": "Reject opcode — returns sentinel"
     },
     {
       "char": ">",
@@ -344,7 +344,7 @@
       "description": "Reject if word length is greater than N",
       "implemented_in_explain_rule": true,
       "status": "implemented",
-      "notes": "Reject opcode \u2014 returns sentinel"
+      "notes": "Reject opcode — returns sentinel"
     },
     {
       "char": "<",
@@ -352,7 +352,7 @@
       "description": "Reject if word length is less than N",
       "implemented_in_explain_rule": true,
       "status": "implemented",
-      "notes": "Reject opcode \u2014 returns sentinel"
+      "notes": "Reject opcode — returns sentinel"
     },
     {
       "char": "'",
@@ -504,7 +504,7 @@
       "description": "Reject unless character at position N is X",
       "implemented_in_explain_rule": true,
       "status": "implemented",
-      "notes": "Reject opcode \u2014 returns sentinel"
+      "notes": "Reject opcode — returns sentinel"
     },
     {
       "char": "B",
@@ -512,7 +512,7 @@
       "description": "Byte-wise add value to character at position (RULE_OP_MANGLE_CHR_ADD)",
       "implemented_in_explain_rule": false,
       "status": "unimplemented",
-      "notes": "Documented hashcat opcode. cli.py handles as no-op with wrong comment."
+      "notes": "Documented as RULE_OP_MANGLE_CHR_ADD. Not yet simulated in explain_rule()."
     },
     {
       "char": "v",

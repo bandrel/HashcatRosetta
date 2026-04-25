@@ -46,7 +46,7 @@ OPCODE_DESCRIPTIONS = {
     "y": "Duplicate first N characters",
     "Y": "Duplicate last N characters",
     "e": "Title case with separator char",
-    "B": "Extract range from memory",
+    "B": "Byte-wise add value to character at position (RULE_OP_MANGLE_CHR_ADD)",
     "h": "Lowercase first char, uppercase rest (alias for C)",
     "H": "Uppercase first char, lowercase rest (alias for c)",
     "E": "Title case (uppercase first letter and letters after spaces)",

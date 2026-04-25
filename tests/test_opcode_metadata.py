@@ -95,6 +95,29 @@ class TestContentHash:
 # parser.py (they are not tokenised because parser.py doesn't know them).
 KNOWN_ABSENT_FROM_PARSER: set[str] = {"6", "Q"}
 
+# Known arity bugs: parser.py assigns the wrong arity for these opcodes.
+# When any of these bugs is fixed, the corresponding test will XPASS → FAIL
+# (strict=True), forcing an explicit update here and in the reference JSON.
+KNOWN_ARITY_BUGS: dict[str, str] = {
+    "X": "X is 3-arg (XNML) but in two_arg_ops in parser.py",
+    "3": "3 is 2-arg (3NX) but in no_arg_ops in parser.py",
+    "a": "a is 0-arg (no-op stub) but in one_arg_ops in parser.py",
+}
+
+_ALL_OPCODES = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))["opcodes"]
+
+
+def _make_param_arity(entry: dict[str, Any]) -> Any:
+    """Wrap a reference entry in pytest.param, adding strict xfail for known arity bugs."""
+    char = entry["char"]
+    if char in KNOWN_ARITY_BUGS:
+        return pytest.param(
+            entry,
+            id=char,
+            marks=pytest.mark.xfail(strict=True, reason=KNOWN_ARITY_BUGS[char]),
+        )
+    return pytest.param(entry, id=char)
+
 
 class TestParserArityConsistency:
     def test_no_opcode_in_multiple_arity_sets(self) -> None:
@@ -110,7 +133,7 @@ class TestParserArityConsistency:
         "entry",
         [
             pytest.param(e, id=e["char"])
-            for e in json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))["opcodes"]
+            for e in _ALL_OPCODES
             if e["char"] not in KNOWN_ABSENT_FROM_PARSER
         ],
     )
@@ -124,17 +147,13 @@ class TestParserArityConsistency:
 
     @pytest.mark.parametrize(
         "entry",
-        [
-            pytest.param(e, id=e["char"])
-            for e in json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))["opcodes"]
-            if e["char"] not in KNOWN_ABSENT_FROM_PARSER
-        ],
+        [_make_param_arity(e) for e in _ALL_OPCODES if e["char"] not in KNOWN_ABSENT_FROM_PARSER],
     )
     def test_arity_matches_parser(self, entry: dict[str, Any]) -> None:
         """For opcodes in parser, reference arity must match parser arity.
 
-        Known arity discrepancies are expected failures (xfail) documenting
-        existing bugs, not regressions.
+        Known arity discrepancies are decorated with strict xfail via KNOWN_ARITY_BUGS
+        so that fixing a bug causes XPASS → FAIL, forcing an explicit update.
         """
         char: str = entry["char"]
         ref_arity: int = entry["arity"]
@@ -145,20 +164,9 @@ class TestParserArityConsistency:
             pytest.skip(f"Opcode {char!r} not in parser sets (covered by other test)")
             return  # unreachable but narrows type for mypy
 
-        known_mismatches: dict[tuple[str, int, int], str] = {
-            # (char, ref_arity, parser_arity): explanation
-            ("X", 3, 2): "X is 3-arg (XNML) but parser puts it in two_arg_ops",
-            ("3", 2, 0): "3 is 2-arg (3NX) but parser puts it in no_arg_ops",
-            ("a", 0, 1): "a is 0-arg (no-op stub) but parser puts it in one_arg_ops",
-        }
-
-        key: tuple[str, int, int] = (char, ref_arity, p_arity)
-        if key in known_mismatches:
-            pytest.xfail(f"Known arity bug for {char!r}: {known_mismatches[key]}")
-
         assert p_arity == ref_arity, (
             f"Opcode {char!r}: reference arity={ref_arity}, parser arity={p_arity}. "
-            "Either fix parser.py or add this to known_mismatches."
+            "Either fix parser.py or add this to KNOWN_ARITY_BUGS."
         )
 
 
@@ -168,10 +176,7 @@ class TestParserArityConsistency:
 class TestOpcodeDescriptions:
     @pytest.mark.parametrize(
         "entry",
-        [
-            pytest.param(e, id=e["char"])
-            for e in json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))["opcodes"]
-        ],
+        [pytest.param(e, id=e["char"]) for e in _ALL_OPCODES],
     )
     def test_has_description(self, entry: dict[str, Any]) -> None:
         """Every opcode in the reference must have a non-empty OPCODE_DESCRIPTIONS entry."""
