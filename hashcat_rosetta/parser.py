@@ -1,6 +1,8 @@
 """Parser module for hashcat rules and debug files."""
 
-import warnings
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DebugLogParser:
@@ -8,7 +10,8 @@ class DebugLogParser:
 
     def __init__(self):
         """Initialize the debug log parser."""
-        self.entries = []
+        self.entries: list = []
+        self._format: str | None = None  # "space" or "colon", detected per file/batch
 
     def parse_debug_file(self, filepath: str) -> list:
         """
@@ -29,16 +32,23 @@ class DebugLogParser:
                 'matched': bool (whether candidate matched a hash)
             }
         """
-        entries = []
-        total_lines = 0
+        entries: list = []
+        line_num = 0
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                for line_num, line in enumerate(f, 1):
-                    total_lines += 1
-                    parsed = self._parse_line(line.strip())
-                    if parsed:
-                        parsed["line_number"] = line_num
-                        entries.append(parsed)
+                # Read all lines for format detection
+                all_lines = f.readlines()
+
+            # Detect format from sample of lines
+            self._format = self._detect_format(
+                [line.strip() for line in all_lines if line.strip() and not line.startswith("#")]
+            )
+
+            for line_num, line in enumerate(all_lines, 1):
+                parsed = self._parse_line(line.strip())
+                if parsed:
+                    parsed["line_number"] = line_num
+                    entries.append(parsed)
         except FileNotFoundError:
             raise FileNotFoundError(f"Debug file not found: {filepath}")
         except (TypeError, AttributeError, IsADirectoryError, PermissionError, ValueError):
@@ -55,15 +65,63 @@ class DebugLogParser:
                 f"Make sure you're using hashcat with --debug-mode 4:\n"
                 f"hashcat -m [mode] -a 0 --debug-mode 4 hashes.txt wordlist.txt -r rules.rule"
             )
-        elif total_lines > 10 and len(entries) < total_lines * 0.1:
+        elif line_num > 10 and len(entries) < line_num * 0.1:
             # Less than 10% of lines parsed successfully
-            warnings.warn(
-                f"Only {len(entries)} of {total_lines} lines were parsed successfully. "
-                f"This file may not be in the expected --debug-mode 4 format."
+            logger.warning(
+                "Only %d of %d lines were parsed successfully. "
+                "This file may not be in the expected --debug-mode 4 format.",
+                len(entries),
+                line_num,
             )
 
         self.entries = entries
         return entries
+
+    def _detect_format(self, lines: list[str]) -> str:
+        """
+        Detect whether the file uses space-separated or colon-separated format.
+
+        Samples up to the first 20 non-empty, non-comment lines. Uses heuristics
+        to distinguish between the two formats:
+        - If space-split produces 3+ parts with a clean baseword (no colons),
+          it is space-separated.
+        - If colon-split produces 3 non-empty parts and space-split either fails
+          or produces a baseword containing colons, it is colon-separated.
+
+        Args:
+            lines: List of stripped, non-empty, non-comment lines
+
+        Returns:
+            "colon" or "space"
+        """
+        sample = lines[:20]
+        if not sample:
+            return "space"
+
+        colon_votes = 0
+        space_votes = 0
+        for line in sample:
+            space_parts = line.split(maxsplit=2)
+            colon_parts = line.split(":", 2)
+
+            has_space_format = len(space_parts) >= 3
+            has_colon_format = len(colon_parts) == 3 and all(p for p in colon_parts)
+
+            if has_colon_format and not has_space_format:
+                # Only colon format works
+                colon_votes += 1
+            elif has_space_format and not has_colon_format:
+                # Only space format works
+                space_votes += 1
+            elif has_space_format and has_colon_format:
+                # Both formats parse - use heuristic: if the space-split baseword
+                # contains a colon, the line is more likely colon-separated
+                if ":" in space_parts[0]:
+                    colon_votes += 1
+                else:
+                    space_votes += 1
+
+        return "colon" if colon_votes > space_votes else "space"
 
     def _parse_line(self, line: str) -> dict | None:
         """
@@ -72,6 +130,10 @@ class DebugLogParser:
         Format can be either:
           - Space-separated: baseword rule candidate
           - Colon-separated: baseword:rule:candidate
+
+        The format is determined at the file/batch level by _detect_format().
+        When no format has been detected (standalone calls), both formats are
+        tried with space-separated preferred.
 
         Args:
             line: A line from the debug file
@@ -82,19 +144,39 @@ class DebugLogParser:
         if not line or line.startswith("#"):
             return None
 
-        # Try colon-separated format first (older hashcat versions)
-        if ":" in line:
-            parts = line.split(":", 2)
-            if len(parts) == 3:
-                baseword, rule, candidate = parts
-                return {
-                    "baseword": baseword,
-                    "rule": rule,
-                    "candidate": candidate,
-                    "matched": False,
-                }
+        fmt = self._format
 
-        # Try space-separated format (newer hashcat --debug-mode 4)
+        if fmt == "colon":
+            return self._parse_colon_line(line)
+        elif fmt == "space":
+            return self._parse_space_line(line)
+        else:
+            # No format detected yet (standalone _parse_line call) -
+            # detect from this single line using the same heuristic
+            detected = self._detect_format([line])
+            if detected == "colon":
+                return self._parse_colon_line(line)
+            return self._parse_space_line(line)
+
+    def _parse_colon_line(self, line: str) -> dict | None:
+        """Parse a colon-separated debug line."""
+        if ":" not in line:
+            return None
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            return None
+        baseword, rule, candidate = parts
+        if not baseword and not rule and not candidate:
+            return None
+        return {
+            "baseword": baseword,
+            "rule": rule,
+            "candidate": candidate,
+            "matched": False,
+        }
+
+    def _parse_space_line(self, line: str) -> dict | None:
+        """Parse a space-separated debug line."""
         parts = line.split(maxsplit=2)
         if len(parts) < 3:
             return None
@@ -129,7 +211,12 @@ class DebugLogParser:
         Returns:
             List of parsed entries
         """
-        entries = []
+        # Detect format from the batch of lines
+        stripped = [line.strip() for line in lines if line and line.strip()]
+        non_comment = [line for line in stripped if not line.startswith("#")]
+        self._format = self._detect_format(non_comment)
+
+        entries: list = []
         for line_num, line in enumerate(lines, 1):
             parsed = self._parse_line(line.strip())
             if parsed:
@@ -193,18 +280,18 @@ class RuleParser:
         """Tokenize a rule string into individual operations.
 
         Supports the full hashcat rule opcode set:
-        - No-arg ops: : l u c C t d f r { } [ ] k K q E
-        - 1-arg ops (opcode + 1 char): T D p O z Z ^ $ @ ! > < ' + - . , L R
-        - 2-arg ops (opcode + 2 chars): s o i * x X
+        - No-arg ops: : l u c C t d f r { } [ ] k K q E M m S w W h H 3 4 5 7 9
+        - 1-arg ops (opcode + 1 char): T D p y Y e z Z ^ $ @ ! > < ' + - . , % L R a ( )
+        - 2-arg ops (opcode + 2 chars): s o i * x X = v O B
         """
         # No-argument operations (single character, no parameters)
-        no_arg_ops = set(":lucCtdfr{}[]kKqE")
+        no_arg_ops = set(":lucCtdfr{}[]kKqEMmSwWhH34579")
         # 1-argument operations (opcode + 1 parameter character)
-        one_arg_ops = set("TDpOzZ^$@!><'+-.,%LR")
+        one_arg_ops = set("TDpyYezZ^$@!><'+-.,%LRa()")
         # 2-argument operations (opcode + 2 parameter characters)
-        two_arg_ops = set("soix*X")
+        two_arg_ops = set("soix*X=vOB")
 
-        tokens = []
+        tokens: list = []
         i = 0
         while i < len(rule_string):
             char = rule_string[i]
@@ -217,7 +304,7 @@ class RuleParser:
                     tokens.append(rule_string[i : i + 3])
                     i += 3
                 else:
-                    warnings.warn(
+                    logger.warning(
                         f"Incomplete 2-arg opcode '{char}' at position {i} "
                         f"in rule '{rule_string}' - missing parameter(s), skipping"
                     )
@@ -227,7 +314,7 @@ class RuleParser:
                     tokens.append(rule_string[i : i + 2])
                     i += 2
                 else:
-                    warnings.warn(
+                    logger.warning(
                         f"Incomplete 1-arg opcode '{char}' at position {i} "
                         f"in rule '{rule_string}' - missing parameter, skipping"
                     )
