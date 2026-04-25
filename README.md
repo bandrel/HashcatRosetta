@@ -5,7 +5,7 @@
 |  _  | (_| \__ \ | | | (__| |_|  _ < (_) \__ \  __/ |_| || (_| |
 |_| |_|\__,_|___/_| |_|\___|\__|_| \_\___/|___/\___|\__|\__\__,_|
                                                                   
-    🔓 Decode the Rosetta Stone of Password Cracking Rules 🔍
+    Decode the Rosetta Stone of Password Cracking Rules
 ```
 
 # HashcatRosetta
@@ -298,9 +298,9 @@ print(f"Total basewords: {baseword_stats['total_basewords']}")
 
 ### Command not found errors with uv
 
-**❌ Don't use**: `uv run hashcat_rosetta` (this won't work)
+**Do not use**: `uv run hashcat_rosetta` (this won't work)
 
-**✅ Use instead**:
+**Use instead**:
 ```bash
 # Method 1: Use the CLI command name
 uv run rosetta debug.txt
@@ -316,8 +316,8 @@ uv run python -m hashcat_rosetta debug.txt
 If you see `ImportError: attempted relative import with no known parent package`, make sure you're running the package as a module with `-m`:
 
 ```bash
-python -m hashcat_rosetta   # ✅ Correct
-python hashcat_rosetta      # ❌ Won't work
+python -m hashcat_rosetta   # Correct
+python hashcat_rosetta      # Won't work
 ```
 
 ## Configuration

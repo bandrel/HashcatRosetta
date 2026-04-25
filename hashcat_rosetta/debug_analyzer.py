@@ -1,19 +1,33 @@
 """Analyzer module for hashcat debug files."""
 
 from collections import defaultdict
+from typing import Any
+
 from .parser import DebugLogParser
+
+
+def _median(values: list[int]) -> float:
+    """Calculate the median of a list of numeric values."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2 == 0:
+        return (s[mid - 1] + s[mid]) / 2
+    return float(s[mid])
 
 
 class DebugAnalyzer:
     """Analyze hashcat debug files for rule efficiency and baseword patterns."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the debug analyzer."""
         self.parser = DebugLogParser()
-        self.entries = []
+        self.entries: list[dict[str, Any]] = []
 
         # Rule statistics
-        self.rule_stats = defaultdict(
+        self.rule_stats: defaultdict[str, dict[str, Any]] = defaultdict(
             lambda: {
                 "count": 0,  # Total applications
                 "basewords": set(),  # Unique basewords used with this rule
@@ -23,7 +37,7 @@ class DebugAnalyzer:
         )
 
         # Baseword statistics
-        self.baseword_stats = defaultdict(
+        self.baseword_stats: defaultdict[str, dict[str, Any]] = defaultdict(
             lambda: {
                 "occurrences": [],  # List of {rule, candidate, matched}
                 "count": 0,
@@ -72,6 +86,10 @@ class DebugAnalyzer:
             self.rule_stats[rule]["basewords"].add(baseword)
             self.rule_stats[rule]["candidates"].add(candidate)
 
+            # Update match counts
+            if entry.get("matched", False):
+                self.rule_stats[rule]["match_count"] += 1
+
             # Update baseword statistics
             self.baseword_stats[baseword]["occurrences"].append(
                 {
@@ -81,6 +99,8 @@ class DebugAnalyzer:
                 }
             )
             self.baseword_stats[baseword]["count"] += 1
+            if entry.get("matched", False):
+                self.baseword_stats[baseword]["match_count"] += 1
 
         return {
             "total_entries": len(self.entries),
@@ -228,7 +248,7 @@ class DebugAnalyzer:
             "total_rules": len(self.rule_stats),
             "total_applications": sum(counts),
             "avg_applications_per_rule": sum(counts) / len(counts) if counts else 0,
-            "median_applications": sorted(counts)[len(counts) // 2] if counts else 0,
+            "median_applications": _median(counts),
             "max_applications": max(counts) if counts else 0,
             "min_applications": min(counts) if counts else 0,
             "avg_basewords_per_rule": sum(unique_bw_counts) / len(unique_bw_counts)
@@ -255,12 +275,12 @@ class DebugAnalyzer:
             "total_basewords": len(self.baseword_stats),
             "total_occurrences": sum(counts),
             "avg_occurrences_per_baseword": sum(counts) / len(counts) if counts else 0,
-            "median_occurrences": sorted(counts)[len(counts) // 2] if counts else 0,
+            "median_occurrences": _median(counts),
             "max_occurrences": max(counts) if counts else 0,
             "min_occurrences": min(counts) if counts else 0,
         }
 
-    def export_to_dict(self) -> dict:
+    def export_to_dict(self) -> Any:
         """
         Export complete analysis data as a JSON-serializable dictionary.
 
@@ -285,7 +305,7 @@ class DebugAnalyzer:
         return self._make_serializable(data)
 
     @staticmethod
-    def _make_serializable(obj):
+    def _make_serializable(obj: Any) -> Any:
         """Convert sets and other non-serializable objects to JSON-safe types."""
         if isinstance(obj, set):
             return sorted(list(obj))

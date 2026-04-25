@@ -5,9 +5,9 @@ JSON serialization, incomplete token warnings, and __main__.py wrapper.
 """
 
 import json
+import logging
 import os
 import tempfile
-import warnings
 
 import pytest
 from click.testing import CliRunner
@@ -22,17 +22,17 @@ class TestInputValidation:
     def test_analyze_rule_rejects_int(self):
         analyzer = RuleAnalyzer()
         with pytest.raises(TypeError, match="Expected str"):
-            analyzer.analyze_rule(123)
+            analyzer.analyze_rule(123)  # type: ignore[arg-type]
 
     def test_analyze_rule_rejects_none(self):
         analyzer = RuleAnalyzer()
         with pytest.raises(TypeError, match="Expected str"):
-            analyzer.analyze_rule(None)
+            analyzer.analyze_rule(None)  # type: ignore[arg-type]
 
     def test_analyze_rule_rejects_list(self):
         analyzer = RuleAnalyzer()
         with pytest.raises(TypeError, match="Expected str"):
-            analyzer.analyze_rule(["c", "u"])
+            analyzer.analyze_rule(["c", "u"])  # type: ignore[arg-type]
 
     def test_analyze_ruleset_none_returns_none(self):
         analyzer = RuleAnalyzer()
@@ -83,7 +83,7 @@ class TestInputValidation:
     def test_parse_debug_file_none_raises_typeerror(self):
         parser = DebugLogParser()
         with pytest.raises(TypeError):
-            parser.parse_debug_file(None)
+            parser.parse_debug_file(None)  # type: ignore[arg-type]
 
 
 class TestAnalyzeRulesCLIFlag:
@@ -126,9 +126,9 @@ class TestCharacteristicsExtraction:
         for rule in ["u", "l", "c", "t"]:
             result = analyzer.analyze_rule(rule)
             assert result is not None
-            assert (
-                "case_transform" in result["characteristics"]
-            ), f"Rule '{rule}' should have case_transform characteristic"
+            assert "case_transform" in result["characteristics"], (
+                f"Rule '{rule}' should have case_transform characteristic"
+            )
 
     def test_substitution_detected(self):
         analyzer = RuleAnalyzer()
@@ -147,9 +147,9 @@ class TestCharacteristicsExtraction:
         for rule in ["$1", "^a"]:
             result = analyzer.analyze_rule(rule)
             assert result is not None
-            assert (
-                "position_based" in result["characteristics"]
-            ), f"Rule '{rule}' should have position_based characteristic"
+            assert "position_based" in result["characteristics"], (
+                f"Rule '{rule}' should have position_based characteristic"
+            )
 
     def test_reversal_detected(self):
         analyzer = RuleAnalyzer()
@@ -261,40 +261,35 @@ class TestJSONSerialization:
 class TestIncompleteTokenWarnings:
     """Tests for incomplete token warnings in parser.py."""
 
-    def test_incomplete_two_arg_opcode_warns(self):
+    def test_incomplete_two_arg_opcode_warns(self, caplog):
         parser = RuleParser()
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with caplog.at_level(logging.WARNING, logger="hashcat_rosetta.parser"):
             parser.parse_rule("i4")
-            assert len(w) == 1
-            assert "Incomplete 2-arg opcode" in str(w[0].message)
+        assert len(caplog.records) == 1
+        assert "Incomplete 2-arg opcode" in caplog.records[0].message
 
-    def test_incomplete_one_arg_opcode_warns(self):
+    def test_incomplete_one_arg_opcode_warns(self, caplog):
         parser = RuleParser()
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with caplog.at_level(logging.WARNING, logger="hashcat_rosetta.parser"):
             parser.parse_rule("$")
-            assert len(w) == 1
-            assert "Incomplete 1-arg opcode" in str(w[0].message)
+        assert len(caplog.records) == 1
+        assert "Incomplete 1-arg opcode" in caplog.records[0].message
 
-    def test_complete_opcodes_no_warnings(self):
+    def test_complete_opcodes_no_warnings(self, caplog):
         parser = RuleParser()
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with caplog.at_level(logging.WARNING, logger="hashcat_rosetta.parser"):
             parser.parse_rule("c$1sse")
-            assert len(w) == 0
+        assert len(caplog.records) == 0
 
     def test_incomplete_token_still_parses_valid_tokens(self):
         """Rule with both valid and incomplete tokens should parse the valid ones."""
         parser = RuleParser()
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            result = parser.parse_rule("c$1i")
-            assert result is not None
-            # 'c' and '$1' should parse, 'i' should warn and be skipped
-            assert len(result["components"]) == 2
-            assert result["components"][0] == "c"
-            assert result["components"][1] == "$1"
+        result = parser.parse_rule("c$1i")
+        assert result is not None
+        # 'c' and '$1' should parse, 'i' should warn and be skipped
+        assert len(result["components"]) == 2
+        assert result["components"][0] == "c"
+        assert result["components"][1] == "$1"
 
 
 class TestTokenizerOpcodes:
@@ -309,23 +304,23 @@ class TestTokenizerOpcodes:
 
     def test_one_arg_ops(self):
         parser = RuleParser()
-        for op in "TDpOzZ":
+        for op in "TDpyYzZ":
             rule = f"{op}3"
             result = parser.parse_rule(rule)
             assert result is not None, f"One-arg opcode '{op}' should parse"
-            assert result["components"] == [
-                rule
-            ], f"One-arg opcode '{op}3' should tokenize as ['{rule}']"
+            assert result["components"] == [rule], (
+                f"One-arg opcode '{op}3' should tokenize as ['{rule}']"
+            )
 
     def test_two_arg_ops(self):
         parser = RuleParser()
-        for op in "soix*X":
+        for op in "soix*XOB":
             rule = f"{op}ab"
             result = parser.parse_rule(rule)
             assert result is not None, f"Two-arg opcode '{op}' should parse"
-            assert result["components"] == [
-                rule
-            ], f"Two-arg opcode '{op}ab' should tokenize as ['{rule}']"
+            assert result["components"] == [rule], (
+                f"Two-arg opcode '{op}ab' should tokenize as ['{rule}']"
+            )
 
     def test_append_prepend(self):
         parser = RuleParser()

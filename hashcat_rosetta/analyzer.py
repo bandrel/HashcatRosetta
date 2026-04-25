@@ -91,7 +91,7 @@ class RuleAnalyzer:
         count_penalty = count_diff * 5
 
         efficiency = max(0, 100 - complexity - count_penalty)
-        return efficiency
+        return float(efficiency)
 
     def _extract_characteristics(self, parsed_rule: dict) -> list:
         """
@@ -149,4 +149,4 @@ class RuleAnalyzer:
             return 0.0
         mean = sum(values) / len(values)
         variance = sum((x - mean) ** 2 for x in values) / len(values)
-        return variance**0.5
+        return float(variance**0.5)
