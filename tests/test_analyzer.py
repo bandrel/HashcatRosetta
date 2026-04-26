@@ -3,6 +3,8 @@
 import pytest
 import tempfile
 import os
+import json
+from typing import cast
 from hashcat_rosetta import RuleParser, RuleAnalyzer, DebugLogParser, DebugAnalyzer
 
 
@@ -63,6 +65,7 @@ class TestRuleAnalyzer:
         """Test efficiency score calculation."""
         analyzer = RuleAnalyzer()
         result = analyzer.analyze_rule("u")
+        assert result is not None
         assert 0 <= result["efficiency_score"] <= 100
 
     def test_empty_ruleset(self):
@@ -224,6 +227,7 @@ class TestDebugAnalyzer:
         ]
         analyzer.analyze_debug_lines(lines)
         detail = analyzer.get_baseword_detail("password")
+        assert detail is not None
         assert detail["baseword"] == "password"
         assert detail["total_occurrences"] == 3
         assert detail["unique_rules"] == 3  # c, u, l
@@ -238,6 +242,7 @@ class TestDebugAnalyzer:
         ]
         analyzer.analyze_debug_lines(lines)
         detail = analyzer.get_rule_detail("c")
+        assert detail is not None
         assert detail["rule"] == "c"
         assert detail["total_applications"] == 2
         assert detail["unique_basewords"] == 2
@@ -282,6 +287,155 @@ class TestDebugAnalyzer:
         assert "summary" in export
         assert "top_rules_by_frequency" in export
         assert "top_basewords" in export
+
+
+class TestRuleAnalyzerInvariants:
+    """Invariant tests for RuleAnalyzer to verify stable, ordered, and consistent outputs."""
+
+    # ========== 1. Monotonicity Tests ==========
+
+    @pytest.mark.parametrize("rule", ["c", "l u", "d r", "ss!$1", "D0T0z3"])
+    def test_monotonicity_complexity_does_not_decrease(self, rule: str) -> None:
+        """Assert that concatenating a rule with itself does not decrease complexity.
+
+        For a rule R, complexity(R) <= complexity(R + " " + R).
+        Concatenating doubles operations, so complexity should not decrease.
+        """
+        analyzer = RuleAnalyzer()
+        result1 = analyzer.analyze_rule(rule)
+        result2 = analyzer.analyze_rule(rule + " " + rule)
+
+        # Both should analyze successfully
+        assert result1 is not None, f"Failed to analyze rule: {rule}"
+        assert result2 is not None, f"Failed to analyze concatenated rule: {rule} {rule}"
+
+        # Monotonicity: complexity should not decrease when doubling
+        assert result1["complexity"] <= result2["complexity"], (
+            f"Complexity violated monotonicity: "
+            f"{rule!r} has complexity {result1['complexity']}, but "
+            f"{rule!r} {rule!r} has complexity {result2['complexity']}"
+        )
+
+    # ========== 2. Tag Completeness Tests ==========
+
+    @pytest.mark.parametrize("rule", ["ss$", "i2!", "o3x", "ss!i2x"])
+    def test_substitution_tag_triggered_by_s_i_o(self, rule: str) -> None:
+        """Substitution tag must be present when opcode contains s, i, or o."""
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_rule(rule)
+        assert result is not None
+        assert "substitution" in result["characteristics"], (
+            f"Rule {rule!r} contains substitution opcode but lacks 'substitution' tag"
+        )
+
+    @pytest.mark.parametrize("rule", ["u", "l", "c", "C", "t", "T0"])
+    def test_case_transform_tag_triggered_by_u_l_c_C_t_T(self, rule: str) -> None:
+        """Case transform tag must be present for opcodes u, l, c, C, t, T."""
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_rule(rule)
+        assert result is not None
+        assert "case_transform" in result["characteristics"], (
+            f"Rule {rule!r} contains case transform opcode but lacks 'case_transform' tag"
+        )
+
+    @pytest.mark.parametrize("rule", ["$1", "^x", "$1$2$3"])
+    def test_position_based_tag_triggered_by_caret_or_dollar(self, rule: str) -> None:
+        """Position based tag must be present for opcodes ^ or $."""
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_rule(rule)
+        assert result is not None
+        assert "position_based" in result["characteristics"], (
+            f"Rule {rule!r} contains position-based opcode but lacks 'position_based' tag"
+        )
+
+    @pytest.mark.parametrize("rule", ["r", "dr", "r$1"])
+    def test_reversal_tag_triggered_by_r(self, rule: str) -> None:
+        """Reversal tag must be present when opcode is r."""
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_rule(rule)
+        assert result is not None
+        assert "reversal" in result["characteristics"], (
+            f"Rule {rule!r} contains reversal opcode but lacks 'reversal' tag"
+        )
+
+    def test_complex_tag_above_five_components(self) -> None:
+        """Complex tag must be present when more than 5 components exist."""
+        analyzer = RuleAnalyzer()
+        # "c u l d r t f" has 7 space-separated components
+        result = analyzer.analyze_rule("c u l d r t f")
+        assert result is not None
+        assert result["component_count"] > 5, (
+            f"Expected >5 components, got {result['component_count']}"
+        )
+        assert "complex" in result["characteristics"], (
+            "Rule with 7 components should have 'complex' tag"
+        )
+
+    def test_complex_tag_at_exactly_five_components(self) -> None:
+        """Complex tag must NOT be present when exactly 5 components exist."""
+        analyzer = RuleAnalyzer()
+        # "c u l d r" has exactly 5 space-separated components
+        result = analyzer.analyze_rule("c u l d r")
+        assert result is not None
+        assert result["component_count"] == 5, (
+            f"Expected 5 components, got {result['component_count']}"
+        )
+        assert "complex" not in result["characteristics"], (
+            "Rule with exactly 5 components should NOT have 'complex' tag"
+        )
+
+    # ========== 3. Determinism Tests ==========
+
+    def test_analyze_ruleset_is_deterministic(self) -> None:
+        """Running analyze_ruleset twice on the same rules yields byte-identical JSON.
+
+        Tests that rule analysis is deterministic: same input produces same output
+        when serialized to JSON with sorted keys.
+        """
+        rules = ["c", "u", "l", "d r", "$1", "ss$", "^x$1"]
+        analyzer = RuleAnalyzer()
+
+        # First analysis
+        result1 = analyzer.analyze_ruleset(rules)
+        assert result1 is not None
+        json_str1 = json.dumps(result1, sort_keys=True)
+
+        # Second analysis with a fresh analyzer instance
+        analyzer2 = RuleAnalyzer()
+        result2 = analyzer2.analyze_ruleset(rules)
+        assert result2 is not None
+        json_str2 = json.dumps(result2, sort_keys=True)
+
+        assert json_str1 == json_str2, (
+            "analyze_ruleset is not deterministic: "
+            "identical inputs produced different outputs on successive calls"
+        )
+
+    # ========== 4. Empty/Whitespace Robustness Tests ==========
+
+    def test_empty_ruleset_returns_none(self) -> None:
+        """Empty ruleset must return None."""
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_ruleset([])
+        assert result is None
+
+    def test_none_ruleset_returns_none(self) -> None:
+        """None ruleset must return None."""
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_ruleset(cast(list, None))
+        assert result is None
+
+    def test_whitespace_only_ruleset_returns_none(self) -> None:
+        """Ruleset containing only whitespace/blank lines must return None.
+
+        Blank strings should fail to parse and result in no valid analyses,
+        thus returning None.
+        """
+        analyzer = RuleAnalyzer()
+        result = analyzer.analyze_ruleset(["", "   ", "\t"])
+        assert result is None or (isinstance(result, dict) and result.get("total_rules", 0) == 0), (
+            "Whitespace-only ruleset should return None or dict with total_rules == 0"
+        )
 
 
 if __name__ == "__main__":
