@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hashcatrosetta"
-version = "0.1.0"
+version = "0.2.0"
 description = "Analyze hashcat debug output to identify efficient rules and baseword patterns"
 
 readme = "README.md"

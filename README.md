@@ -336,6 +336,16 @@ Edit `pyproject.toml` to customize:
 4. Run tests and linting
 5. Submit a pull request
 
+## Version History
+
+### v0.2.0
+- Apply QA review fixes across parser and analyzer
+- Add comprehensive test suite (rule matrix, edge cases, CLI, fixes)
+- Implement missing opcodes (M, X, =, B) and add `verify_rules.py` validation script
+- Fix incorrect opcode documentation against hashcat source
+- Add hashcat-utils integration tests
+- Add pytest pre-commit hook
+
 ## License
 
 MIT License - see LICENSE file for details
