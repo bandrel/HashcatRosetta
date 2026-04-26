@@ -1,0 +1,3 @@
+{"baseword": "football", "rule": "$:", "candidate": "football:", "matched": false}
+{"baseword": "website", "rule": "u", "candidate": "WEBSITE:", "matched": false}
+{"baseword": "test", "rule": "d", "candidate": "testtest", "matched": false}
