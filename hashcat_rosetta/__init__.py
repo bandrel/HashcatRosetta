@@ -1,6 +1,6 @@
 """Hashcat Rule Analyzer - Evaluate the efficiency of hashcat password cracking rules."""
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 __author__ = "Justin Bollinger"
 
 from .analyzer import RuleAnalyzer
