@@ -1086,3 +1086,26 @@ class TestOpcodeE:
         result = explain_rule("e_", "test_word")
         assert result is not None
         assert len(result) >= 1
+
+
+class TestOpcodeA:
+    def test_a_appends_memorized(self) -> None:
+        # u M a -> uppercase, memorize ("PASSWORD"), append memory
+        # final = "PASSWORD" + "PASSWORD" = "PASSWORDPASSWORD"
+        result = explain_rule("uMa", "password")
+        assert result is not None
+        assert "PASSWORDPASSWORD" in result[-1]
+
+    def test_a_without_M_uses_original(self) -> None:
+        # No M: memory = original baseword. After 'u', current="PASSWORD"; 'a' appends original.
+        # Hashcat behavior: memory is initialized to the original word, so 'ua' -> "PASSWORD" + "password"
+        result = explain_rule("ua", "password")
+        assert result is not None
+        assert "PASSWORDpassword" in result[-1]
+
+    def test_a_mid_rule(self) -> None:
+        # M=memorize "test"; l lowercases (no-op); $! appends '!'; a appends "test"
+        result = explain_rule("M$!a", "test")
+        assert result is not None
+        # current after M="test", after $! ="test!", after a -> "test!" + "test" = "test!test"
+        assert "test!test" in result[-1]
