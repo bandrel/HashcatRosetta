@@ -888,6 +888,108 @@ class TestFilterRejection:
         assert explain_rule("=0p", "password") is not None
 
 
+class TestOpcodeV:
+    """Tests for the v opcode: vNM inserts character M after every N characters.
+
+    Semantics confirmed via hashcat binary survey:
+      - N is hex-parsed (0-9 or A-Z), represents chunk size.
+      - M is the literal character to insert (not hex-parsed).
+      - N=0 is a no-op (no chars per chunk means nothing is inserted).
+      - The character M is inserted after every N-th character throughout the word.
+
+    Representative hashcat observations:
+      rule=v11 word=abcdef           -> 'a1b1c1d1e1f1'
+      rule=v21 word=password         -> 'pa1ss1wo1rd1'
+      rule=v34 word=password         -> 'pas4swo4rd'
+      rule=vA2 word=abcdefghijklmnop -> 'abcdefghij2klmnop'
+      rule=v1a word=abcdef           -> 'aabacadaeafa'
+    """
+
+    def _final(self, steps: list[str]) -> str:
+        last = steps[-1]
+        if "\u2192" in last:
+            return last.split("\u2192")[-1].strip()
+        return last
+
+    def test_v01_is_noop(self) -> None:
+        """N=0 means no chunks, so nothing is inserted."""
+        result = explain_rule("v01", "password")
+        assert result is not None
+        assert self._final(result) == "password"
+
+    def test_v00_is_noop(self) -> None:
+        """N=0 M='0' is still a no-op."""
+        result = explain_rule("v00", "abcdef")
+        assert result is not None
+        assert self._final(result) == "abcdef"
+
+    def test_v11_inserts_after_every_1_char(self) -> None:
+        """v11: insert '1' after every character."""
+        result = explain_rule("v11", "abcdef")
+        assert result is not None
+        assert self._final(result) == "a1b1c1d1e1f1"
+
+    def test_v11_password(self) -> None:
+        result = explain_rule("v11", "password")
+        assert result is not None
+        assert self._final(result) == "p1a1s1s1w1o1r1d1"
+
+    def test_v21_inserts_after_every_2_chars(self) -> None:
+        """v21: insert '1' after every 2 characters."""
+        result = explain_rule("v21", "password")
+        assert result is not None
+        assert self._final(result) == "pa1ss1wo1rd1"
+
+    def test_v22_inserts_after_every_2_chars(self) -> None:
+        """v22: insert '2' after every 2 characters."""
+        result = explain_rule("v22", "password")
+        assert result is not None
+        assert self._final(result) == "pa2ss2wo2rd2"
+
+    def test_v31_inserts_after_every_3_chars(self) -> None:
+        """v31: insert '1' after every 3 characters, word length may not be divisible."""
+        result = explain_rule("v31", "password")
+        assert result is not None
+        # 'pas' + '1' + 'swo' + '1' + 'rd' (remainder not followed by insert)
+        assert self._final(result) == "pas1swo1rd"
+
+    def test_v34_inserts_after_every_3_chars(self) -> None:
+        """v34: insert '4' after every 3 characters."""
+        result = explain_rule("v34", "abcdef")
+        assert result is not None
+        assert self._final(result) == "abc4def4"
+
+    def test_vA2_hex_n_equals_10(self) -> None:
+        """vA2: N=A (hex 10), insert '2' after every 10 chars."""
+        result = explain_rule("vA2", "abcdefghijklmnop")
+        assert result is not None
+        assert self._final(result) == "abcdefghij2klmnop"
+
+    def test_vA2_short_word_is_noop(self) -> None:
+        """vA2 on word shorter than 10 chars inserts nothing."""
+        result = explain_rule("vA2", "password")
+        assert result is not None
+        assert self._final(result) == "password"
+
+    def test_v1a_lowercase_m_char(self) -> None:
+        """v1a: insert lowercase letter 'a' after every character."""
+        result = explain_rule("v1a", "abcdef")
+        assert result is not None
+        assert self._final(result) == "aabacadaeafa"
+
+    def test_v2b_inserts_lowercase_b(self) -> None:
+        """v2b: insert 'b' after every 2 characters."""
+        result = explain_rule("v2b", "abcdef")
+        assert result is not None
+        assert self._final(result) == "abbcdbefb"
+
+    def test_v_produces_nonempty_steps(self) -> None:
+        """v opcode must produce at least one step entry."""
+        result = explain_rule("v21", "test")
+        assert result is not None
+        assert len(result) >= 1
+
+
 class TestNewFilterOpcodes:
     def test_lparen_rejects_when_first_char_differs(self) -> None:
         # (a means reject unless first char is 'a'; "password" starts with 'p'

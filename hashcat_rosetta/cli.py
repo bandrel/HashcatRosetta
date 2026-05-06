@@ -480,6 +480,38 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             steps.append(f"){check_char}: Last char is '{check_char}' (filter passed)")
             i += 2
 
+        elif char == "v" and i + 2 < len(rule_str):
+            # Insert character M after every N characters.
+            # vNM: N is hex-parsed chunk size (0-9 or A-Z); M is the literal character to insert.
+            # Mirrors hashcat src/rp_cpu.c::mangle_insert_into_string_at_every_Nth.
+            # N=0 is a no-op (chunk size of 0 means nothing is ever inserted).
+            n_char = rule_str[i + 1]
+            m_char = rule_str[i + 2]
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+            except ValueError:
+                i += 1
+                continue
+            prev = current
+            if n > 0:
+                result_chars: list[str] = []
+                pos = 0
+                while pos < len(current):
+                    chunk_end = pos + n
+                    if chunk_end <= len(current):
+                        # Full chunk: append the N chars and the separator
+                        result_chars.extend(current[pos:chunk_end])
+                        result_chars.append(m_char)
+                    else:
+                        # Partial chunk at end: append remaining chars, no separator
+                        result_chars.extend(current[pos:])
+                    pos += n
+                current = "".join(result_chars)
+            steps.append(
+                f"v{n_char}{m_char}: Insert '{m_char}' after every {n} chars → {prev} → {current}"
+            )
+            i += 3
+
         elif char == "B" and i + 2 < len(rule_str):
             # B is not a documented hashcat opcode; skip as no-op
             arg1 = rule_str[i + 1]
@@ -497,7 +529,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         else:
             # Arity-aware skip for unknown opcodes
             _three_arg = set("X")
-            _two_arg = set("soix*=vOB")
+            _two_arg = set("soix*=OB")
             _one_arg = set("TDpyYezZ^$@!><'+-.,%LRa()")
             if char in _three_arg and i + 3 < len(rule_str):
                 i += 4
