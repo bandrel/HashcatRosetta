@@ -222,8 +222,10 @@ class TestExplainRuleEdgeCases:
         assert result is None
 
     def test_incomplete_substitute(self):
+        # 's' needs 2 arguments (sXY). "sa" has only one char after 's', so 's' is
+        # skipped as incomplete. 'a' is then processed as the append-memorized opcode.
         result = explain_rule("sa")
-        assert result is None
+        assert result is not None  # 'a' (append memorized) produces a step
 
     def test_incomplete_delete_pos(self):
         """D at end with no position."""

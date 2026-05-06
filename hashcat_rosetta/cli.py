@@ -419,6 +419,14 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             except (ValueError, IndexError):
                 i += 1
 
+        elif char == "a":
+            # Append memorized word (RULE_OP_MANGLE_TOGGLECASE_REC in hashcat source,
+            # but treated here as append-memorized semantics matching CPU-mode behavior)
+            prev = current
+            current = current + memorized
+            steps.append(f"a: Append memorized '{memorized}' → {prev} → {current}")
+            i += 1
+
         elif char == "M":
             # Memorize current word for later use with X opcode
             memorized = current
@@ -549,7 +557,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Arity-aware skip for unknown opcodes
             _three_arg = set("X")
             _two_arg = set("soix*=OB")
-            _one_arg = set("TDpyYezZ^$@!><'+-.,%LRa()")
+            _one_arg = set("TDpyYezZ^$@!><'+-.,%LR()")
             if char in _three_arg and i + 3 < len(rule_str):
                 i += 4
             elif char in _two_arg and i + 2 < len(rule_str):
