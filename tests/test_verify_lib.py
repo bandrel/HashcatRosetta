@@ -51,3 +51,37 @@ class TestDecideRejectionStatus:
 
     def test_only_hashcat_rejected_is_mismatch(self) -> None:
         assert decide_rejection_status(False, True) == "mismatch"
+
+
+class TestVerifyRuleIntegration:
+    """End-to-end tests; require hashcat binary on PATH."""
+
+    @pytest.mark.integration
+    def test_simple_rule_matches(self) -> None:
+        from hashcat_rosetta._verify import verify_rule
+
+        result = verify_rule("u", "password")
+        if result.status == "skipped_hashcat":
+            pytest.skip("hashcat binary not available")
+        assert result.status == "match", f"got {result}"
+
+    @pytest.mark.integration
+    def test_filter_rejection_agreement(self) -> None:
+        """When `!a` filter fires, both sides should agree on rejection."""
+        from hashcat_rosetta._verify import verify_rule
+
+        result = verify_rule("!a", "password")
+        if result.status == "skipped_hashcat":
+            pytest.skip("hashcat binary not available")
+        assert result.status == "match", (
+            f"both should reject 'password' for rule '!a', got {result}"
+        )
+
+    @pytest.mark.integration
+    def test_unimpl_opcode_skipped(self) -> None:
+        from hashcat_rosetta._verify import verify_rule
+
+        # `(` is currently unimplemented. Use the default implemented set.
+        result = verify_rule("(p", "password")
+        assert result.status == "skipped_unimpl"
+        assert "(" in result.unimpl_opcodes
