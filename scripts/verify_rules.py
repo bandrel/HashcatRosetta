@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify explain_rule() against actual hashcat output using random generated rules.
+"""Verify explain_rule() against hashcat using random generated rules.
 
 Usage:
     uv run python scripts/verify_rules.py [OPTIONS]
@@ -16,82 +16,21 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from collections import defaultdict
-from typing import Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from hashcat_rosetta.cli import explain_rule
-from hashcat_rosetta.parser import RuleParser
+from hashcat_rosetta._verify import (
+    _DEFAULT_IMPLEMENTED,
+    _ONE_ARG_OPCODES,
+    _TWO_ARG_OPCODES,
+    load_baseword_corpus,
+    verify_corpus,
+)
 
 GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
+DEFAULT_CORPUS = Path(__file__).resolve().parent.parent / "tests" / "data" / "basewords.json"
 
-# Opcodes that explain_rule() currently implements (transforms the word)
-IMPLEMENTED_OPCODES: set[str] = {
-    # From rule_map (zero-arg)
-    ":",
-    "c",
-    "u",
-    "l",
-    "d",
-    "r",
-    "t",
-    "[",
-    "]",
-    "{",
-    "}",
-    "f",
-    "k",
-    "K",
-    "q",
-    "C",
-    "E",
-    # Explicit handlers (with args)
-    "$",
-    "^",
-    "i",
-    "s",
-    "p",
-    "D",
-    "T",
-    "O",
-    "y",
-    "Y",
-    "z",
-    "Z",
-    "@",
-    "!",
-    ">",
-    "<",
-    "'",
-    "+",
-    "-",
-    ".",
-    ",",
-    "%",
-    "R",
-    "L",
-    "o",
-    "x",
-    "*",
-    # Memory and filter opcodes
-    "M",
-    "X",
-    "=",
-    "B",
-}
-
-# All known hashcat opcodes and their arities (from RuleParser)
-THREE_ARG_OPCODES: set[str] = set("X")
-TWO_ARG_OPCODES: set[str] = set("soix*=vOB")
-ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,%LRa()")
-ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEM")
-
-ALL_KNOWN_OPCODES = THREE_ARG_OPCODES | TWO_ARG_OPCODES | ONE_ARG_OPCODES | ZERO_ARG_OPCODES
-
-# Opcode descriptions for documentation
 OPCODE_DESCRIPTIONS: dict[str, str] = {
     ":": "No-op (do nothing)",
     "c": "Capitalize first letter, lowercase rest",
@@ -139,17 +78,17 @@ OPCODE_DESCRIPTIONS: dict[str, str] = {
     "*": "Swap characters at positions X and Y",
     "X": "Insert substring from memory at position N, length M (requires memory)",
     "=": "Reject unless character at position N is X",
-    "v": "Swap case of character at position N (lowercase <-> uppercase)",
+    "v": "Toggle case of character at position N every M characters",
     "B": "Bitwise operation B(N,X) - apply bitwise op at position",
-    "a": "Append string from memory",
-    "e": "Title case with separator (uppercase first letter after each separator)",
-    "(": "Character class check - reject unless char at pos N is in class",
-    ")": "Character class check - reject if char at pos N is in class",
+    "a": "Append memorized word",
+    "e": "Title case with separator (uppercase first letter and after each separator)",
+    "(": "Reject unless first character equals X",
+    ")": "Reject unless last character equals X",
+    "M": "Memorize current word",
 }
 
 
 def check_prerequisites() -> None:
-    """Verify that hashcat and generate-rules.bin are available."""
     if not GENERATE_RULES_BIN.exists():
         print(f"ERROR: generate-rules.bin not found at {GENERATE_RULES_BIN}", file=sys.stderr)
         sys.exit(2)
@@ -161,7 +100,6 @@ def check_prerequisites() -> None:
 
 
 def generate_rules(count: int, seed: int) -> list[str]:
-    """Generate random rules using hashcat-utils generate-rules.bin."""
     result = subprocess.run(
         [str(GENERATE_RULES_BIN), str(count), str(seed)],
         capture_output=True,
@@ -173,195 +111,31 @@ def generate_rules(count: int, seed: int) -> list[str]:
     return [line for line in result.stdout.decode().splitlines() if line.strip()]
 
 
-def get_hashcat_output(rule: str, baseword: str) -> str | None:
-    """Run a single rule through hashcat and return the result."""
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".rule", delete=False) as f:
-            f.write(rule)
-            temp_rule_file = f.name
-        try:
-            result = subprocess.run(
-                ["hashcat", "-a0", "-r", temp_rule_file, "--stdout", "-d1"],
-                input=baseword.encode(),
-                capture_output=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                output = result.stdout.decode().strip()
-                return output if output else None
-            return None
-        finally:
-            if os.path.exists(temp_rule_file):
-                os.unlink(temp_rule_file)
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-        return None
-
-
-def extract_opcodes_from_rule(rule_str: str) -> list[str]:
-    """Parse a rule string and return a list of opcode characters."""
-    opcodes = []
-    i = 0
-    while i < len(rule_str):
-        char = rule_str[i]
-        if char == " ":
-            i += 1
-            continue
-        opcodes.append(char)
-        if char in THREE_ARG_OPCODES and i + 3 < len(rule_str):
-            i += 4
-        elif char in TWO_ARG_OPCODES and i + 2 < len(rule_str):
-            i += 3
-        elif char in ONE_ARG_OPCODES and i + 1 < len(rule_str):
-            i += 2
-        else:
-            i += 1
-    return opcodes
-
-
-def find_unimplemented_opcodes(rule_str: str) -> set[str]:
-    """Return the set of opcodes in a rule that explain_rule does not implement."""
-    opcodes = extract_opcodes_from_rule(rule_str)
-    return {op for op in opcodes if op not in IMPLEMENTED_OPCODES and op in ALL_KNOWN_OPCODES}
-
-
-def run_round(
-    rules: list[str],
-    seed: int,
-    baseword: str,
-    workers: int,
-    verbose: bool,
-) -> dict:
-    """Run one verification round. Returns a results dict."""
-    parser = RuleParser()
-
-    # Pre-compute explain_rule results, tracking skipped opcodes
-    testable = []
-    skipped_unimplemented = 0
-    skipped_invalid = 0
-    skipped_rules: list[dict] = []
-    for idx, rule in enumerate(rules):
-        explanation = explain_rule(rule, baseword)
-        if explanation is None or len(explanation) == 0:
-            unimpl = find_unimplemented_opcodes(rule)
-            if unimpl:
-                skipped_unimplemented += 1
-                skipped_rules.append(
-                    {
-                        "rule": rule,
-                        "index": idx,
-                        "unimplemented_opcodes": sorted(unimpl),
-                    }
-                )
-            else:
-                skipped_invalid += 1
-            continue
-        testable.append((idx, rule, explanation))
-
-    # Check each rule against hashcat in parallel
-    def _check(item: tuple[int, str, list[str]]) -> dict | None:
-        idx, rule, explanation = item
-        hashcat_result = get_hashcat_output(rule, baseword)
-        if hashcat_result is None:
-            return {"status": "skipped_hashcat", "rule": rule, "idx": idx}
-        if not hashcat_result.isascii():
-            return {"status": "skipped_nonascii", "rule": rule, "idx": idx}
-        our_result = explanation[-1].split("\u2192")[-1].strip()
-        if our_result == hashcat_result:
-            return {"status": "match", "rule": rule, "idx": idx}
-        # Mismatch - gather details
-        parsed = parser.parse_rule(rule)
-        components = parsed["components"] if parsed else []
-        return {
-            "status": "mismatch",
-            "rule": rule,
-            "idx": idx,
-            "ours": our_result,
-            "hashcat": hashcat_result,
-            "components": [
-                {"opcode": c.get("opcode", "?"), "description": c.get("description", "?")}
-                for c in components
-            ],
-        }
-
-    results: dict[str, Any] = {
-        "seed": seed,
-        "total_rules": len(rules),
-        "skipped_unimplemented": skipped_unimplemented,
-        "skipped_invalid": skipped_invalid,
-        "skipped_hashcat": 0,
-        "skipped_nonascii": 0,
-        "tested": 0,
-        "matched": 0,
-        "mismatches": [],
-        "skipped_rules": skipped_rules,
-    }
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_check, item): item for item in testable}
-        for future in as_completed(futures):
-            r = future.result()
-            if r is None:
-                continue
-            if r["status"] == "skipped_hashcat":
-                results["skipped_hashcat"] += 1
-            elif r["status"] == "skipped_nonascii":
-                results["skipped_nonascii"] += 1
-            elif r["status"] == "match":
-                results["tested"] += 1
-                results["matched"] += 1
-            elif r["status"] == "mismatch":
-                results["tested"] += 1
-                mismatch = {
-                    "rule": r["rule"],
-                    "seed": seed,
-                    "index": r["idx"],
-                    "ours": r["ours"],
-                    "hashcat": r["hashcat"],
-                    "components": r["components"],
-                }
-                results["mismatches"].append(mismatch)
-                if verbose:
-                    print(
-                        f"  MISMATCH rule={r['rule']!r} ours={r['ours']!r} hashcat={r['hashcat']!r}"
-                    )
-
-    return results
-
-
-def print_round_summary(results: dict, round_num: int) -> None:
-    """Print a summary for one round."""
-    n_mm = len(results["mismatches"])
-    print(f"\n--- Round {round_num} (seed={results['seed']}) ---")
-    print(f"  Total rules:       {results['total_rules']}")
-    print(f"  Skipped (unimpl):  {results['skipped_unimplemented']}")
-    print(f"  Skipped (invalid): {results['skipped_invalid']}")
-    print(f"  Skipped (hashcat): {results['skipped_hashcat']}")
-    print(f"  Skipped (non-ASCII): {results['skipped_nonascii']}")
-    print(f"  Tested:            {results['tested']}")
-    print(f"  Matched:           {results['matched']}")
-    print(f"  Mismatches:        {n_mm}")
-
+def print_round_summary(round_result: dict) -> None:
+    n_mm = len(round_result["mismatches"])
+    print(f"\n--- baseword={round_result['baseword']!r} ---")
+    print(f"  Total rules:          {round_result['total_rules']}")
+    print(f"  Skipped (unimpl):     {round_result['skipped_unimplemented']}")
+    print(f"  Skipped (hashcat):    {round_result['skipped_hashcat']}")
+    print(f"  Skipped (non-ASCII):  {round_result['skipped_nonascii']}")
+    print(f"  Tested:               {round_result['tested']}")
+    print(f"  Matched:              {round_result['matched']}")
+    print(f"  Mismatches:           {n_mm}")
     if n_mm > 0:
-        print(f"\n  First {min(n_mm, 20)} mismatches:")
-        for mm in results["mismatches"][:20]:
+        print(f"\n  First {min(n_mm, 10)} mismatches:")
+        for mm in round_result["mismatches"][:10]:
             opcodes = " ".join(c["opcode"] for c in mm["components"])
             print(
-                f"    rule={mm['rule']!r:30s} ours={mm['ours']!r:20s} hashcat={mm['hashcat']!r:20s} opcodes=[{opcodes}]"
+                f"    rule={mm['rule']!r:30s} ours={mm['ours']!r:20s} "
+                f"hashcat={mm['hashcat']!r:20s} opcodes=[{opcodes}]"
             )
-        if n_mm > 20:
-            print(f"    ... and {n_mm - 20} more")
 
 
-def write_skipped_opcodes_report(all_results: list[dict], output_dir: str) -> str:
-    """Write a markdown report of skipped (unimplemented) opcodes.
-
-    Returns the path to the written file.
-    """
-    # Aggregate: for each unimplemented opcode, collect example rules and counts
+def write_skipped_opcodes_report(rounds: list[dict], output_dir: str) -> None:
+    """Aggregate skipped opcodes across all rounds and write markdown reports."""
     opcode_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "examples": []})
-
-    for round_results in all_results:
-        for skipped in round_results["skipped_rules"]:
+    for round_result in rounds:
+        for skipped in round_result["skipped_rules"]:
             for op in skipped["unimplemented_opcodes"]:
                 stats = opcode_stats[op]
                 stats["count"] += 1
@@ -369,253 +143,136 @@ def write_skipped_opcodes_report(all_results: list[dict], output_dir: str) -> st
                     stats["examples"].append(
                         {
                             "rule": skipped["rule"],
-                            "seed": round_results["seed"],
+                            "baseword": round_result["baseword"],
                             "index": skipped["index"],
                         }
                     )
-
     if not opcode_stats:
-        return ""
-
-    # Sort by frequency (most common first)
+        return
     sorted_opcodes = sorted(opcode_stats.items(), key=lambda x: x[1]["count"], reverse=True)
-
-    total_skipped = sum(r["skipped_unimplemented"] for r in all_results)
-
+    total_skipped = sum(r["skipped_unimplemented"] for r in rounds)
     os.makedirs(output_dir, exist_ok=True)
-
-    # -- Summary report --
     summary_path = os.path.join(output_dir, "skipped-opcodes.md")
     lines = [
         "# Skipped Opcodes Summary",
         "",
         f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         "",
-        f"Total rules skipped (unimplemented): **{total_skipped}**",
+        f"Total rule-runs skipped (unimplemented): **{total_skipped}**",
         "",
         f"Distinct unimplemented opcodes found: **{len(sorted_opcodes)}**",
         "",
-        "| Opcode | Description | Rules Affected | Arity |",
-        "|--------|-------------|---------------|-------|",
+        "| Opcode | Description | Rule-runs Affected | Arity |",
+        "|--------|-------------|---------------------|-------|",
     ]
-
     for op, stats in sorted_opcodes:
         desc = OPCODE_DESCRIPTIONS.get(op, "Unknown")
-        if op in TWO_ARG_OPCODES:
+        if op in _TWO_ARG_OPCODES:
             arity = "2-arg"
-        elif op in ONE_ARG_OPCODES:
+        elif op in _ONE_ARG_OPCODES:
             arity = "1-arg"
         else:
             arity = "0-arg"
         lines.append(f"| `{op}` | {desc} | {stats['count']} | {arity} |")
-
-    lines += [
-        "",
-        "## Per-opcode details",
-        "",
-        "Each opcode below has a dedicated file with example rules for testing.",
-        "",
-    ]
-
-    for op, _stats in sorted_opcodes:
-        safe_name = _opcode_filename(op)
-        lines.append(
-            f"- [`{op}`](opcode-{safe_name}.md) - {OPCODE_DESCRIPTIONS.get(op, 'Unknown')}"
-        )
-
-    lines.append("")
-
-    with open(summary_path, "w") as f:
-        f.write("\n".join(lines))
-
-    # -- Per-opcode detail files --
-    for op, stats in sorted_opcodes:
-        safe_name = _opcode_filename(op)
-        detail_path = os.path.join(output_dir, f"opcode-{safe_name}.md")
-        desc = OPCODE_DESCRIPTIONS.get(op, "Unknown")
-
-        if op in TWO_ARG_OPCODES:
-            arity = "2-arg (opcode + 2 parameter characters)"
-        elif op in ONE_ARG_OPCODES:
-            arity = "1-arg (opcode + 1 parameter character)"
-        else:
-            arity = "0-arg (opcode only)"
-
-        detail_lines = [
-            f"# Opcode `{op}` - {desc}",
-            "",
-            f"- **Arity**: {arity}",
-            f"- **Rules affected**: {stats['count']}",
-            "- **Status**: Not implemented in `explain_rule()`",
-            "",
-            "## Example rules containing this opcode",
-            "",
-            "Use these to test your implementation:",
-            "",
-            "```",
-        ]
-
-        for ex in stats["examples"]:
-            detail_lines.append(f"{ex['rule']}  # seed={ex['seed']} index={ex['index']}")
-
-        detail_lines += [
-            "```",
-            "",
-            "## Reproduce",
-            "",
-            "```bash",
-            f"# Generate rules from a specific seed and grep for opcode '{op}'",
-        ]
-
-        if stats["examples"]:
-            ex_seed = stats["examples"][0]["seed"]
-            detail_lines.append(
-                f"~/hashcat-utils/src/generate-rules.bin 1000 {ex_seed} | grep -F '{op}'"
-            )
-
-        detail_lines += [
-            "",
-            "# Test a specific rule against hashcat",
-            f'echo "password" | hashcat -a0 -r <(echo "{stats["examples"][0]["rule"]}") --stdout -d1',
-            "```",
-            "",
-            "## Implementation notes",
-            "",
-            f"Add handling for `{op}` in `explain_rule()` in `hashcat_rosetta/cli.py`.",
-            "",
-            "Reference: https://hashcat.net/wiki/doku.php?id=rule_based_attack",
-            "",
-        ]
-
-        with open(detail_path, "w") as f:
-            f.write("\n".join(detail_lines))
-
-    print(f"\nSkipped opcodes report written to {output_dir}/")
-    print(f"  Summary: {summary_path}")
-    print(f"  Detail files: {len(sorted_opcodes)} opcode-*.md files")
-
-    return summary_path
-
-
-def _opcode_filename(op: str) -> str:
-    """Convert an opcode character to a safe filename component."""
-    # Map special characters to readable names
-    special: dict[str, str] = {
-        "*": "star",
-        "$": "dollar",
-        "^": "caret",
-        "[": "lbracket",
-        "]": "rbracket",
-        "{": "lbrace",
-        "}": "rbrace",
-        "<": "lt",
-        ">": "gt",
-        "'": "apostrophe",
-        "+": "plus",
-        "-": "minus",
-        ".": "dot",
-        ",": "comma",
-        "%": "percent",
-        "!": "bang",
-        "@": "at",
-        ":": "colon",
-        "=": "equals",
-        "(": "lparen",
-        ")": "rparen",
-    }
-    return special.get(op, op)
+    Path(summary_path).write_text("\n".join(lines) + "\n")
+    print(f"\nSkipped opcodes report written to {summary_path}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Verify explain_rule() against hashcat for random generated rules."
-    )
-    parser.add_argument("--count", type=int, default=1000, help="Rules per round (default: 1000)")
+    parser = argparse.ArgumentParser(description="Verify explain_rule() against hashcat.")
+    parser.add_argument("--count", type=int, default=200, help="Rules per round (default: 200)")
     parser.add_argument("--seed", type=int, default=None, help="Starting seed (default: random)")
-    parser.add_argument("--rounds", type=int, default=1, help="Number of rounds (default: 1)")
-    parser.add_argument(
-        "--baseword", type=str, default="password", help="Baseword (default: password)"
-    )
+    parser.add_argument("--rounds", type=int, default=1, help="Number of rule-generation rounds")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 4, help="Parallel workers")
-    parser.add_argument(
-        "--stop-early", action="store_true", help="Stop after first round with mismatches"
-    )
-    parser.add_argument("--verbose", action="store_true", help="Print each mismatch as found")
     parser.add_argument("--report", type=str, default=None, help="Write JSON report to file")
     parser.add_argument(
         "--skipped-dir",
         type=str,
         default="reports/skipped-opcodes",
-        help="Directory for skipped opcode markdown reports (default: reports/skipped-opcodes)",
+        help="Directory for skipped opcode markdown report",
+    )
+    bw_group = parser.add_mutually_exclusive_group()
+    bw_group.add_argument(
+        "--baseword",
+        type=str,
+        default=None,
+        help="Single ad-hoc baseword (mutually exclusive with --basewords)",
+    )
+    bw_group.add_argument(
+        "--basewords",
+        type=str,
+        default=None,
+        help=f"Path to corpus JSON (default: {DEFAULT_CORPUS})",
     )
     args = parser.parse_args()
 
     if args.seed is None:
         args.seed = int(time.time()) % 100000
 
+    if args.baseword is not None:
+        basewords = [args.baseword]
+    else:
+        corpus_path = Path(args.basewords) if args.basewords else DEFAULT_CORPUS
+        basewords = load_baseword_corpus(corpus_path)
+
     check_prerequisites()
 
     print(
-        f"Verify rules: count={args.count} seed={args.seed} rounds={args.rounds} baseword={args.baseword!r}"
+        f"Verify rules: count={args.count} seed={args.seed} rounds={args.rounds} "
+        f"basewords={len(basewords)}"
     )
 
-    all_results = []
+    all_rounds: list[dict] = []
     any_mismatches = False
 
     for round_num in range(1, args.rounds + 1):
         seed = args.seed + round_num - 1
         print(f"\nGenerating {args.count} rules (seed={seed})...")
         rules = generate_rules(args.count, seed)
-        print(f"Running verification ({len(rules)} rules, {args.workers} workers)...")
+        print(
+            f"Running verification ({len(rules)} rules x {len(basewords)} basewords, "
+            f"{args.workers} workers)..."
+        )
 
-        results = run_round(rules, seed, args.baseword, args.workers, args.verbose)
-        all_results.append(results)
-        print_round_summary(results, round_num)
-
-        if len(results["mismatches"]) > 0:
+        report = verify_corpus(rules, basewords, args.workers, _DEFAULT_IMPLEMENTED)
+        for round_result in report.rounds:
+            round_result["seed"] = seed
+            print_round_summary(round_result)
+        all_rounds.extend(report.rounds)
+        if report.total_mismatches > 0:
             any_mismatches = True
-            if args.stop_early:
-                print("\n--stop-early: stopping after first round with mismatches")
-                break
 
-    # Write skipped opcodes markdown reports
-    total_skipped = sum(r["skipped_unimplemented"] for r in all_results)
-    if total_skipped > 0:
-        write_skipped_opcodes_report(all_results, args.skipped_dir)
+    if sum(r["skipped_unimplemented"] for r in all_rounds) > 0:
+        write_skipped_opcodes_report(all_rounds, args.skipped_dir)
 
-    # Write JSON report if requested
     if args.report:
-        report = {
+        report_doc = {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "config": {
                 "count": args.count,
                 "seed": args.seed,
                 "rounds": args.rounds,
-                "baseword": args.baseword,
+                "baseword_count": len(basewords),
             },
-            "rounds": all_results,
+            "rounds": all_rounds,
             "summary": {
-                "total_tested": sum(r["tested"] for r in all_results),
-                "total_matched": sum(r["matched"] for r in all_results),
-                "total_mismatches": sum(len(r["mismatches"]) for r in all_results),
+                "total_tested": sum(r["tested"] for r in all_rounds),
+                "total_matched": sum(r["matched"] for r in all_rounds),
+                "total_mismatches": sum(len(r["mismatches"]) for r in all_rounds),
             },
         }
-        with open(args.report, "w") as f:
-            json.dump(report, f, indent=2)
+        Path(args.report).write_text(json.dumps(report_doc, indent=2))
         print(f"\nReport written to {args.report}")
 
-    # Final summary
-    total_tested = sum(r["tested"] for r in all_results)
-    total_mm = sum(len(r["mismatches"]) for r in all_results)
+    total_tested = sum(r["tested"] for r in all_rounds)
+    total_mm = sum(len(r["mismatches"]) for r in all_rounds)
     print(f"\n{'=' * 50}")
-    print(f"TOTAL: {total_tested} tested, {total_mm} mismatches across {len(all_results)} round(s)")
-
+    print(f"TOTAL: {total_tested} tested, {total_mm} mismatches across {len(all_rounds)} round(s)")
     if any_mismatches:
         print("RESULT: FAIL")
         sys.exit(1)
-    else:
-        print("RESULT: PASS")
-        sys.exit(0)
+    print("RESULT: PASS")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
