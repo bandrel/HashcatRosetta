@@ -465,14 +465,20 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             i += 3
 
         elif char == "(" and i + 1 < len(rule_str):
-            # Hashcat v7.x treats ( as an unrecognized opcode — always rejects.
-            # Matching actual hashcat behavior: unconditional reject.
-            return None
+            # Reject unless first character equals X
+            check_char = rule_str[i + 1]
+            if not current or current[0] != check_char:
+                return None
+            steps.append(f"({check_char}: First char is '{check_char}' (filter passed)")
+            i += 2
 
         elif char == ")" and i + 1 < len(rule_str):
-            # Hashcat v7.x treats ) as an unrecognized opcode — always rejects.
-            # Matching actual hashcat behavior: unconditional reject.
-            return None
+            # Reject unless last character equals X
+            check_char = rule_str[i + 1]
+            if not current or current[-1] != check_char:
+                return None
+            steps.append(f"){check_char}: Last char is '{check_char}' (filter passed)")
+            i += 2
 
         elif char == "B" and i + 2 < len(rule_str):
             # B is not a documented hashcat opcode; skip as no-op
