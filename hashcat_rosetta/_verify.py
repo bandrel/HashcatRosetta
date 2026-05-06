@@ -127,6 +127,8 @@ _DEFAULT_IMPLEMENTED: set[str] = {
     "X",
     "=",
     "B",
+    "(",
+    ")",
 }
 
 

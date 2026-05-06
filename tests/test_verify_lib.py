@@ -79,13 +79,16 @@ class TestVerifyRuleIntegration:
         )
 
     @pytest.mark.integration
-    def test_unimpl_opcode_skipped(self) -> None:
+    def test_lparen_opcode_matches_hashcat_rejection(self) -> None:
         from hashcat_rosetta._verify import verify_rule
 
-        # `(` is currently unimplemented. Use the default implemented set.
+        # `(` is now implemented (always rejects, matching hashcat v7.x behavior).
         result = verify_rule("(p", "password")
-        assert result.status == "skipped_unimpl"
-        assert "(" in result.unimpl_opcodes
+        if result.status == "skipped_hashcat":
+            pytest.skip("hashcat binary not available")
+        assert result.status == "match", (
+            f"both sides should reject '(p' for 'password', got {result}"
+        )
 
 
 class TestVerifyCorpus:

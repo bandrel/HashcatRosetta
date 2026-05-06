@@ -886,3 +886,24 @@ class TestFilterRejection:
 
     def test_equals_passes_when_char_at_pos_matches(self) -> None:
         assert explain_rule("=0p", "password") is not None
+
+
+class TestNewFilterOpcodes:
+    def test_lparen_rejects_when_first_char_differs(self) -> None:
+        # Hashcat v7.x treats ( as an unrecognized opcode — always rejects.
+        assert explain_rule("(a", "password") is None
+
+    def test_lparen_always_rejects_even_when_first_char_matches(self) -> None:
+        # Matches actual hashcat behavior: ( unconditionally rejects.
+        assert explain_rule("(p", "password") is None
+
+    def test_lparen_rejects_empty_word(self) -> None:
+        assert explain_rule("(p", "") is None
+
+    def test_rparen_always_rejects(self) -> None:
+        # Hashcat v7.x treats ) as an unrecognized opcode — always rejects.
+        assert explain_rule(")d", "password") is None
+        assert explain_rule(")z", "password") is None
+
+    def test_rparen_rejects_empty_word(self) -> None:
+        assert explain_rule(")a", "") is None
