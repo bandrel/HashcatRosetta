@@ -71,7 +71,7 @@ def decide_rejection_status(
 # Mirrors verify_rules.py - keep in sync if hashcat adds opcodes.
 _THREE_ARG_OPCODES: set[str] = set("X")
 _TWO_ARG_OPCODES: set[str] = set("soix*=vOB")
-_ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,%LRa()")
+_ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,%LRa()e")
 _ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEM")
 _ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | _ZERO_ARG_OPCODES
 
@@ -130,6 +130,7 @@ _DEFAULT_IMPLEMENTED: set[str] = {
     "(",
     ")",
     "v",
+    "e",
 }
 
 

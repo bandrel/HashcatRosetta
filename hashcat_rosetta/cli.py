@@ -512,6 +512,25 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             )
             i += 3
 
+        elif char == "e" and i + 1 < len(rule_str):
+            # Title case with separator X. Lowercase all, then uppercase
+            # first char and any char immediately following separator X.
+            # Separator matching is done against the ORIGINAL word (before
+            # lowercasing), mirroring hashcat src/rp_cpu.c mangle_title_sep.
+            sep = rule_str[i + 1]
+            prev = current
+            orig = current  # preserve original for separator matching
+            lowered = current.lower()
+            chars = list(lowered)
+            if chars:
+                chars[0] = chars[0].upper()
+            for idx in range(1, len(chars)):
+                if orig[idx - 1] == sep:
+                    chars[idx] = chars[idx].upper()
+            current = "".join(chars)
+            steps.append(f"e{sep}: Title-case with separator '{sep}' → {prev} → {current}")
+            i += 2
+
         elif char == "B" and i + 2 < len(rule_str):
             # B is not a documented hashcat opcode; skip as no-op
             arg1 = rule_str[i + 1]

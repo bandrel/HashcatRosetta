@@ -1007,3 +1007,82 @@ class TestNewFilterOpcodes:
 
     def test_rparen_rejects_empty_word(self) -> None:
         assert explain_rule(")a", "") is None
+
+
+class TestOpcodeE:
+    """Tests for the e opcode: eX applies title case with separator X.
+
+    Semantics confirmed via hashcat binary survey:
+      - Lowercases the entire word first.
+      - Uppercases the first character.
+      - Uppercases any character immediately following the separator X.
+
+    Representative hashcat observations:
+      rule=e_ word=hello_world   -> Hello_World
+      rule=e_ word=two-words-here -> Two-words-here  (no _ in word)
+      rule=e- word=two-words-here -> Two-Words-Here
+      rule=e_ word=PASSWORD      -> Password
+      rule=e_ word=a_b_c         -> A_B_C
+      rule=e_ word=foo_BAR_baz   -> Foo_Bar_Baz
+      rule=e! word=hello_world   -> Hello_world  (no ! in word)
+    """
+
+    def _final(self, steps: list[str]) -> str:
+        last = steps[-1]
+        if "\u2192" in last:
+            return last.split("\u2192")[-1].strip()
+        return last
+
+    def test_e_underscore_separator(self) -> None:
+        """e_ titles hello_world -> Hello_World."""
+        result = explain_rule("e_", "hello_world")
+        assert result is not None
+        assert self._final(result) == "Hello_World"
+
+    def test_e_dash_separator(self) -> None:
+        """e- titles two-words-here -> Two-Words-Here."""
+        result = explain_rule("e-", "two-words-here")
+        assert result is not None
+        assert self._final(result) == "Two-Words-Here"
+
+    def test_e_no_separator_present(self) -> None:
+        """e_ on hello (no underscore): uppercases only first char -> Hello."""
+        result = explain_rule("e_", "hello")
+        assert result is not None
+        assert self._final(result) == "Hello"
+
+    def test_e_lowercases_first(self) -> None:
+        """e_ on PASSWORD lowercases all then uppercases first -> Password."""
+        result = explain_rule("e_", "PASSWORD")
+        assert result is not None
+        assert self._final(result) == "Password"
+
+    def test_e_mixed_case_with_separator(self) -> None:
+        """e_ on foo_BAR_baz -> Foo_Bar_Baz (lowercase all, then title by _)."""
+        result = explain_rule("e_", "foo_BAR_baz")
+        assert result is not None
+        assert self._final(result) == "Foo_Bar_Baz"
+
+    def test_e_single_char_segments(self) -> None:
+        """e_ on a_b_c -> A_B_C."""
+        result = explain_rule("e_", "a_b_c")
+        assert result is not None
+        assert self._final(result) == "A_B_C"
+
+    def test_e_empty_word(self) -> None:
+        """e_ on empty string -> empty string (not rejected)."""
+        result = explain_rule("e_", "")
+        assert result is not None
+        assert self._final(result) == ""
+
+    def test_e_separator_not_in_word(self) -> None:
+        """e! on hello_world (no ! in word) -> Hello_world."""
+        result = explain_rule("e!", "hello_world")
+        assert result is not None
+        assert self._final(result) == "Hello_world"
+
+    def test_e_produces_step_entry(self) -> None:
+        """e opcode must produce at least one step entry."""
+        result = explain_rule("e_", "test_word")
+        assert result is not None
+        assert len(result) >= 1
