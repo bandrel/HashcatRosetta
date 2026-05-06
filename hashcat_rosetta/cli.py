@@ -228,21 +228,37 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             i += 2
 
         elif char == "!" and i + 1 < len(rule_str):
-            # Reject if contains char X (rejection rule)
+            # Reject if contains char X
             reject_char = rule_str[i + 1]
-            steps.append(f"!{reject_char}: Reject if contains '{reject_char}' (filter rule)")
+            if reject_char in current:
+                return None
+            steps.append(f"!{reject_char}: Reject if contains '{reject_char}' (no match)")
             i += 2
 
         elif char == ">" and i + 1 < len(rule_str):
             # Reject if word length > N
             n_char = rule_str[i + 1]
-            steps.append(f">{n_char}: Reject if length > {n_char} (filter rule)")
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+            except ValueError:
+                i += 1
+                continue
+            if len(current) > n:
+                return None
+            steps.append(f">{n_char}: Length {len(current)} <= {n} (filter passed)")
             i += 2
 
         elif char == "<" and i + 1 < len(rule_str):
             # Reject if word length < N
             n_char = rule_str[i + 1]
-            steps.append(f"<{n_char}: Reject if length < {n_char} (filter rule)")
+            try:
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+            except ValueError:
+                i += 1
+                continue
+            if len(current) < n:
+                return None
+            steps.append(f"<{n_char}: Length {len(current)} >= {n} (filter passed)")
             i += 2
 
         elif char == "'" and i + 1 < len(rule_str):
@@ -314,9 +330,11 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 1
 
         elif char == "%" and i + 1 < len(rule_str):
-            # Reject if word does not contain char X at least N times
+            # Reject unless word contains char X
             check_char = rule_str[i + 1]
-            steps.append(f"%{check_char}: Reject unless contains '{check_char}' (filter rule)")
+            if check_char not in current:
+                return None
+            steps.append(f"%{check_char}: Contains '{check_char}' (filter passed)")
             i += 2
 
         elif char == "R" and i + 1 < len(rule_str):
@@ -431,18 +449,20 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 1
 
         elif char == "=" and i + 2 < len(rule_str):
-            # Reject unless character at position N is X (filter rule)
+            # Reject unless character at position N is X
             pos_char = rule_str[i + 1]
             check_char = rule_str[i + 2]
             try:
                 pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
-                steps.append(
-                    f"={pos_char}{check_char}: Reject unless char at pos {pos}"
-                    f" is '{check_char}' (filter rule)"
-                )
-                i += 3
-            except (ValueError, IndexError):
+            except ValueError:
                 i += 1
+                continue
+            if pos >= len(current) or current[pos] != check_char:
+                return None
+            steps.append(
+                f"={pos_char}{check_char}: Char at pos {pos} is '{check_char}' (filter passed)"
+            )
+            i += 3
 
         elif char == "B" and i + 2 < len(rule_str):
             # B is not a documented hashcat opcode; skip as no-op
