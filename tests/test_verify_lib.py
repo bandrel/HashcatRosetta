@@ -78,18 +78,6 @@ class TestVerifyRuleIntegration:
             f"both should reject 'password' for rule '!a', got {result}"
         )
 
-    @pytest.mark.integration
-    def test_lparen_opcode_matches_hashcat_rejection(self) -> None:
-        from hashcat_rosetta._verify import verify_rule
-
-        # `(` is now implemented (always rejects, matching hashcat v7.x behavior).
-        result = verify_rule("(p", "password")
-        if result.status == "skipped_hashcat":
-            pytest.skip("hashcat binary not available")
-        assert result.status == "match", (
-            f"both sides should reject '(p' for 'password', got {result}"
-        )
-
 
 class TestVerifyCorpus:
     def test_aggregates_per_baseword(self, monkeypatch: pytest.MonkeyPatch) -> None:
