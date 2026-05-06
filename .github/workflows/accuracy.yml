@@ -1,0 +1,71 @@
+name: accuracy
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * *"  # nightly 04:17 UTC
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install hashcat
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y hashcat
+          hashcat --version
+      - name: Build hashcat-utils generate-rules.bin
+        run: |
+          # Pin to a commit known to build cleanly.
+          git clone https://github.com/hashcat/hashcat-utils.git ~/hashcat-utils
+          cd ~/hashcat-utils
+          git checkout 5f4f35d94  # v1.9 release commit; bump if upstream needs it
+          make -C src generate-rules
+          ls ~/hashcat-utils/src/generate-rules.bin
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+      - name: Sync dependencies
+        run: uv sync
+      - name: Run accuracy smoke (200 rules x 24 basewords)
+        run: |
+          uv run python scripts/verify_rules.py --count 200 --seed 42 \
+            --basewords tests/data/basewords.json \
+            --report accuracy-smoke.json
+
+  nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install hashcat
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y hashcat
+          hashcat --version
+      - name: Build hashcat-utils generate-rules.bin
+        run: |
+          git clone https://github.com/hashcat/hashcat-utils.git ~/hashcat-utils
+          cd ~/hashcat-utils
+          git checkout 5f4f35d94  # v1.9 release commit; bump if upstream needs it
+          make -C src generate-rules
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+      - name: Sync dependencies
+        run: uv sync
+      - name: Run accuracy full (10000 rules x 24 basewords x 5 rounds)
+        run: |
+          uv run python scripts/verify_rules.py --count 10000 --rounds 5 \
+            --basewords tests/data/basewords.json \
+            --report accuracy-nightly.json
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-nightly-report
+          path: accuracy-nightly.json
