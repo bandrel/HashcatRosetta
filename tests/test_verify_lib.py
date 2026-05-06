@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from hashcat_rosetta._verify import (
+    VerifyResult,
     decide_rejection_status,
     load_baseword_corpus,
 )
@@ -85,3 +86,42 @@ class TestVerifyRuleIntegration:
         result = verify_rule("(p", "password")
         assert result.status == "skipped_unimpl"
         assert "(" in result.unimpl_opcodes
+
+
+class TestVerifyCorpus:
+    def test_aggregates_per_baseword(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from hashcat_rosetta import _verify as verify_mod
+
+        def fake(rule: str, baseword: str, implemented=None) -> VerifyResult:
+            # Match for "u", mismatch for "X1234" (any rule starting X), unimpl for "("
+            if rule.startswith("X"):
+                return VerifyResult(
+                    status="mismatch",
+                    rule=rule,
+                    baseword=baseword,
+                    ours="A",
+                    hashcat="B",
+                )
+            if rule.startswith("("):
+                return VerifyResult(
+                    status="skipped_unimpl",
+                    rule=rule,
+                    baseword=baseword,
+                    unimpl_opcodes=["("],
+                )
+            return VerifyResult(status="match", rule=rule, baseword=baseword)
+
+        monkeypatch.setattr(verify_mod, "verify_rule", fake)
+
+        report = verify_mod.verify_corpus(
+            rules=["u", "X1234", "(p"],
+            basewords=["alpha", "beta"],
+            workers=2,
+        )
+
+        assert len(report.rounds) == 2
+        assert report.total_tested == 4  # 2 basewords * (1 match + 1 mismatch)
+        assert report.total_matched == 2
+        assert report.total_mismatches == 2
+        for round_result in report.rounds:
+            assert round_result["skipped_unimplemented"] == 1
