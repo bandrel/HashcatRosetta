@@ -13,11 +13,13 @@ import json
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from hashcat_rosetta.cli import explain_rule
+from hashcat_rosetta.parser import RuleParser
 
 VerifyStatus = Literal["match", "mismatch", "skipped_unimpl", "skipped_hashcat", "skipped_nonascii"]
 
@@ -250,3 +252,93 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
         ours=our_final,
         hashcat=hashcat_out,
     )
+
+
+def verify_corpus(
+    rules: list[str],
+    basewords: list[str],
+    workers: int = 4,
+    implemented: set[str] | None = None,
+) -> CorpusReport:
+    """Run `rules × basewords` matrix; aggregate into a CorpusReport.
+
+    One round per baseword. Each round runs all rules in parallel and is
+    appended to `report.rounds` in a dict shape compatible with the existing
+    `scripts/verify_rules.py` JSON report format, so the CLI rendering code
+    can stay unchanged.
+    """
+    report = CorpusReport()
+    for baseword in basewords:
+        round_result = _run_round(rules, baseword, workers, implemented)
+        report.rounds.append(round_result)
+        report.total_tested += round_result["tested"]
+        report.total_matched += round_result["matched"]
+        report.total_mismatches += len(round_result["mismatches"])
+    return report
+
+
+def _run_round(
+    rules: list[str],
+    baseword: str,
+    workers: int,
+    implemented: set[str] | None,
+) -> dict[str, Any]:
+    parser = RuleParser()
+    counts: dict[str, Any] = {
+        "baseword": baseword,
+        "total_rules": len(rules),
+        "skipped_unimplemented": 0,
+        "skipped_invalid": 0,
+        "skipped_hashcat": 0,
+        "skipped_nonascii": 0,
+        "tested": 0,
+        "matched": 0,
+        "mismatches": [],
+        "skipped_rules": [],
+    }
+
+    def _one(idx_rule: tuple[int, str]) -> tuple[int, str, VerifyResult]:
+        idx, rule = idx_rule
+        return idx, rule, verify_rule(rule, baseword, implemented)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_one, item) for item in enumerate(rules)]
+        for future in as_completed(futures):
+            idx, rule, vr = future.result()
+            if vr.status == "skipped_unimpl":
+                counts["skipped_unimplemented"] += 1
+                counts["skipped_rules"].append(
+                    {
+                        "rule": rule,
+                        "index": idx,
+                        "unimplemented_opcodes": vr.unimpl_opcodes,
+                    }
+                )
+            elif vr.status == "skipped_hashcat":
+                counts["skipped_hashcat"] += 1
+            elif vr.status == "skipped_nonascii":
+                counts["skipped_nonascii"] += 1
+            elif vr.status == "match":
+                counts["tested"] += 1
+                counts["matched"] += 1
+            elif vr.status == "mismatch":
+                counts["tested"] += 1
+                parsed = parser.parse_rule(rule)
+                tokens = parsed["components"] if parsed else []
+                counts["mismatches"].append(
+                    {
+                        "rule": rule,
+                        "baseword": baseword,
+                        "index": idx,
+                        "ours": vr.ours,
+                        "hashcat": vr.hashcat,
+                        "components": [
+                            {
+                                "opcode": t[0] if t else "?",
+                                "description": t,
+                            }
+                            for t in tokens
+                        ],
+                    }
+                )
+    return counts
