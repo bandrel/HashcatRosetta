@@ -6,7 +6,7 @@ Usage:
 
 Requires:
     - hashcat binary in PATH
-    - generate-rules.bin at ~/hashcat-utils/src/generate-rules.bin
+    - generate-rules.bin at ~/hashcat-utils/bin/generate-rules.bin
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from hashcat_rosetta._verify import (
     verify_corpus,
 )
 
-GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
+GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "bin" / "generate-rules.bin"
 DEFAULT_CORPUS = Path(__file__).resolve().parent.parent / "tests" / "data" / "basewords.json"
 
 OPCODE_DESCRIPTIONS: dict[str, str] = {
