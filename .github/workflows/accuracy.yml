@@ -62,9 +62,15 @@ jobs:
         uses: astral-sh/setup-uv@v3
       - name: Sync dependencies
         run: uv sync
-      - name: Run accuracy full (10000 rules x 24 basewords x 5 rounds)
+      - name: Run accuracy full (500 rules x 24 basewords)
+        # Sized for the 60-minute timeout against POCL on ubuntu-latest:
+        # each hashcat invocation rebuilds the OpenCL kernel, so per-call
+        # cost is ~200ms after warmup. 500 rules x 24 basewords = 12000
+        # invocations, ~40 min on the runner. The original 10000x5x24 spec
+        # (1.2M invocations) would have needed ~6 days. If the runner gets
+        # faster or we batch into one hashcat call per baseword, scope back up.
         run: |
-          uv run python scripts/verify_rules.py --count 10000 --rounds 5 \
+          uv run python scripts/verify_rules.py --count 500 --rounds 1 \
             --basewords tests/data/basewords.json \
             --report accuracy-nightly.json
       - name: Upload report
