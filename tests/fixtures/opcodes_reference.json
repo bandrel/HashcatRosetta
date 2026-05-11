@@ -1,0 +1,534 @@
+{
+  "source": "hashcat source (OpenCL/inc_rp_common.h, src/rp_cpu.c) + hashcat wiki, corrected 2026-02-19",
+  "content_hash": "6328bb77bcfafdff9d36d5a51f72bf2edbfb52ed321f7f1cd4726d0d2bfe8590",
+  "opcodes": [
+    {
+      "char": ":",
+      "arity": 0,
+      "description": "No-op (do nothing)",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "c",
+      "arity": 0,
+      "description": "Capitalize first letter, lowercase rest",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "C",
+      "arity": 0,
+      "description": "Lowercase first letter, uppercase rest",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "u",
+      "arity": 0,
+      "description": "Uppercase all characters",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "l",
+      "arity": 0,
+      "description": "Lowercase all characters",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "d",
+      "arity": 0,
+      "description": "Duplicate entire word",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "r",
+      "arity": 0,
+      "description": "Reverse entire word",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "t",
+      "arity": 0,
+      "description": "Toggle case of all characters",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "f",
+      "arity": 0,
+      "description": "Reflect (duplicate word reversed)",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "k",
+      "arity": 0,
+      "description": "Swap first two characters",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "K",
+      "arity": 0,
+      "description": "Swap last two characters",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "q",
+      "arity": 0,
+      "description": "Duplicate every character",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "E",
+      "arity": 0,
+      "description": "Title case (uppercase first letter of each word)",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "[",
+      "arity": 0,
+      "description": "Delete first character",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "]",
+      "arity": 0,
+      "description": "Delete last character",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "{",
+      "arity": 0,
+      "description": "Rotate word left",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "}",
+      "arity": 0,
+      "description": "Rotate word right",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "M",
+      "arity": 0,
+      "description": "Memorize current word into memory buffer",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": "explain_rule sets memorized var but does not track full memory semantics"
+    },
+    {
+      "char": "S",
+      "arity": 0,
+      "description": "Keyboard shift transformation (US layout)",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "Requires cshift_lookup table from hashcat source"
+    },
+    {
+      "char": "h",
+      "arity": 0,
+      "description": "Convert word to lowercase hex encoding",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_MANGLE_TO_HEX_LOWER"
+    },
+    {
+      "char": "H",
+      "arity": 0,
+      "description": "Convert word to uppercase hex encoding",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_MANGLE_TO_HEX_UPPER"
+    },
+    {
+      "char": "4",
+      "arity": 0,
+      "description": "Append memory buffer to end of current word",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_MANGLE_APPEND_MEMORY; requires memory buffer"
+    },
+    {
+      "char": "6",
+      "arity": 0,
+      "description": "Prepend memory buffer to beginning of current word",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_MANGLE_PREPEND_MEMORY; requires memory buffer"
+    },
+    {
+      "char": "Q",
+      "arity": 0,
+      "description": "Reject if current word matches memorized word",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_REJECT_MEMORY; requires memory buffer"
+    },
+    {
+      "char": "m",
+      "arity": 0,
+      "description": "Append memory buffer (legacy; modern equivalent: 4)",
+      "implemented_in_explain_rule": false,
+      "status": "legacy_only",
+      "notes": "Legacy hashcat opcode; reassigned to 4 in modern hashcat"
+    },
+    {
+      "char": "w",
+      "arity": 0,
+      "description": "Duplicate first N chars — legacy alias for y",
+      "implemented_in_explain_rule": false,
+      "status": "legacy_only",
+      "notes": "Legacy opcode; modern equivalent is y (RULE_OP_MANGLE_DUPEBLOCK_FIRST)"
+    },
+    {
+      "char": "W",
+      "arity": 0,
+      "description": "Duplicate last N chars — legacy alias for Y",
+      "implemented_in_explain_rule": false,
+      "status": "legacy_only",
+      "notes": "Legacy opcode; modern equivalent is Y (RULE_OP_MANGLE_DUPEBLOCK_LAST)"
+    },
+    {
+      "char": "5",
+      "arity": 0,
+      "description": "Duplicate first char N times — legacy alias for z",
+      "implemented_in_explain_rule": false,
+      "status": "legacy_only",
+      "notes": "Legacy opcode; modern equivalent is z (RULE_OP_MANGLE_DUPECHAR_FIRST)"
+    },
+    {
+      "char": "7",
+      "arity": 0,
+      "description": "Duplicate last char N times — legacy alias for Z",
+      "implemented_in_explain_rule": false,
+      "status": "legacy_only",
+      "notes": "Legacy opcode; modern equivalent is Z (RULE_OP_MANGLE_DUPECHAR_LAST)"
+    },
+    {
+      "char": "9",
+      "arity": 0,
+      "description": "Duplicate every character in place — legacy alias for q",
+      "implemented_in_explain_rule": false,
+      "status": "legacy_only",
+      "notes": "Legacy opcode; modern equivalent is q (RULE_OP_MANGLE_DUPECHAR_ALL)"
+    },
+    {
+      "char": "a",
+      "arity": 0,
+      "description": "No-op stub (RULE_OP_MANGLE_TOGGLECASE_REC is unimplemented in hashcat itself)",
+      "implemented_in_explain_rule": false,
+      "status": "no_op_in_hashcat",
+      "notes": "Hashcat source has explicit break; stub. Parser incorrectly treats as 1-arg."
+    },
+    {
+      "char": "T",
+      "arity": 1,
+      "description": "Toggle case at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "D",
+      "arity": 1,
+      "description": "Delete character at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "p",
+      "arity": 1,
+      "description": "Append duplicated word N times",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "y",
+      "arity": 1,
+      "description": "Duplicate first N characters (prepend)",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "Y",
+      "arity": 1,
+      "description": "Duplicate last N characters (append)",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "z",
+      "arity": 1,
+      "description": "Duplicate first character N times",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "Z",
+      "arity": 1,
+      "description": "Duplicate last character N times",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "^",
+      "arity": 1,
+      "description": "Prepend character X",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "$",
+      "arity": 1,
+      "description": "Append character X",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "@",
+      "arity": 1,
+      "description": "Purge all instances of character X",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "!",
+      "arity": 1,
+      "description": "Reject if word contains character X",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": "Reject opcode — returns sentinel"
+    },
+    {
+      "char": ">",
+      "arity": 1,
+      "description": "Reject if word length is greater than N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": "Reject opcode — returns sentinel"
+    },
+    {
+      "char": "<",
+      "arity": 1,
+      "description": "Reject if word length is less than N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": "Reject opcode — returns sentinel"
+    },
+    {
+      "char": "'",
+      "arity": 1,
+      "description": "Truncate word at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "+",
+      "arity": 1,
+      "description": "Increment ASCII value of character at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "-",
+      "arity": 1,
+      "description": "Decrement ASCII value of character at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": ".",
+      "arity": 1,
+      "description": "Replace character at position N with character at N+1",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": ",",
+      "arity": 1,
+      "description": "Replace character at position N with character at N-1",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "%",
+      "arity": 1,
+      "description": "Reject unless word contains character X (simplified 1-arg form)",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": "Actual hashcat opcode is 2-arg (%NX); explain_rule uses simplified 1-arg form"
+    },
+    {
+      "char": "L",
+      "arity": 1,
+      "description": "Bitwise shift left character at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "R",
+      "arity": 1,
+      "description": "Bitwise shift right character at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "(",
+      "arity": 1,
+      "description": "Reject if first character is not X",
+      "implemented_in_explain_rule": false,
+      "status": "implemented",
+      "notes": "Reject opcode; recognized by parser but explain_rule silently skips"
+    },
+    {
+      "char": ")",
+      "arity": 1,
+      "description": "Reject if last character is not X",
+      "implemented_in_explain_rule": false,
+      "status": "implemented",
+      "notes": "Reject opcode; recognized by parser but explain_rule silently skips"
+    },
+    {
+      "char": "e",
+      "arity": 1,
+      "description": "Title case using character X as separator",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_MANGLE_TITLE_SEP"
+    },
+    {
+      "char": "3",
+      "arity": 2,
+      "description": "Toggle case of character after Nth occurrence of separator X",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_MANGLE_TOGGLE_AT_SEP; parser.py incorrectly treats as 0-arg"
+    },
+    {
+      "char": "s",
+      "arity": 2,
+      "description": "Replace all instances of character X with character Y",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "o",
+      "arity": 2,
+      "description": "Overwrite character at position N with character X",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "i",
+      "arity": 2,
+      "description": "Insert character Y at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "x",
+      "arity": 2,
+      "description": "Extract M characters starting at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "O",
+      "arity": 2,
+      "description": "Omit M characters starting at position N",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "*",
+      "arity": 2,
+      "description": "Swap characters at positions X and Y",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": ""
+    },
+    {
+      "char": "=",
+      "arity": 2,
+      "description": "Reject unless character at position N is X",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": "Reject opcode — returns sentinel"
+    },
+    {
+      "char": "B",
+      "arity": 2,
+      "description": "Byte-wise add value to character at position (RULE_OP_MANGLE_CHR_ADD)",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "Documented as RULE_OP_MANGLE_CHR_ADD. Not yet simulated in explain_rule()."
+    },
+    {
+      "char": "v",
+      "arity": 2,
+      "description": "Insert character X every N characters",
+      "implemented_in_explain_rule": false,
+      "status": "unimplemented",
+      "notes": "RULE_OP_MANGLE_INSERT_EVERY; vNX inserts char X every N characters"
+    },
+    {
+      "char": "X",
+      "arity": 3,
+      "description": "Extract M chars from memory at pos N, insert into current at pos I",
+      "implemented_in_explain_rule": true,
+      "status": "implemented",
+      "notes": "parser.py incorrectly treats as 2-arg (in two_arg_ops); should be 3-arg"
+    }
+  ]
+}
