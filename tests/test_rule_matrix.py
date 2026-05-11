@@ -798,7 +798,14 @@ class TestGenerateRulesIntegration:
 
     @pytest.mark.integration
     def test_hashcat_vs_explain(self, generated_rules, generated_rules_file):
-        """Compare explain_rule output against actual hashcat --stdout where possible."""
+        """Compare explain_rule output against actual hashcat --stdout where possible.
+
+        Delegates to the centralized harness (_verify.verify_rule) so it picks
+        up the skip-classes (M/X, unknown opcodes, truncated opcodes, empty
+        baseword, empty result) and parallelism-safe hashcat invocation.
+        """
+        from hashcat_rosetta._verify import _DEFAULT_IMPLEMENTED, verify_rule
+
         try:
             subprocess.run(
                 ["hashcat", "--version"], capture_output=True, timeout=5
@@ -808,34 +815,17 @@ class TestGenerateRulesIntegration:
 
         baseword = "password"
 
-        # Pre-compute explain_rule results and filter to testable rules
-        testable_rules = []
-        for rule in generated_rules:
-            explanation = explain_rule(rule)
-            if explanation is None or len(explanation) == 0:
-                continue
-            testable_rules.append((rule, explanation))
+        def _check_rule(rule: str):
+            result = verify_rule(rule, baseword, _DEFAULT_IMPLEMENTED)
+            if result.status == "mismatch":
+                return f"Rule {rule!r}: ours={result.ours!r}, hashcat={result.hashcat!r}"
+            return None if result.status != "match" else ""
 
-        # Run hashcat per-rule in parallel. Some rules silently reject the
-        # candidate (producing no output), so batch mode can't give us 1:1
-        # line correspondence. ThreadPoolExecutor keeps wall-clock reasonable.
-        def _check_rule(item):
-            rule, explanation = item
-            hashcat_result = get_hashcat_output(rule, baseword)
-            if hashcat_result is None:
-                return None  # hashcat rejected or errored
-            if not hashcat_result.isascii():
-                return None  # non-ASCII from +/- byte shifts
-            our_result = explanation[-1].split("\u2192")[-1].strip()
-            if our_result != hashcat_result:
-                return f"Rule {rule!r}: ours={our_result!r}, hashcat={hashcat_result!r}"
-            return ""  # tested, matched
-
-        mismatches = []
+        mismatches: list[str] = []
         tested = 0
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            futures = {pool.submit(_check_rule, item): item for item in testable_rules}
+            futures = {pool.submit(_check_rule, r): r for r in generated_rules}
             for future in as_completed(futures):
                 result = future.result()
                 if result is None:
