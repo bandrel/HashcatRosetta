@@ -219,9 +219,24 @@ def _hashcat_output(rule: str, baseword: str) -> tuple[str | None, bool]:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".rule", delete=False) as f:
             f.write(rule)
             tmp = f.name
+        # hashcat 6.2.x refuses to start when another instance holds the
+        # default session lock — fatal under ThreadPoolExecutor parallelism.
+        # Pass a unique --session per call so each worker gets its own
+        # session/restore-file namespace.
+        session = f"rosetta-{os.getpid()}-{os.path.basename(tmp)}"
         try:
             result = subprocess.run(
-                ["hashcat", "-a0", "-r", tmp, "--stdout", "-d1"],
+                [
+                    "hashcat",
+                    "-a0",
+                    "-r",
+                    tmp,
+                    "--stdout",
+                    "-d1",
+                    "--session",
+                    session,
+                    "--potfile-disable",
+                ],
                 input=baseword.encode(),
                 capture_output=True,
                 timeout=5,
