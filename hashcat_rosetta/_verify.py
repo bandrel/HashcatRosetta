@@ -236,10 +236,11 @@ def _hashcat_output(rule: str, baseword: str) -> tuple[str | None, bool]:
                     "--session",
                     session,
                     "--potfile-disable",
+                    "--restore-disable",
                 ],
                 input=baseword.encode(),
                 capture_output=True,
-                timeout=5,
+                timeout=10,
             )
         finally:
             if os.path.exists(tmp):
