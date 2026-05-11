@@ -451,6 +451,15 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
     )
 
 
+def _prewarm_hashcat() -> None:
+    """Force POCL/OpenCL kernel build on a single serial hashcat call so the
+    parallel pool doesn't race during cold-start. Without this, the first
+    16+ workers each trigger an independent kernel compile, some timing out
+    and getting classified as skipped_hashcat (or worse, exit-255 ->
+    spurious mismatch). One blocking call here populates the kernel cache."""
+    _hashcat_output(":", "warmup")
+
+
 def verify_corpus(
     rules: list[str],
     basewords: list[str],
@@ -464,6 +473,7 @@ def verify_corpus(
     `scripts/verify_rules.py` JSON report format, so the CLI rendering code
     can stay unchanged.
     """
+    _prewarm_hashcat()
     report = CorpusReport()
     for baseword in basewords:
         round_result = _run_round(rules, baseword, workers, implemented)
