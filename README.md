@@ -338,6 +338,22 @@ Edit `pyproject.toml` to customize:
 
 ## Version History
 
+### v0.3.0
+- Implement `a` (append memorized), `e` (title-case w/ separator), `v` (toggle every N chars), `(`/`)` (first/last char filters)
+- Refresh opcode descriptions to match hashcat source
+- Add private `_verify` harness library and `verify_rule` / `verify_corpus` API
+- Add baseword corpus + accuracy smoke parametrized across it
+- CI: add per-PR accuracy smoke + nightly full verification
+- CI fixes:
+  - Bump hashcat-utils pin to post-v1.9 (Makefile now builds `bin/*.bin`)
+  - Strip trailing whitespace from generated rules (hashcat-utils format change)
+  - Skip rules using opcodes hashcat `--stdout` can't oracle (M, X, JtR-only opcodes, truncated opcodes, OOB positions)
+  - Preserve baseword whitespace through verification (`_extract_final` no longer `.strip()`s)
+  - Treat empty result / empty baseword as parity rejections
+  - Per-call `--session` to avoid hashcat 6.2.x single-instance lock under thread parallelism
+  - Prewarm POCL kernel cache before parallel pool
+  - Scope nightly to fit POCL runtime budget on `ubuntu-latest`
+
 ### v0.2.0
 - Apply QA review fixes across parser and analyzer
 - Add comprehensive test suite (rule matrix, edge cases, CLI, fixes)
