@@ -192,6 +192,84 @@ class TestEmptyFinalRejectionParity:
         assert result.status == "match", f"got {result}"
 
 
+class TestOOBPositionSkip:
+    """Hashcat rejects rules where a positional arg exceeds the word length
+    at that step. Our parser silently no-ops, producing spurious mismatches.
+    The harness should skip these rules per-baseword."""
+
+    def test_swap_with_oob_position_is_skipped(self) -> None:
+        from hashcat_rosetta._verify import verify_rule
+
+        # *B2 = swap pos 11 with pos 2; cat is only 3 chars, pos 11 OOB.
+        result = verify_rule("*B2 p2", "cat")
+        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+
+    def test_toggle_with_oob_position_is_skipped(self) -> None:
+        from hashcat_rosetta._verify import verify_rule
+
+        # T9 = toggle pos 9 on 'cat' (3 chars) — OOB.
+        result = verify_rule("T9", "cat")
+        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+
+    def test_insert_with_oob_position_is_skipped(self) -> None:
+        from hashcat_rosetta._verify import verify_rule
+
+        # i9X = insert 'X' at pos 9 on 'cat' — OOB.
+        result = verify_rule("i9X", "cat")
+        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+
+    def test_length_doubling_op_makes_later_position_valid(self) -> None:
+        """Length simulation: 'd' doubles 'cat' to 6 chars, so pos 5 is now in
+        range. Should NOT be skipped."""
+        from hashcat_rosetta._verify import _has_oob_position
+
+        # *25 on 'cat' alone: pos 5 >= 3 → OOB
+        assert _has_oob_position("*25", "cat") is True
+        # d then *25: after d, len=6, pos 5 < 6 → in bounds
+        assert _has_oob_position("d *25", "cat") is False
+
+    def test_truncate_makes_later_position_oob(self) -> None:
+        """Length simulation: ''3' truncates to 3 chars; subsequent pos 5 is
+        then OOB even if it would have been in range originally."""
+        from hashcat_rosetta._verify import _has_oob_position
+
+        # On 'password' (8 chars), pos 5 is in bounds alone.
+        assert _has_oob_position("T5", "password") is False
+        # After '3 truncates to 3 chars, pos 5 is OOB.
+        assert _has_oob_position("'3 T5", "password") is True
+
+    def test_in_bounds_position_is_not_skipped(self) -> None:
+        from hashcat_rosetta._verify import _has_oob_position
+
+        assert _has_oob_position("T0", "cat") is False
+        assert _has_oob_position("T2", "cat") is False  # last valid pos
+        assert _has_oob_position("*01", "cat") is False
+        assert _has_oob_position("u $a", "cat") is False
+
+
+class TestHexValueHelper:
+    def test_digit(self) -> None:
+        from hashcat_rosetta._verify import _hex_value
+
+        assert _hex_value("0") == 0
+        assert _hex_value("9") == 9
+
+    def test_uppercase_letter(self) -> None:
+        from hashcat_rosetta._verify import _hex_value
+
+        assert _hex_value("A") == 10
+        assert _hex_value("B") == 11
+        assert _hex_value("Z") == 35
+
+    def test_non_position_char_returns_none(self) -> None:
+        from hashcat_rosetta._verify import _hex_value
+
+        assert _hex_value("a") is None  # lowercase
+        assert _hex_value("$") is None
+        assert _hex_value("") is None
+        assert _hex_value("AB") is None
+
+
 class TestEmptyBasewordSkip:
     """Empty basewords are not hashcat candidates; the harness must skip them
     before issuing any hashcat call so the result doesn't depend on whether

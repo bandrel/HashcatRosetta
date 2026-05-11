@@ -168,6 +168,106 @@ def _extract_opcodes(rule_str: str) -> list[str]:
     return opcodes
 
 
+# Opcodes whose first argument is a 0-indexed position into the current word.
+# Hashcat rejects the entire rule when the position exceeds the word length;
+# our parser silently no-ops most of them. Detecting OOB here keeps us in
+# sync with hashcat's stricter validation.
+_POS_1ARG_FIRST: set[str] = set("TD'+-.,RL")
+_POS_2ARG_FIRST: set[str] = set("io=*xOvB")
+# Opcodes whose second argument is ALSO a position (in addition to the first).
+_POS_2ARG_SECOND: set[str] = set("*")
+
+
+def _hex_value(c: str) -> int | None:
+    """Hashcat positional encoding: '0'-'9' -> 0-9, 'A'-'Z' -> 10-35."""
+    if len(c) != 1:
+        return None
+    if c.isdigit():
+        return int(c)
+    if "A" <= c <= "Z":
+        return ord(c) - ord("A") + 10
+    return None
+
+
+def _has_oob_position(rule_str: str, baseword: str) -> bool:
+    """True if any positional opcode references a position past the current
+    word length at that step. Tracks word length through the rule so a prior
+    length-doubling op (d, f, q, p) opens room for later positions."""
+    cur_len = len(baseword)
+    i = 0
+    n = len(rule_str)
+    while i < n:
+        c = rule_str[i]
+        if c == " ":
+            i += 1
+            continue
+        if c in _THREE_ARG_OPCODES:
+            arity = 3
+        elif c in _TWO_ARG_OPCODES:
+            arity = 2
+        elif c in _ONE_ARG_OPCODES:
+            arity = 1
+        else:
+            arity = 0
+        if i + arity >= n:
+            # Truncated rule — handled by _has_truncated_opcode; bail.
+            return False
+        args = rule_str[i + 1 : i + 1 + arity]
+
+        if c in _POS_1ARG_FIRST and arity >= 1:
+            pos = _hex_value(args[0])
+            if pos is not None and pos >= cur_len:
+                return True
+        if c in _POS_2ARG_FIRST and arity >= 2:
+            pos = _hex_value(args[0])
+            if pos is not None and pos >= cur_len:
+                return True
+        if c in _POS_2ARG_SECOND and arity >= 2:
+            pos2 = _hex_value(args[1])
+            if pos2 is not None and pos2 >= cur_len:
+                return True
+
+        # Update simulated length for the next iteration.
+        if c in "dfq":
+            cur_len *= 2
+        elif c in "[]":
+            cur_len = max(0, cur_len - 1)
+        elif c in "$^":
+            cur_len += 1
+        elif c == "i":
+            cur_len += 1
+        elif c == "p" and arity >= 1:
+            count = _hex_value(args[0])
+            if count is not None:
+                cur_len *= count + 1
+        elif c in "yY" and arity >= 1:
+            n_val = _hex_value(args[0])
+            if n_val is not None:
+                cur_len += min(n_val, cur_len)
+        elif c in "zZ" and arity >= 1:
+            n_val = _hex_value(args[0])
+            if n_val is not None:
+                cur_len += n_val
+        elif c == "'" and arity >= 1:
+            n_val = _hex_value(args[0])
+            if n_val is not None:
+                cur_len = min(cur_len, n_val)
+        elif c == "x" and arity >= 2:
+            len_arg = _hex_value(args[1])
+            if len_arg is not None:
+                cur_len = len_arg
+        elif c == "O" and arity >= 2:
+            len_arg = _hex_value(args[1])
+            if len_arg is not None:
+                cur_len = max(0, cur_len - len_arg)
+        # Length-neutral opcodes (s, o, =, *, v, B, T, D, +, -, ., ,, R, L,
+        # !, %, <, >, c, u, l, t, r, {, }, k, K, C, E, :, M, e, (, )) fall
+        # through without adjusting cur_len.
+
+        i += 1 + arity
+    return False
+
+
 def _has_truncated_opcode(rule_str: str) -> bool:
     """True if the rule contains an opcode with missing argument bytes.
 
@@ -300,7 +400,7 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
         op in _HASHCAT_STDOUT_UNSUPPORTED or op not in _ALL_KNOWN_OPCODES
         for op in extracted_opcodes
     )
-    if unsupported or _has_truncated_opcode(rule):
+    if unsupported or _has_truncated_opcode(rule) or _has_oob_position(rule, baseword):
         return VerifyResult(
             status="skipped_hashcat_unsupported",
             rule=rule,
