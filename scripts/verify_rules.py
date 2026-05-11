@@ -117,6 +117,7 @@ def print_round_summary(round_result: dict) -> None:
     print(f"  Total rules:          {round_result['total_rules']}")
     print(f"  Skipped (unimpl):     {round_result['skipped_unimplemented']}")
     print(f"  Skipped (hashcat):    {round_result['skipped_hashcat']}")
+    print(f"  Skipped (hc-unsup):   {round_result.get('skipped_hashcat_unsupported', 0)}")
     print(f"  Skipped (non-ASCII):  {round_result['skipped_nonascii']}")
     print(f"  Tested:               {round_result['tested']}")
     print(f"  Matched:              {round_result['matched']}")
