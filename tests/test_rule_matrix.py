@@ -738,7 +738,7 @@ def generated_rules():
     )
     assert result.returncode == 0, f"generate-rules.bin failed: {result.stderr.decode()}"
 
-    rules = [line for line in result.stdout.decode().splitlines() if line.strip()]
+    rules = [stripped for line in result.stdout.decode().splitlines() if (stripped := line.strip())]
     assert len(rules) > 0, "generate-rules.bin produced no output"
     return rules
 

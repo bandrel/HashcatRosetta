@@ -40,7 +40,7 @@ def smoke_rules() -> list[str]:
         timeout=60,
     )
     assert result.returncode == 0, result.stderr.decode()
-    return [line for line in result.stdout.decode().splitlines() if line.strip()]
+    return [stripped for line in result.stdout.decode().splitlines() if (stripped := line.strip())]
 
 
 @pytest.fixture(scope="module")

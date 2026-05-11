@@ -108,7 +108,7 @@ def generate_rules(count: int, seed: int) -> list[str]:
     if result.returncode != 0:
         print(f"ERROR: generate-rules.bin failed: {result.stderr.decode()}", file=sys.stderr)
         sys.exit(2)
-    return [line for line in result.stdout.decode().splitlines() if line.strip()]
+    return [stripped for line in result.stdout.decode().splitlines() if (stripped := line.strip())]
 
 
 def print_round_summary(round_result: dict) -> None:
