@@ -21,7 +21,14 @@ from typing import Any, Literal
 from hashcat_rosetta.cli import explain_rule
 from hashcat_rosetta.parser import RuleParser
 
-VerifyStatus = Literal["match", "mismatch", "skipped_unimpl", "skipped_hashcat", "skipped_nonascii"]
+VerifyStatus = Literal[
+    "match",
+    "mismatch",
+    "skipped_unimpl",
+    "skipped_hashcat",
+    "skipped_hashcat_unsupported",
+    "skipped_nonascii",
+]
 
 
 @dataclass
@@ -74,6 +81,13 @@ _TWO_ARG_OPCODES: set[str] = set("soix*=vOB")
 _ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,%LR()e")
 _ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMa")
 _ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | _ZERO_ARG_OPCODES
+
+# Opcodes that hashcat's --stdout pipeline refuses to compile (rule rejected
+# with exit 255 "No valid rules left"). Verified empirically against 6.2.6 and
+# 7.1.2; M (memorize) and X (extract from memory) are CPU-only rule operations
+# not implemented in the OpenCL/Metal kernels. Rules using them are skipped by
+# the harness because hashcat cannot serve as an oracle for them.
+_HASHCAT_STDOUT_UNSUPPORTED: set[str] = set("MX")
 
 # Default implemented-opcodes set for the harness. Mirrors
 # scripts/verify_rules.py:IMPLEMENTED_OPCODES; the script wraps this module
@@ -154,6 +168,135 @@ def _extract_opcodes(rule_str: str) -> list[str]:
     return opcodes
 
 
+# Opcodes whose first argument is a 0-indexed position into the current word.
+# Hashcat rejects the entire rule when the position exceeds the word length;
+# our parser silently no-ops most of them. Detecting OOB here keeps us in
+# sync with hashcat's stricter validation.
+_POS_1ARG_FIRST: set[str] = set("TD'+-.,RL")
+_POS_2ARG_FIRST: set[str] = set("io=*xOvB")
+# Opcodes whose second argument is ALSO a position (in addition to the first).
+_POS_2ARG_SECOND: set[str] = set("*")
+
+
+def _hex_value(c: str) -> int | None:
+    """Hashcat positional encoding: '0'-'9' -> 0-9, 'A'-'Z' -> 10-35."""
+    if len(c) != 1:
+        return None
+    if c.isdigit():
+        return int(c)
+    if "A" <= c <= "Z":
+        return ord(c) - ord("A") + 10
+    return None
+
+
+def _has_oob_position(rule_str: str, baseword: str) -> bool:
+    """True if any positional opcode references a position past the current
+    word length at that step. Tracks word length through the rule so a prior
+    length-doubling op (d, f, q, p) opens room for later positions."""
+    cur_len = len(baseword)
+    i = 0
+    n = len(rule_str)
+    while i < n:
+        c = rule_str[i]
+        if c == " ":
+            i += 1
+            continue
+        if c in _THREE_ARG_OPCODES:
+            arity = 3
+        elif c in _TWO_ARG_OPCODES:
+            arity = 2
+        elif c in _ONE_ARG_OPCODES:
+            arity = 1
+        else:
+            arity = 0
+        if i + arity >= n:
+            # Truncated rule — handled by _has_truncated_opcode; bail.
+            return False
+        args = rule_str[i + 1 : i + 1 + arity]
+
+        if c in _POS_1ARG_FIRST and arity >= 1:
+            pos = _hex_value(args[0])
+            if pos is not None and pos >= cur_len:
+                return True
+        if c in _POS_2ARG_FIRST and arity >= 2:
+            pos = _hex_value(args[0])
+            if pos is not None and pos >= cur_len:
+                return True
+        if c in _POS_2ARG_SECOND and arity >= 2:
+            pos2 = _hex_value(args[1])
+            if pos2 is not None and pos2 >= cur_len:
+                return True
+
+        # Update simulated length for the next iteration.
+        if c in "dfq":
+            cur_len *= 2
+        elif c in "[]":
+            cur_len = max(0, cur_len - 1)
+        elif c in "$^":
+            cur_len += 1
+        elif c == "i":
+            cur_len += 1
+        elif c == "p" and arity >= 1:
+            count = _hex_value(args[0])
+            if count is not None:
+                cur_len *= count + 1
+        elif c in "yY" and arity >= 1:
+            n_val = _hex_value(args[0])
+            if n_val is not None:
+                cur_len += min(n_val, cur_len)
+        elif c in "zZ" and arity >= 1:
+            n_val = _hex_value(args[0])
+            if n_val is not None:
+                cur_len += n_val
+        elif c == "'" and arity >= 1:
+            n_val = _hex_value(args[0])
+            if n_val is not None:
+                cur_len = min(cur_len, n_val)
+        elif c == "x" and arity >= 2:
+            len_arg = _hex_value(args[1])
+            if len_arg is not None:
+                cur_len = len_arg
+        elif c == "O" and arity >= 2:
+            len_arg = _hex_value(args[1])
+            if len_arg is not None:
+                cur_len = max(0, cur_len - len_arg)
+        # Length-neutral opcodes (s, o, =, *, v, B, T, D, +, -, ., ,, R, L,
+        # !, %, <, >, c, u, l, t, r, {, }, k, K, C, E, :, M, e, (, )) fall
+        # through without adjusting cur_len.
+
+        i += 1 + arity
+    return False
+
+
+def _has_truncated_opcode(rule_str: str) -> bool:
+    """True if the rule contains an opcode with missing argument bytes.
+
+    Our RuleParser silently drops such tokens; hashcat rejects the whole rule.
+    Detecting this lets the harness skip rather than report a spurious mismatch.
+    """
+    i = 0
+    n = len(rule_str)
+    while i < n:
+        char = rule_str[i]
+        if char == " ":
+            i += 1
+            continue
+        if char in _THREE_ARG_OPCODES:
+            args_needed = 3
+        elif char in _TWO_ARG_OPCODES:
+            args_needed = 2
+        elif char in _ONE_ARG_OPCODES:
+            args_needed = 1
+        else:
+            i += 1
+            continue
+        for k in range(1, args_needed + 1):
+            if i + k >= n or rule_str[i + k] == " ":
+                return True
+        i += args_needed + 1
+    return False
+
+
 def _unimplemented_opcodes(rule_str: str, implemented: set[str]) -> list[str]:
     return sorted(
         {
@@ -176,12 +319,32 @@ def _hashcat_output(rule: str, baseword: str) -> tuple[str | None, bool]:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".rule", delete=False) as f:
             f.write(rule)
             tmp = f.name
+        # hashcat 6.2.x refuses to start when another instance holds the
+        # default session lock — fatal under ThreadPoolExecutor parallelism.
+        # Pass a unique --session per call so each worker gets its own
+        # session/restore-file namespace.
+        session = f"rosetta-{os.getpid()}-{os.path.basename(tmp)}"
         try:
             result = subprocess.run(
-                ["hashcat", "-a0", "-r", tmp, "--stdout", "-d1"],
+                [
+                    "hashcat",
+                    "-a0",
+                    "-r",
+                    tmp,
+                    "--stdout",
+                    "-d1",
+                    "--session",
+                    session,
+                    "--potfile-disable",
+                    "--restore-disable",
+                ],
                 input=baseword.encode(),
                 capture_output=True,
-                timeout=5,
+                # POCL on Ubuntu rebuilds the OpenCL kernel on every
+                # hashcat invocation; under ThreadPoolExecutor contention
+                # the first calls per worker can take >10s. 30s leaves
+                # headroom without making genuine failures slow to detect.
+                timeout=30,
             )
         finally:
             if os.path.exists(tmp):
@@ -195,7 +358,7 @@ def _hashcat_output(rule: str, baseword: str) -> tuple[str | None, bool]:
         return "", False
     if result.returncode != 0:
         return None, True
-    out = result.stdout.decode().rstrip("\n")
+    out = result.stdout.decode(errors="replace").rstrip("\n")
     return out, False
 
 
@@ -203,14 +366,29 @@ def _extract_final(explanation: list[str] | None) -> str:
     if not explanation:
         return ""
     last = explanation[-1]
-    if "\u2192" in last:
-        return last.split("\u2192")[-1].strip()
+    # explain_rule formats each step as "<op>: <desc> → <prev> → <current>".
+    # rsplit on the exact " → " separator (with surrounding spaces) extracts
+    # <current> verbatim, including any leading/trailing whitespace that's
+    # part of the candidate itself. .strip() here used to mask whitespace
+    # bugs by silently trimming the baseword's own padding.
+    if " \u2192 " in last:
+        return last.rsplit(" \u2192 ", 1)[-1]
     return last
 
 
 def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -> VerifyResult:
     """Diff `explain_rule(rule, baseword)` against hashcat. Single check."""
     implemented = implemented if implemented is not None else _DEFAULT_IMPLEMENTED
+
+    # An empty baseword isn't a candidate hashcat will process — it gets
+    # filtered before rule application — so the harness can't use hashcat as
+    # an oracle for it regardless of what rule produces.
+    if baseword == "":
+        return VerifyResult(
+            status="skipped_hashcat_unsupported",
+            rule=rule,
+            baseword=baseword,
+        )
 
     unimpl = _unimplemented_opcodes(rule, implemented)
     if unimpl:
@@ -221,8 +399,24 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
             unimpl_opcodes=unimpl,
         )
 
+    extracted_opcodes = _extract_opcodes(rule)
+    unsupported = any(
+        op in _HASHCAT_STDOUT_UNSUPPORTED or op not in _ALL_KNOWN_OPCODES
+        for op in extracted_opcodes
+    )
+    if unsupported or _has_truncated_opcode(rule) or _has_oob_position(rule, baseword):
+        return VerifyResult(
+            status="skipped_hashcat_unsupported",
+            rule=rule,
+            baseword=baseword,
+        )
+
     explanation = explain_rule(rule, baseword)
-    ours_rejected = explanation is None or len(explanation) == 0
+    our_final = _extract_final(explanation)
+    # An empty result is functionally a rejection: hashcat's --stdout pipeline
+    # filters empty candidates and exits 255, so treat our empty output as a
+    # rejection to keep parity with hashcat's filtering semantics.
+    ours_rejected = explanation is None or len(explanation) == 0 or our_final == ""
 
     hashcat_out, hashcat_failed = _hashcat_output(rule, baseword)
     if hashcat_failed:
@@ -238,7 +432,7 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
             status="mismatch",
             rule=rule,
             baseword=baseword,
-            ours=None if ours_rejected else _extract_final(explanation),
+            ours=None if ours_rejected else our_final,
             hashcat=None if hashcat_rejected else hashcat_out,
         )
 
@@ -246,7 +440,6 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
     if hashcat_out is not None and not hashcat_out.isascii():
         return VerifyResult(status="skipped_nonascii", rule=rule, baseword=baseword)
 
-    our_final = _extract_final(explanation)
     if our_final == hashcat_out:
         return VerifyResult(status="match", rule=rule, baseword=baseword)
     return VerifyResult(
@@ -256,6 +449,15 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
         ours=our_final,
         hashcat=hashcat_out,
     )
+
+
+def _prewarm_hashcat() -> None:
+    """Force POCL/OpenCL kernel build on a single serial hashcat call so the
+    parallel pool doesn't race during cold-start. Without this, the first
+    16+ workers each trigger an independent kernel compile, some timing out
+    and getting classified as skipped_hashcat (or worse, exit-255 ->
+    spurious mismatch). One blocking call here populates the kernel cache."""
+    _hashcat_output(":", "warmup")
 
 
 def verify_corpus(
@@ -271,6 +473,7 @@ def verify_corpus(
     `scripts/verify_rules.py` JSON report format, so the CLI rendering code
     can stay unchanged.
     """
+    _prewarm_hashcat()
     report = CorpusReport()
     for baseword in basewords:
         round_result = _run_round(rules, baseword, workers, implemented)
@@ -294,6 +497,7 @@ def _run_round(
         "skipped_unimplemented": 0,
         "skipped_invalid": 0,
         "skipped_hashcat": 0,
+        "skipped_hashcat_unsupported": 0,
         "skipped_nonascii": 0,
         "tested": 0,
         "matched": 0,
@@ -320,6 +524,8 @@ def _run_round(
                 )
             elif vr.status == "skipped_hashcat":
                 counts["skipped_hashcat"] += 1
+            elif vr.status == "skipped_hashcat_unsupported":
+                counts["skipped_hashcat_unsupported"] += 1
             elif vr.status == "skipped_nonascii":
                 counts["skipped_nonascii"] += 1
             elif vr.status == "match":

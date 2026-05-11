@@ -6,7 +6,7 @@ Usage:
 
 Requires:
     - hashcat binary in PATH
-    - generate-rules.bin at ~/hashcat-utils/src/generate-rules.bin
+    - generate-rules.bin at ~/hashcat-utils/bin/generate-rules.bin
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from hashcat_rosetta._verify import (
     verify_corpus,
 )
 
-GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
+GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "bin" / "generate-rules.bin"
 DEFAULT_CORPUS = Path(__file__).resolve().parent.parent / "tests" / "data" / "basewords.json"
 
 OPCODE_DESCRIPTIONS: dict[str, str] = {
@@ -108,7 +108,7 @@ def generate_rules(count: int, seed: int) -> list[str]:
     if result.returncode != 0:
         print(f"ERROR: generate-rules.bin failed: {result.stderr.decode()}", file=sys.stderr)
         sys.exit(2)
-    return [line for line in result.stdout.decode().splitlines() if line.strip()]
+    return [stripped for line in result.stdout.decode().splitlines() if (stripped := line.strip())]
 
 
 def print_round_summary(round_result: dict) -> None:
@@ -117,6 +117,7 @@ def print_round_summary(round_result: dict) -> None:
     print(f"  Total rules:          {round_result['total_rules']}")
     print(f"  Skipped (unimpl):     {round_result['skipped_unimplemented']}")
     print(f"  Skipped (hashcat):    {round_result['skipped_hashcat']}")
+    print(f"  Skipped (hc-unsup):   {round_result.get('skipped_hashcat_unsupported', 0)}")
     print(f"  Skipped (non-ASCII):  {round_result['skipped_nonascii']}")
     print(f"  Tested:               {round_result['tested']}")
     print(f"  Matched:              {round_result['matched']}")
