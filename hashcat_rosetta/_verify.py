@@ -340,7 +340,11 @@ def _hashcat_output(rule: str, baseword: str) -> tuple[str | None, bool]:
                 ],
                 input=baseword.encode(),
                 capture_output=True,
-                timeout=10,
+                # POCL on Ubuntu rebuilds the OpenCL kernel on every
+                # hashcat invocation; under ThreadPoolExecutor contention
+                # the first calls per worker can take >10s. 30s leaves
+                # headroom without making genuine failures slow to detect.
+                timeout=30,
             )
         finally:
             if os.path.exists(tmp):
