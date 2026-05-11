@@ -1,0 +1,5 @@
+{"baseword": "football", "rule": "u", "candidate": "FOOTBALL", "matched": false}
+{"baseword": "apple", "rule": "c", "candidate": "Apple", "matched": false}
+{"baseword": "test123", "rule": "d", "candidate": "test123test123", "matched": false}
+{"baseword": "secret", "rule": "r", "candidate": "terces", "matched": false}
+{"baseword": "hello", "rule": "l", "candidate": "hello", "matched": false}
