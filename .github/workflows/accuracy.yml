@@ -24,9 +24,9 @@ jobs:
           # Pin to a commit known to build cleanly.
           git clone https://github.com/hashcat/hashcat-utils.git ~/hashcat-utils
           cd ~/hashcat-utils
-          git checkout 5f4f35d94  # v1.9 release commit; bump if upstream needs it
-          make -C src generate-rules
-          ls ~/hashcat-utils/src/generate-rules.bin
+          git checkout 8bbf2baf7b341c8ec23ca91e44e0ac7d7fcc0355  # post-v1.9; Makefile builds bin/*.bin
+          make generate-rules.bin
+          ls ~/hashcat-utils/bin/generate-rules.bin
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
       - name: Sync dependencies
@@ -52,8 +52,8 @@ jobs:
         run: |
           git clone https://github.com/hashcat/hashcat-utils.git ~/hashcat-utils
           cd ~/hashcat-utils
-          git checkout 5f4f35d94  # v1.9 release commit; bump if upstream needs it
-          make -C src generate-rules
+          git checkout 8bbf2baf7b341c8ec23ca91e44e0ac7d7fcc0355  # post-v1.9; Makefile builds bin/*.bin
+          make generate-rules.bin
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
       - name: Sync dependencies

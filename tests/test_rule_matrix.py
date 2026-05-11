@@ -722,7 +722,7 @@ class TestRuleComprehensiveCoverage:
 # Integration tests using hashcat-utils generate-rules binary
 # ---------------------------------------------------------------------------
 
-GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
+GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "bin" / "generate-rules.bin"
 
 
 @pytest.fixture(scope="class")

@@ -16,7 +16,7 @@ from hashcat_rosetta._verify import (
     verify_rule,
 )
 
-GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "src" / "generate-rules.bin"
+GENERATE_RULES_BIN = Path.home() / "hashcat-utils" / "bin" / "generate-rules.bin"
 CORPUS_PATH = Path(__file__).resolve().parent / "data" / "basewords.json"
 SMOKE_SEED = 42
 SMOKE_COUNT = 10  # 10 rules x 24 basewords = 240 cases per pytest run
