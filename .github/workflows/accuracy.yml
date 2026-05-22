@@ -41,6 +41,39 @@ jobs:
             --basewords tests/data/basewords.json \
             --report accuracy-smoke.json
 
+  opcode-sweep:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install hashcat
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y hashcat
+          hashcat --version
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+      - name: Sync dependencies
+        run: uv sync
+      - name: Run opcode sweep
+        # Systematic per-opcode correctness sweep. Identifies latent opcode
+        # bugs deterministically (no random seeding). Fails the build only
+        # when a mismatch appears on an opcode NOT in KNOWN_LATENT.
+        # No generate-rules.bin dependency — sweep generates its own rules.
+        run: |
+          uv run python scripts/sweep_opcodes.py \
+            --report reports/opcode-sweep.md \
+            --json opcode-sweep.json
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opcode-sweep-report
+          path: |
+            reports/opcode-sweep.md
+            opcode-sweep.json
+
   nightly:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
