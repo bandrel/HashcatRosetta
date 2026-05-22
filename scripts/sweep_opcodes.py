@@ -16,6 +16,28 @@ Requires: hashcat binary in PATH.
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import TypedDict
+
+from hashcat_rosetta._verify import (
+    CorpusReport,
+    _ALL_KNOWN_OPCODES,
+    _DEFAULT_IMPLEMENTED,
+    _HASHCAT_STDOUT_UNSUPPORTED,
+    _ONE_ARG_OPCODES,
+    _THREE_ARG_OPCODES,
+    _TWO_ARG_OPCODES,
+    _ZERO_ARG_OPCODES,
+    load_baseword_corpus,
+    verify_corpus,
+)
+
 # Arg-grid constants. These define the script's input contract; widening
 # them is a deliberate design choice. See spec section "Arg Grid".
 
@@ -58,14 +80,6 @@ THREE_ARG_GRID: tuple[str, ...] = (
 # Opcode-to-reason allowlist of known latent bugs. Empty on day one.
 # Each entry MUST cite a tracked issue or spec section. No bare `# TODO`.
 KNOWN_LATENT: dict[str, str] = {}
-
-from hashcat_rosetta._verify import (  # noqa: E402
-    _DEFAULT_IMPLEMENTED,
-    _ONE_ARG_OPCODES,
-    _THREE_ARG_OPCODES,
-    _TWO_ARG_OPCODES,
-    _ZERO_ARG_OPCODES,
-)
 
 # Split _ONE_ARG_OPCODES into "position" (N) vs "char" (X) buckets. Hashcat's
 # rule grammar doesn't distinguish them syntactically; the split is semantic
@@ -111,15 +125,6 @@ def generate_rules() -> list[str]:
         for args in THREE_ARG_GRID:
             rules.append(op + args)
     return rules
-
-
-from typing import TypedDict  # noqa: E402
-
-from hashcat_rosetta._verify import (  # noqa: E402
-    CorpusReport,
-    _ALL_KNOWN_OPCODES,
-    _HASHCAT_STDOUT_UNSUPPORTED,
-)
 
 
 class OpcodeStat(TypedDict):
@@ -277,6 +282,97 @@ def render_markdown(rows: dict[str, dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_json(rows: dict[str, dict], meta: dict) -> str:
+    summary = {
+        "pass": sum(1 for r in rows.values() if r["status"] == STATUS_PASS),
+        "regression": sum(1 for r in rows.values() if r["status"] == STATUS_REGRESSION),
+        "latent": sum(1 for r in rows.values() if r["status"] == STATUS_LATENT),
+        "unverifiable": sum(1 for r in rows.values() if r["status"] == STATUS_UNVERIFIABLE),
+        "untracked": sum(1 for r in rows.values() if r["status"] == STATUS_UNTRACKED),
+    }
+    doc = {"meta": meta, "summary": summary, "rows": rows}
+    return json.dumps(doc, indent=2, sort_keys=True)
+
+
+def _check_prerequisites() -> None:
+    try:
+        subprocess.run(["hashcat", "--version"], capture_output=True, timeout=5).check_returncode()
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print("ERROR: hashcat binary not available or not working", file=sys.stderr)
+        sys.exit(2)
+
+
 def main() -> None:
-    """Wire-up filled in subsequent tasks."""
-    raise NotImplementedError
+    parser = argparse.ArgumentParser(description="Per-opcode correctness sweep.")
+    parser.add_argument(
+        "--report",
+        default="reports/opcode-sweep.md",
+        help="Markdown matrix output path (default: reports/opcode-sweep.md)",
+    )
+    parser.add_argument(
+        "--json",
+        default="opcode-sweep.json",
+        help="JSON report output path (default: ./opcode-sweep.json)",
+    )
+    parser.add_argument(
+        "--basewords",
+        default=None,
+        help="Baseword corpus JSON path (default: tests/data/basewords.json)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=os.cpu_count() or 4,
+        help="Parallel hashcat workers (default: CPU count)",
+    )
+    args = parser.parse_args()
+
+    _check_prerequisites()
+
+    corpus_path = (
+        Path(args.basewords)
+        if args.basewords
+        else Path(__file__).resolve().parent.parent / "tests" / "data" / "basewords.json"
+    )
+    basewords = load_baseword_corpus(corpus_path)
+    rules = generate_rules()
+
+    print(
+        f"Opcode sweep: {len(rules)} rules x {len(basewords)} basewords ({args.workers} workers)..."
+    )
+    report = verify_corpus(rules, basewords, args.workers, _DEFAULT_IMPLEMENTED)
+
+    stats = aggregate_by_opcode(report, rules)
+    rows = derive_status(stats, KNOWN_LATENT)
+
+    md = render_markdown(rows)
+    Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.report).write_text(md)
+    print(f"Markdown matrix: {args.report}")
+
+    meta = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "rule_count": len(rules),
+        "baseword_count": len(basewords),
+        "workers": args.workers,
+    }
+    Path(args.json).write_text(render_json(rows, meta))
+    print(f"JSON report: {args.json}")
+
+    summary = json.loads(render_json(rows, meta))["summary"]
+    print(
+        f"Summary: pass={summary['pass']} regression={summary['regression']} "
+        f"latent={summary['latent']} unverifiable={summary['unverifiable']} "
+        f"untracked={summary['untracked']}"
+    )
+
+    exit_code = compute_exit_code(rows)
+    if exit_code != 0:
+        print("RESULT: FAIL — new regression(s) outside KNOWN_LATENT")
+    else:
+        print("RESULT: PASS")
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

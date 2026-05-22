@@ -7,6 +7,7 @@ importlib to keep it test-discoverable without polluting the public API.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest  # noqa: F401
@@ -332,3 +333,64 @@ class TestRenderMarkdown:
         md = sweep_opcodes.render_markdown(rows)
         assert "| `a` |" in md
         assert "not in _DEFAULT_IMPLEMENTED" in md
+
+
+class TestRenderJson:
+    def test_includes_rows_and_metadata(self):
+        rows = {
+            "c": {
+                "opcode": "c",
+                "tested": 24,
+                "matched": 24,
+                "mismatches": 0,
+                "unverifiable": 0,
+                "first_failing_example": None,
+                "status": "PASS",
+            },
+        }
+        out = sweep_opcodes.render_json(rows, meta={"timestamp": "2026-05-22T10:00:00"})
+        doc = json.loads(out)
+        assert doc["meta"]["timestamp"] == "2026-05-22T10:00:00"
+        assert "c" in doc["rows"]
+        assert doc["rows"]["c"]["status"] == "PASS"
+        assert "summary" in doc
+        assert doc["summary"]["pass"] == 1
+
+    def test_summary_counts_by_status(self):
+        rows = {
+            "a": {
+                "opcode": "a",
+                "tested": 0,
+                "matched": 0,
+                "mismatches": 0,
+                "unverifiable": 0,
+                "first_failing_example": None,
+                "status": "PASS",
+            },
+            "b": {
+                "opcode": "b",
+                "tested": 0,
+                "matched": 0,
+                "mismatches": 1,
+                "unverifiable": 0,
+                "first_failing_example": None,
+                "status": "REGRESSION",
+            },
+            "c": {
+                "opcode": "c",
+                "tested": 0,
+                "matched": 0,
+                "mismatches": 1,
+                "unverifiable": 0,
+                "first_failing_example": None,
+                "status": "LATENT",
+            },
+        }
+        doc = json.loads(sweep_opcodes.render_json(rows, meta={}))
+        assert doc["summary"] == {
+            "pass": 1,
+            "regression": 1,
+            "latent": 1,
+            "unverifiable": 0,
+            "untracked": 0,
+        }
