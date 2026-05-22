@@ -356,10 +356,12 @@ def main() -> None:
         "baseword_count": len(basewords),
         "workers": args.workers,
     }
-    Path(args.json).write_text(render_json(rows, meta))
+    json_str = render_json(rows, meta)
+    Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.json).write_text(json_str)
     print(f"JSON report: {args.json}")
 
-    summary = json.loads(render_json(rows, meta))["summary"]
+    summary = json.loads(json_str)["summary"]
     print(
         f"Summary: pass={summary['pass']} regression={summary['regression']} "
         f"latent={summary['latent']} unverifiable={summary['unverifiable']} "
