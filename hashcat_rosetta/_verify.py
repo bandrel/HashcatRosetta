@@ -499,6 +499,11 @@ def _run_round(
         "skipped_hashcat": 0,
         "skipped_hashcat_unsupported": 0,
         "skipped_nonascii": 0,
+        "skipped_rule_strings": {
+            "skipped_hashcat": [],
+            "skipped_hashcat_unsupported": [],
+            "skipped_nonascii": [],
+        },
         "tested": 0,
         "matched": 0,
         "mismatches": [],
@@ -524,10 +529,13 @@ def _run_round(
                 )
             elif vr.status == "skipped_hashcat":
                 counts["skipped_hashcat"] += 1
+                counts["skipped_rule_strings"]["skipped_hashcat"].append(rule)
             elif vr.status == "skipped_hashcat_unsupported":
                 counts["skipped_hashcat_unsupported"] += 1
+                counts["skipped_rule_strings"]["skipped_hashcat_unsupported"].append(rule)
             elif vr.status == "skipped_nonascii":
                 counts["skipped_nonascii"] += 1
+                counts["skipped_rule_strings"]["skipped_nonascii"].append(rule)
             elif vr.status == "match":
                 counts["tested"] += 1
                 counts["matched"] += 1

@@ -178,18 +178,26 @@ def aggregate_by_opcode(
                 }
         # Matched + unverifiable: walk the rule list and classify by opcode.
         # A rule whose leading opcode is in _HASHCAT_STDOUT_UNSUPPORTED counts
-        # toward `unverifiable`; otherwise — and only if it didn't appear as
-        # a mismatch in this round — it counts as matched. The verify harness
-        # classifies M/X deterministically; we replicate that here so we can
-        # attribute per-rule outcomes (the round-level counters don't tell us
-        # WHICH rules produced WHICH skips).
+        # toward `unverifiable`. Otherwise, a rule counts as matched only if
+        # the verify harness didn't classify it as mismatched OR skipped — we
+        # need the explicit skipped-rule sets because skipped_hashcat /
+        # skipped_nonascii / skipped_hashcat_unsupported (e.g. OOB position)
+        # would otherwise be silently counted as matches.
         mismatched_rules_this_round = {mm["rule"] for mm in round_result["mismatches"]}
+        skipped_strings = round_result.get("skipped_rule_strings", {})
+        skipped_rules_this_round = (
+            set(skipped_strings.get("skipped_hashcat", []))
+            | set(skipped_strings.get("skipped_hashcat_unsupported", []))
+            | set(skipped_strings.get("skipped_nonascii", []))
+        )
         for rule, op in rule_to_opcode.items():
             if op not in stats:
                 continue
             if op in _HASHCAT_STDOUT_UNSUPPORTED:
                 stats[op]["unverifiable"] += 1
-            elif rule not in mismatched_rules_this_round:
+            elif rule in mismatched_rules_this_round or rule in skipped_rules_this_round:
+                continue
+            else:
                 stats[op]["tested"] += 1
                 stats[op]["matched"] += 1
 
