@@ -27,6 +27,9 @@ uv run ruff format hashcat_rosetta/ tests/
 
 # Type check
 uv run mypy hashcat_rosetta/
+
+# Run per-opcode correctness sweep (systematic, deterministic)
+uv run python scripts/sweep_opcodes.py
 ```
 
 ## Architecture
@@ -38,6 +41,7 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 - **`analyzer.py`** - `RuleAnalyzer` wraps `RuleParser` for static rule analysis (complexity, efficiency scoring, characteristics extraction). Does not require debug output - analyzes rules in isolation.
 - **`formatting.py`** - Rule opcode descriptions and display formatting for the `analyze-rules` CLI command.
 - **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--export`, `--explain`, `--analyze-rules`). Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `rosetta` in pyproject.toml.
+- **`scripts/sweep_opcodes.py`** - Systematic per-opcode correctness sweep. Generates ~230 rules covering every opcode in `_DEFAULT_IMPLEMENTED` against a canonical arg grid, runs them via `_verify.verify_corpus`, and emits a per-opcode matrix to `reports/opcode-sweep.md`. CI job `opcode-sweep` runs this on every PR; mismatches outside `KNOWN_LATENT` fail the build.
 
 The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `DebugAnalyzer` from `__init__.py`.
 
