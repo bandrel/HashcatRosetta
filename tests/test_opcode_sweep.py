@@ -115,19 +115,35 @@ class TestGenerateRules:
 
 
 class TestAggregateByOpcode:
-    def _synth_round(self, baseword, *, tested=0, matched=0, mismatches=None, hc_unsupported=0):
+    def _synth_round(
+        self,
+        baseword,
+        *,
+        tested=0,
+        matched=0,
+        mismatches=None,
+        hc_unsupported=0,
+        hc_unsupported_rules=None,
+        hashcat_skipped_rules=None,
+        nonascii_skipped_rules=None,
+    ):
         return {
             "baseword": baseword,
             "total_rules": tested + (len(mismatches) if mismatches else 0) + hc_unsupported,
             "skipped_unimplemented": 0,
             "skipped_invalid": 0,
-            "skipped_hashcat": 0,
+            "skipped_hashcat": len(hashcat_skipped_rules or []),
             "skipped_hashcat_unsupported": hc_unsupported,
-            "skipped_nonascii": 0,
+            "skipped_nonascii": len(nonascii_skipped_rules or []),
             "tested": tested,
             "matched": matched,
             "mismatches": mismatches or [],
             "skipped_rules": [],
+            "skipped_rule_strings": {
+                "skipped_hashcat": hashcat_skipped_rules or [],
+                "skipped_hashcat_unsupported": hc_unsupported_rules or [],
+                "skipped_nonascii": nonascii_skipped_rules or [],
+            },
         }
 
     def test_groups_by_leading_char_of_rule(self):
@@ -174,6 +190,29 @@ class TestAggregateByOpcode:
         stats = sweep_opcodes.aggregate_by_opcode(report, rules)
         assert stats["M"]["tested"] == 0
         assert stats["M"]["unverifiable"] == 1
+
+    def test_skipped_rules_not_counted_as_matched(self):
+        # Rules that the verify harness skipped (hashcat exec failure, OOB
+        # position triggering hashcat_unsupported, or non-ASCII output) must
+        # NOT inflate the matched count — otherwise an opcode-level bug that
+        # only triggers a skip could masquerade as PASS.
+        from hashcat_rosetta._verify import CorpusReport
+
+        report = CorpusReport()
+        report.rounds = [
+            self._synth_round(
+                "longword",
+                tested=0,
+                matched=0,
+                hc_unsupported=1,
+                hc_unsupported_rules=[">9"],
+            ),
+        ]
+        rules = [">9"]
+        stats = sweep_opcodes.aggregate_by_opcode(report, rules)
+        assert stats[">"]["tested"] == 0
+        assert stats[">"]["matched"] == 0
+        assert stats[">"]["mismatches"] == 0
 
     def test_includes_zero_rows_for_untracked_opcodes(self):
         # Opcodes in _ALL_KNOWN_OPCODES but not _DEFAULT_IMPLEMENTED get a
