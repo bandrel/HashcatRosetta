@@ -230,6 +230,53 @@ def compute_exit_code(rows: dict[str, dict]) -> int:
     return 1 if any(r["status"] == STATUS_REGRESSION for r in rows.values()) else 0
 
 
+# Status sort priority: regressions first (most actionable), then latent
+# (tracked tech debt), then everything else.
+_STATUS_SORT: dict[str, int] = {
+    STATUS_REGRESSION: 0,
+    STATUS_LATENT: 1,
+    STATUS_UNVERIFIABLE: 2,
+    STATUS_PASS: 3,
+    STATUS_UNTRACKED: 4,
+}
+
+
+def _format_example(row: dict) -> str:
+    if row["status"] == "UNTRACKED":
+        return "(not in _DEFAULT_IMPLEMENTED)"
+    if row["status"] == "UNVERIFIABLE":
+        return "(unsupported by hashcat --stdout)"
+    ex = row.get("first_failing_example")
+    if not ex:
+        return "—"
+    # Escape pipe chars for markdown cell.
+    rule = (ex.get("rule") or "").replace("|", "\\|")
+    bw = (ex.get("baseword") or "").replace("|", "\\|")
+    ours = (ex.get("ours") or "").replace("|", "\\|")
+    hc = (ex.get("hashcat") or "").replace("|", "\\|")
+    return f"`{rule}` on `{bw}` → ours=`{ours}` vs hashcat=`{hc}`"
+
+
+def render_markdown(rows: dict[str, dict]) -> str:
+    sorted_rows = sorted(
+        rows.values(),
+        key=lambda r: (_STATUS_SORT.get(r["status"], 99), r["opcode"]),
+    )
+    lines = [
+        "# Opcode Sweep Matrix",
+        "",
+        "| Opcode | Tested | Matched | Mismatches | Unverifiable | First Failing Example | Status |",
+        "|--------|--------|---------|------------|--------------|----------------------|--------|",
+    ]
+    for r in sorted_rows:
+        lines.append(
+            f"| `{r['opcode']}` | {r['tested']} | {r['matched']} | "
+            f"{r['mismatches']} | {r['unverifiable']} | "
+            f"{_format_example(r)} | {r['status']} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     """Wire-up filled in subsequent tasks."""
     raise NotImplementedError

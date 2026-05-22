@@ -246,3 +246,89 @@ class TestDeriveStatus:
             "v": {**self._stat("v", mismatches=1), "status": "REGRESSION"},
         }
         assert sweep_opcodes.compute_exit_code(rows) == 1
+
+
+class TestRenderMarkdown:
+    def test_has_header_row_and_data_rows(self):
+        rows = {
+            "c": {
+                "opcode": "c",
+                "tested": 24,
+                "matched": 24,
+                "mismatches": 0,
+                "unverifiable": 0,
+                "first_failing_example": None,
+                "status": "PASS",
+            },
+            "v": {
+                "opcode": "v",
+                "tested": 216,
+                "matched": 198,
+                "mismatches": 18,
+                "unverifiable": 0,
+                "first_failing_example": {
+                    "rule": "v23",
+                    "baseword": "admin",
+                    "ours": "AdMiN",
+                    "hashcat": "aDmIn",
+                },
+                "status": "LATENT",
+            },
+        }
+        md = sweep_opcodes.render_markdown(rows)
+        # Header
+        assert "| Opcode |" in md
+        assert "| Status" in md
+        # Data
+        assert "| `c` |" in md
+        assert "| `v` |" in md
+        assert "PASS" in md
+        assert "LATENT" in md
+        # First failing example escaped for table cell
+        assert "v23" in md
+
+    def test_rows_are_sorted_by_status_then_opcode(self):
+        # Regressions appear at the top so the punch list is unmissable.
+        rows = {
+            "c": {
+                "opcode": "c",
+                "tested": 1,
+                "matched": 1,
+                "mismatches": 0,
+                "unverifiable": 0,
+                "first_failing_example": None,
+                "status": "PASS",
+            },
+            "v": {
+                "opcode": "v",
+                "tested": 1,
+                "matched": 0,
+                "mismatches": 1,
+                "unverifiable": 0,
+                "first_failing_example": {
+                    "rule": "v0",
+                    "baseword": "x",
+                    "ours": "a",
+                    "hashcat": "b",
+                },
+                "status": "REGRESSION",
+            },
+        }
+        md = sweep_opcodes.render_markdown(rows)
+        assert md.index("| `v` |") < md.index("| `c` |")
+
+    def test_untracked_row_shows_zeros_and_note(self):
+        rows = {
+            "a": {
+                "opcode": "a",
+                "tested": 0,
+                "matched": 0,
+                "mismatches": 0,
+                "unverifiable": 0,
+                "first_failing_example": None,
+                "status": "UNTRACKED",
+            },
+        }
+        md = sweep_opcodes.render_markdown(rows)
+        assert "| `a` |" in md
+        assert "not in _DEFAULT_IMPLEMENTED" in md
