@@ -70,14 +70,18 @@ class TestGenerateRules:
     def test_one_arg_position_rules(self):
         # Each 1-arg position opcode in _DEFAULT_IMPLEMENTED appears with every
         # POSITION_ARGS value as a 2-char rule.
+        from hashcat_rosetta._verify import _DEFAULT_IMPLEMENTED
+
         rules = set(sweep_opcodes.generate_rules())
-        for op in sweep_opcodes.ONE_ARG_POSITION_OPCODES:
+        for op in sweep_opcodes.ONE_ARG_POSITION_OPCODES & _DEFAULT_IMPLEMENTED:
             for arg in sweep_opcodes.POSITION_ARGS:
                 assert (op + arg) in rules, f"missing {op + arg!r}"
 
     def test_one_arg_char_rules(self):
+        from hashcat_rosetta._verify import _DEFAULT_IMPLEMENTED
+
         rules = set(sweep_opcodes.generate_rules())
-        for op in sweep_opcodes.ONE_ARG_CHAR_OPCODES:
+        for op in sweep_opcodes.ONE_ARG_CHAR_OPCODES & _DEFAULT_IMPLEMENTED:
             for arg in sweep_opcodes.CHAR_ARGS:
                 assert (op + arg) in rules, f"missing {op + arg!r}"
 
