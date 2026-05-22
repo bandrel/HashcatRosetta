@@ -32,3 +32,6 @@ reports/
 .DS_Store
 Thumbs.db
 .worktrees/
+
+# Sweep outputs
+opcode-sweep.json
