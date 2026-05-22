@@ -59,6 +59,59 @@ THREE_ARG_GRID: tuple[str, ...] = (
 # Each entry MUST cite a tracked issue or spec section. No bare `# TODO`.
 KNOWN_LATENT: dict[str, str] = {}
 
+from hashcat_rosetta._verify import (  # noqa: E402
+    _DEFAULT_IMPLEMENTED,
+    _ONE_ARG_OPCODES,
+    _THREE_ARG_OPCODES,
+    _TWO_ARG_OPCODES,
+    _ZERO_ARG_OPCODES,
+)
+
+# Split _ONE_ARG_OPCODES into "position" (N) vs "char" (X) buckets. Hashcat's
+# rule grammar doesn't distinguish them syntactically; the split is semantic
+# and informs the arg grid (POSITION_ARGS vs CHAR_ARGS). Source: opcode
+# semantics in OPCODE_DESCRIPTIONS (scripts/verify_rules.py).
+ONE_ARG_POSITION_OPCODES: frozenset[str] = frozenset("pDTyYzZ'+-.,LR")
+ONE_ARG_CHAR_OPCODES: frozenset[str] = frozenset("$^@!><%()e")
+
+# Sanity check: these two sets must partition (_ONE_ARG_OPCODES & implemented).
+_one_arg_impl = _ONE_ARG_OPCODES & _DEFAULT_IMPLEMENTED
+assert (ONE_ARG_POSITION_OPCODES | ONE_ARG_CHAR_OPCODES) >= _one_arg_impl, (
+    f"1-arg buckets miss implemented opcodes: "
+    f"{_one_arg_impl - (ONE_ARG_POSITION_OPCODES | ONE_ARG_CHAR_OPCODES)!r}"
+)
+assert not (ONE_ARG_POSITION_OPCODES & ONE_ARG_CHAR_OPCODES), "1-arg bucket overlap"
+
+# Implemented opcodes by arity (intersect with what hashcat actually supports
+# via --stdout — both M and X stay in the list; their rules will skip).
+ZERO_ARG_OPCODES_IMPL: frozenset[str] = frozenset(_ZERO_ARG_OPCODES & _DEFAULT_IMPLEMENTED)
+TWO_ARG_OPCODES_IMPL: frozenset[str] = frozenset(_TWO_ARG_OPCODES & _DEFAULT_IMPLEMENTED)
+THREE_ARG_OPCODES_IMPL: frozenset[str] = frozenset(_THREE_ARG_OPCODES & _DEFAULT_IMPLEMENTED)
+
+
+def generate_rules() -> list[str]:
+    """Generate the full sweep rule set.
+
+    Deterministic: opcodes iterated in sorted order, arg-grid order preserved.
+    Each rule starts with its opcode at position 0; aggregation relies on this.
+    """
+    rules: list[str] = []
+    for op in sorted(ZERO_ARG_OPCODES_IMPL):
+        rules.append(op)
+    for op in sorted(ONE_ARG_POSITION_OPCODES & _DEFAULT_IMPLEMENTED):
+        for arg in POSITION_ARGS:
+            rules.append(op + arg)
+    for op in sorted(ONE_ARG_CHAR_OPCODES & _DEFAULT_IMPLEMENTED):
+        for arg in CHAR_ARGS:
+            rules.append(op + arg)
+    for op in sorted(TWO_ARG_OPCODES_IMPL):
+        for args in TWO_ARG_GRID:
+            rules.append(op + args)
+    for op in sorted(THREE_ARG_OPCODES_IMPL):
+        for args in THREE_ARG_GRID:
+            rules.append(op + args)
+    return rules
+
 
 def main() -> None:
     """Wire-up filled in subsequent tasks."""

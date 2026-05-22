@@ -45,3 +45,65 @@ class TestArgGridConstants:
         for k, v in sweep_opcodes.KNOWN_LATENT.items():
             assert isinstance(k, str) and len(k) == 1
             assert isinstance(v, str) and len(v) > 0
+
+
+class TestGenerateRules:
+    def test_returns_nonempty_deterministic_list(self):
+        a = sweep_opcodes.generate_rules()
+        b = sweep_opcodes.generate_rules()
+        assert a == b  # deterministic
+        assert len(a) > 0
+
+    def test_all_rules_are_unique(self):
+        rules = sweep_opcodes.generate_rules()
+        assert len(rules) == len(set(rules))
+
+    def test_zero_arg_rule_per_zero_arg_opcode(self):
+        # Every 0-arg opcode in _DEFAULT_IMPLEMENTED must appear as a 1-char rule.
+        from hashcat_rosetta._verify import _DEFAULT_IMPLEMENTED, _ZERO_ARG_OPCODES
+
+        rules = sweep_opcodes.generate_rules()
+        zero_arg_impl = _DEFAULT_IMPLEMENTED & _ZERO_ARG_OPCODES
+        for op in zero_arg_impl:
+            assert op in rules, f"missing 0-arg rule for opcode {op!r}"
+
+    def test_one_arg_position_rules(self):
+        # Each 1-arg position opcode in _DEFAULT_IMPLEMENTED appears with every
+        # POSITION_ARGS value as a 2-char rule.
+        rules = set(sweep_opcodes.generate_rules())
+        for op in sweep_opcodes.ONE_ARG_POSITION_OPCODES:
+            for arg in sweep_opcodes.POSITION_ARGS:
+                assert (op + arg) in rules, f"missing {op + arg!r}"
+
+    def test_one_arg_char_rules(self):
+        rules = set(sweep_opcodes.generate_rules())
+        for op in sweep_opcodes.ONE_ARG_CHAR_OPCODES:
+            for arg in sweep_opcodes.CHAR_ARGS:
+                assert (op + arg) in rules, f"missing {op + arg!r}"
+
+    def test_two_arg_rules(self):
+        rules = set(sweep_opcodes.generate_rules())
+        from hashcat_rosetta._verify import _DEFAULT_IMPLEMENTED, _TWO_ARG_OPCODES
+
+        for op in _DEFAULT_IMPLEMENTED & _TWO_ARG_OPCODES:
+            for args in sweep_opcodes.TWO_ARG_GRID:
+                assert (op + args) in rules, f"missing {op + args!r}"
+
+    def test_three_arg_rules(self):
+        rules = set(sweep_opcodes.generate_rules())
+        from hashcat_rosetta._verify import _DEFAULT_IMPLEMENTED, _THREE_ARG_OPCODES
+
+        for op in _DEFAULT_IMPLEMENTED & _THREE_ARG_OPCODES:
+            for args in sweep_opcodes.THREE_ARG_GRID:
+                assert (op + args) in rules, f"missing {op + args!r}"
+
+    def test_total_count_matches_spec(self):
+        # Spec rule count: 18·1 + 14·5 + 10·5 + 9·9 + 9 = 228
+        # (THREE_ARG_GRID has 9 entries, not the spec's '~10').
+        rules = sweep_opcodes.generate_rules()
+        n_zero = len(sweep_opcodes.ZERO_ARG_OPCODES_IMPL)
+        n_pos = len(sweep_opcodes.ONE_ARG_POSITION_OPCODES) * len(sweep_opcodes.POSITION_ARGS)
+        n_char = len(sweep_opcodes.ONE_ARG_CHAR_OPCODES) * len(sweep_opcodes.CHAR_ARGS)
+        n_two = len(sweep_opcodes.TWO_ARG_OPCODES_IMPL) * len(sweep_opcodes.TWO_ARG_GRID)
+        n_three = len(sweep_opcodes.THREE_ARG_OPCODES_IMPL) * len(sweep_opcodes.THREE_ARG_GRID)
+        assert len(rules) == n_zero + n_pos + n_char + n_two + n_three
