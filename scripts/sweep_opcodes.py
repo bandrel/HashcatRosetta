@@ -113,6 +113,84 @@ def generate_rules() -> list[str]:
     return rules
 
 
+from typing import TypedDict  # noqa: E402
+
+from hashcat_rosetta._verify import (  # noqa: E402
+    CorpusReport,
+    _ALL_KNOWN_OPCODES,
+    _HASHCAT_STDOUT_UNSUPPORTED,
+)
+
+
+class OpcodeStat(TypedDict):
+    opcode: str
+    tested: int
+    matched: int
+    mismatches: int
+    unverifiable: int  # rules skipped because hashcat --stdout doesn't support
+    first_failing_example: dict | None  # subset of the verify mismatch record
+
+
+def aggregate_by_opcode(
+    report: CorpusReport,
+    rules: list[str],
+) -> dict[str, OpcodeStat]:
+    """Group verify results by the leading char of each rule (the opcode).
+
+    Always includes a zero-row for every opcode in _ALL_KNOWN_OPCODES so the
+    matrix surfaces UNTRACKED drift.
+    """
+    stats: dict[str, OpcodeStat] = {
+        op: {
+            "opcode": op,
+            "tested": 0,
+            "matched": 0,
+            "mismatches": 0,
+            "unverifiable": 0,
+            "first_failing_example": None,
+        }
+        for op in _ALL_KNOWN_OPCODES
+    }
+
+    # Build rule -> opcode lookup. The generator guarantees rule[0] is the
+    # opcode under test; an empty rule would be a generator bug.
+    rule_to_opcode: dict[str, str] = {r: r[0] for r in rules if r}
+
+    for round_result in report.rounds:
+        # Mismatches: attribute directly.
+        for mm in round_result["mismatches"]:
+            op = mm["rule"][0] if mm.get("rule") else "?"
+            if op not in stats:
+                continue
+            stats[op]["mismatches"] += 1
+            stats[op]["tested"] += 1
+            if stats[op]["first_failing_example"] is None:
+                stats[op]["first_failing_example"] = {
+                    "rule": mm["rule"],
+                    "baseword": mm["baseword"],
+                    "ours": mm.get("ours"),
+                    "hashcat": mm.get("hashcat"),
+                }
+        # Matched + unverifiable: walk the rule list and classify by opcode.
+        # A rule whose leading opcode is in _HASHCAT_STDOUT_UNSUPPORTED counts
+        # toward `unverifiable`; otherwise — and only if it didn't appear as
+        # a mismatch in this round — it counts as matched. The verify harness
+        # classifies M/X deterministically; we replicate that here so we can
+        # attribute per-rule outcomes (the round-level counters don't tell us
+        # WHICH rules produced WHICH skips).
+        mismatched_rules_this_round = {mm["rule"] for mm in round_result["mismatches"]}
+        for rule, op in rule_to_opcode.items():
+            if op not in stats:
+                continue
+            if op in _HASHCAT_STDOUT_UNSUPPORTED:
+                stats[op]["unverifiable"] += 1
+            elif rule not in mismatched_rules_this_round:
+                stats[op]["tested"] += 1
+                stats[op]["matched"] += 1
+
+    return stats
+
+
 def main() -> None:
     """Wire-up filled in subsequent tasks."""
     raise NotImplementedError

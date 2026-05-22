@@ -111,3 +111,82 @@ class TestGenerateRules:
         n_two = len(sweep_opcodes.TWO_ARG_OPCODES_IMPL) * len(sweep_opcodes.TWO_ARG_GRID)
         n_three = len(sweep_opcodes.THREE_ARG_OPCODES_IMPL) * len(sweep_opcodes.THREE_ARG_GRID)
         assert len(rules) == n_zero + n_pos + n_char + n_two + n_three
+
+
+class TestAggregateByOpcode:
+    def _synth_round(self, baseword, *, tested=0, matched=0, mismatches=None, hc_unsupported=0):
+        return {
+            "baseword": baseword,
+            "total_rules": tested + (len(mismatches) if mismatches else 0) + hc_unsupported,
+            "skipped_unimplemented": 0,
+            "skipped_invalid": 0,
+            "skipped_hashcat": 0,
+            "skipped_hashcat_unsupported": hc_unsupported,
+            "skipped_nonascii": 0,
+            "tested": tested,
+            "matched": matched,
+            "mismatches": mismatches or [],
+            "skipped_rules": [],
+        }
+
+    def test_groups_by_leading_char_of_rule(self):
+        # Synthetic: 2 rounds, 3 distinct opcodes ('c', 'v', '$').
+        from hashcat_rosetta._verify import CorpusReport
+
+        report = CorpusReport()
+        report.rounds = [
+            self._synth_round("password", tested=3, matched=3),
+            self._synth_round(
+                "admin",
+                tested=2,
+                matched=1,
+                mismatches=[
+                    {
+                        "rule": "v23",
+                        "baseword": "admin",
+                        "index": 0,
+                        "ours": "AdMiN",
+                        "hashcat": "aDmIn",
+                        "components": [{"opcode": "v"}],
+                    },
+                ],
+            ),
+        ]
+        rules = ["c", "v23", "$a"]
+        stats = sweep_opcodes.aggregate_by_opcode(report, rules)
+        assert set(stats.keys()) >= {"c", "v", "$"}
+        assert stats["v"]["mismatches"] == 1
+        assert stats["v"]["first_failing_example"] is not None
+        assert stats["v"]["first_failing_example"]["rule"] == "v23"
+
+    def test_unsupported_rules_counted_as_unverifiable(self):
+        # M and X always return skipped_hashcat_unsupported. Aggregation must
+        # surface that as a distinct counter so the status derivation can flag
+        # them UNVERIFIABLE rather than reporting Tested=0 silently.
+        from hashcat_rosetta._verify import CorpusReport
+
+        report = CorpusReport()
+        report.rounds = [
+            self._synth_round("password", tested=0, matched=0, hc_unsupported=1),
+        ]
+        rules = ["M"]
+        stats = sweep_opcodes.aggregate_by_opcode(report, rules)
+        assert stats["M"]["tested"] == 0
+        assert stats["M"]["unverifiable"] == 1
+
+    def test_includes_zero_rows_for_untracked_opcodes(self):
+        # Opcodes in _ALL_KNOWN_OPCODES but not _DEFAULT_IMPLEMENTED get a
+        # zero-everything row so they show up as UNTRACKED in the matrix.
+        from hashcat_rosetta._verify import (
+            CorpusReport,
+            _ALL_KNOWN_OPCODES,
+            _DEFAULT_IMPLEMENTED,
+        )
+
+        report = CorpusReport()
+        report.rounds = []
+        stats = sweep_opcodes.aggregate_by_opcode(report, [])
+        for op in _ALL_KNOWN_OPCODES - _DEFAULT_IMPLEMENTED:
+            assert op in stats
+            assert stats[op]["tested"] == 0
+            assert stats[op]["mismatches"] == 0
