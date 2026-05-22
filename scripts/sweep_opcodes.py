@@ -191,6 +191,45 @@ def aggregate_by_opcode(
     return stats
 
 
+STATUS_PASS = "PASS"
+STATUS_REGRESSION = "REGRESSION"
+STATUS_LATENT = "LATENT"
+STATUS_UNVERIFIABLE = "UNVERIFIABLE"
+STATUS_UNTRACKED = "UNTRACKED"
+
+
+def derive_status(
+    stats: dict[str, OpcodeStat],
+    known_latent: dict[str, str],
+) -> dict[str, dict]:
+    """Return a per-opcode dict with `status` added. Input stats are not mutated.
+
+    Priority order (first match wins):
+      1. UNTRACKED — opcode is in _ALL_KNOWN_OPCODES but not _DEFAULT_IMPLEMENTED
+      2. UNVERIFIABLE — opcode implemented but hashcat --stdout can't oracle it
+      3. REGRESSION — mismatches > 0 and not in known_latent
+      4. LATENT — mismatches > 0 and in known_latent
+      5. PASS — everything else
+    """
+    rows: dict[str, dict] = {}
+    for op, stat in stats.items():
+        if op not in _DEFAULT_IMPLEMENTED:
+            status = STATUS_UNTRACKED
+        elif stat["unverifiable"] > 0 and stat["tested"] == 0:
+            status = STATUS_UNVERIFIABLE
+        elif stat["mismatches"] > 0:
+            status = STATUS_LATENT if op in known_latent else STATUS_REGRESSION
+        else:
+            status = STATUS_PASS
+        rows[op] = {**stat, "status": status}
+    return rows
+
+
+def compute_exit_code(rows: dict[str, dict]) -> int:
+    """1 if any row has status REGRESSION, else 0."""
+    return 1 if any(r["status"] == STATUS_REGRESSION for r in rows.values()) else 0
+
+
 def main() -> None:
     """Wire-up filled in subsequent tasks."""
     raise NotImplementedError
