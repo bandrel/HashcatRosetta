@@ -180,8 +180,11 @@ def _extract_opcodes(rule_str: str) -> list[str]:
 # sync with hashcat's stricter validation.
 _POS_1ARG_FIRST: set[str] = set("TD'+-.,RL")
 _POS_2ARG_FIRST: set[str] = set("io=*xOvB")
-# Opcodes whose second argument is ALSO a position (in addition to the first).
-_POS_2ARG_SECOND: set[str] = set("*")
+# Opcodes whose second argument uses the same 0-9/A-Z encoding as a position
+# (either a literal position like '*' swap, or a count parsed via the same
+# table like O omit-count and x extract-length). Hashcat validates them
+# identically, so they get the same arg-encoding check.
+_POS_2ARG_SECOND: set[str] = set("*Ox")
 
 
 def _hex_value(c: str) -> int | None:
