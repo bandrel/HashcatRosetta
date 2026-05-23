@@ -84,10 +84,16 @@ _ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | 
 
 # Opcodes that hashcat's --stdout pipeline refuses to compile (rule rejected
 # with exit 255 "No valid rules left"). Verified empirically against 6.2.6 and
-# 7.1.2; M (memorize) and X (extract from memory) are CPU-only rule operations
-# not implemented in the OpenCL/Metal kernels. Rules using them are skipped by
-# the harness because hashcat cannot serve as an oracle for them.
-_HASHCAT_STDOUT_UNSUPPORTED: set[str] = set("MX")
+# 7.1.2.
+#   M, X: CPU-only rule operations not in OpenCL/Metal kernels.
+#   !, <, >, %, (, ), =: filter/reject opcodes. --stdout only emits *modified*
+#     candidates; pure-filter rules (those whose only effect is to accept or
+#     reject the unchanged baseword) produce no --stdout output at all, even
+#     when the filter logically passes. Filters exist for the hashing flow,
+#     not the candidate-emission flow.
+# Rules whose leading opcode is in this set are skipped by the harness because
+# hashcat cannot serve as an oracle for them.
+_HASHCAT_STDOUT_UNSUPPORTED: set[str] = set("MX!<>%()=")
 
 # Default implemented-opcodes set for the harness. Mirrors
 # scripts/verify_rules.py:IMPLEMENTED_OPCODES; the script wraps this module
@@ -268,6 +274,44 @@ def _has_oob_position(rule_str: str, baseword: str) -> bool:
     return False
 
 
+def _has_invalid_position_arg(rule_str: str) -> bool:
+    """True if any positional opcode arg uses an encoding hashcat rejects.
+
+    Hashcat accepts only '0'-'9' (positions 0-9) and 'A'-'Z' (positions 10-35)
+    for position args. Anything else — lowercase letters, symbols, spaces —
+    causes hashcat to reject the rule with 'No valid rules left'. Our parser
+    is more permissive (lowercase-as-hex), so we'd compute a position and
+    produce a candidate that hashcat won't.
+    """
+    i = 0
+    n = len(rule_str)
+    while i < n:
+        c = rule_str[i]
+        if c == " ":
+            i += 1
+            continue
+        if c in _THREE_ARG_OPCODES:
+            arity = 3
+        elif c in _TWO_ARG_OPCODES:
+            arity = 2
+        elif c in _ONE_ARG_OPCODES:
+            arity = 1
+        else:
+            i += 1
+            continue
+        if i + arity >= n:
+            return False  # truncated; handled by _has_truncated_opcode
+        args = rule_str[i + 1 : i + 1 + arity]
+        if c in _POS_1ARG_FIRST and arity >= 1 and _hex_value(args[0]) is None:
+            return True
+        if c in _POS_2ARG_FIRST and arity >= 2 and _hex_value(args[0]) is None:
+            return True
+        if c in _POS_2ARG_SECOND and arity >= 2 and _hex_value(args[1]) is None:
+            return True
+        i += arity + 1
+    return False
+
+
 def _has_truncated_opcode(rule_str: str) -> bool:
     """True if the rule contains an opcode with missing argument bytes.
 
@@ -404,7 +448,12 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
         op in _HASHCAT_STDOUT_UNSUPPORTED or op not in _ALL_KNOWN_OPCODES
         for op in extracted_opcodes
     )
-    if unsupported or _has_truncated_opcode(rule) or _has_oob_position(rule, baseword):
+    if (
+        unsupported
+        or _has_truncated_opcode(rule)
+        or _has_oob_position(rule, baseword)
+        or _has_invalid_position_arg(rule)
+    ):
         return VerifyResult(
             status="skipped_hashcat_unsupported",
             rule=rule,
