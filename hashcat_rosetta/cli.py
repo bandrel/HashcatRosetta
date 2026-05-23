@@ -11,6 +11,24 @@ from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
 
 
+def _hashcat_pos(c: str) -> int:
+    """Parse a hashcat position char.
+
+    Hashcat encodes positions 0-35 as '0'-'9' (0-9) then 'A'-'Z' (10-35).
+    Raises ValueError on anything else — matching hashcat, which rejects
+    such rules outright. The existing call-sites already catch ValueError
+    to skip malformed args, so this drops in cleanly.
+
+    Note: int(c, 16) covers only 0-F (0-15) and silently dropped positions
+    G-Z, producing wildly wrong candidates for ~half the position space.
+    """
+    if c.isdigit():
+        return int(c)
+    if "A" <= c <= "Z":
+        return ord(c) - ord("A") + 10
+    raise ValueError(f"invalid hashcat position char: {c!r}")
+
+
 def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
     if not rule_str:
@@ -80,10 +98,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
 
             try:
                 # Convert hex position if needed
-                if pos_char.isdigit():
-                    pos = int(pos_char)
-                else:
-                    pos = int(pos_char, 16)
+                pos = _hashcat_pos(pos_char)
 
                 prev = current
                 if pos <= len(current):
@@ -109,7 +124,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Hashcat positional encoding: '0'-'9' = 0-9, 'A'-'Z' = 10-35.
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
                 prev = current
                 # Hashcat no-ops if result would exceed RP_PASSWORD_SIZE (256)
                 if len(current) + len(current) * n < 256:
@@ -123,10 +138,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Delete: DX where X is position
             pos_char = rule_str[i + 1]
             try:
-                if pos_char.isdigit():
-                    pos = int(pos_char)
-                else:
-                    pos = int(pos_char, 16)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
                     current = current[:pos] + current[pos + 1 :]
@@ -139,10 +151,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Toggle at position: TX
             pos_char = rule_str[i + 1]
             try:
-                if pos_char.isdigit():
-                    pos = int(pos_char)
-                else:
-                    pos = int(pos_char, 16)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
                     current = current[:pos] + current[pos].swapcase() + current[pos + 1 :]
@@ -156,8 +165,8 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             pos_char = rule_str[i + 1]
             len_char = rule_str[i + 2]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
-                length = int(len_char, 16) if not len_char.isdigit() else int(len_char)
+                pos = _hashcat_pos(pos_char)
+                length = _hashcat_pos(len_char)
                 prev = current
                 if pos < len(current) and pos + length <= len(current):
                     current = current[:pos] + current[pos + length :]
@@ -172,7 +181,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Duplicate first N characters (prepend)
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
                 prev = current
                 if n <= len(current):
                     current = current[:n] + current
@@ -185,7 +194,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Duplicate last N characters (append)
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
                 prev = current
                 # n==0 must be a no-op; current[-0:] is current[0:] == current,
                 # which would duplicate the whole word. Hashcat treats Y0 as
@@ -201,7 +210,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Duplicate first character N times
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
                 prev = current
                 if current:
                     current = current[0] * n + current
@@ -214,7 +223,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Duplicate last character N times
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
                 prev = current
                 if current:
                     current = current + current[-1] * n
@@ -246,7 +255,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Reject if word length > N
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
             except ValueError:
                 i += 1
                 continue
@@ -261,7 +270,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Reject if word length < N
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
             except ValueError:
                 i += 1
                 continue
@@ -276,7 +285,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Truncate word at position N
             pos_char = rule_str[i + 1]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 current = current[:pos]
                 steps.append(f"'{pos_char}: Truncate at pos {pos} → {prev} → {current}")
@@ -288,7 +297,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Increment character at position N by 1 (ASCII value)
             pos_char = rule_str[i + 1]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
                     current = current[:pos] + chr(ord(current[pos]) + 1) + current[pos + 1 :]
@@ -301,7 +310,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Decrement character at position N by 1 (ASCII value)
             pos_char = rule_str[i + 1]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
                     current = current[:pos] + chr(ord(current[pos]) - 1) + current[pos + 1 :]
@@ -314,7 +323,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Replace char at pos N with char at pos N+1
             pos_char = rule_str[i + 1]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current) - 1:
                     current = current[:pos] + current[pos + 1] + current[pos + 1 :]
@@ -329,7 +338,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Replace char at pos N with char at pos N-1
             pos_char = rule_str[i + 1]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if 0 < pos < len(current):
                     current = current[:pos] + current[pos - 1] + current[pos + 1 :]
@@ -354,7 +363,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Bitwise shift right character at position N
             pos_char = rule_str[i + 1]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
                     current = current[:pos] + chr(ord(current[pos]) >> 1) + current[pos + 1 :]
@@ -367,7 +376,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Bitwise shift left character at position N
             pos_char = rule_str[i + 1]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
                     current = (
@@ -383,7 +392,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             pos_char = rule_str[i + 1]
             val_char = rule_str[i + 2]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
                     current = current[:pos] + val_char + current[pos + 1 :]
@@ -400,8 +409,8 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             pos_char = rule_str[i + 1]
             len_char = rule_str[i + 2]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
-                length = int(len_char, 16) if not len_char.isdigit() else int(len_char)
+                pos = _hashcat_pos(pos_char)
+                length = _hashcat_pos(len_char)
                 prev = current
                 if pos < len(current) and pos + length <= len(current):
                     current = current[pos : pos + length]
@@ -418,8 +427,8 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             pos1_char = rule_str[i + 1]
             pos2_char = rule_str[i + 2]
             try:
-                pos1 = int(pos1_char, 16) if not pos1_char.isdigit() else int(pos1_char)
-                pos2 = int(pos2_char, 16) if not pos2_char.isdigit() else int(pos2_char)
+                pos1 = _hashcat_pos(pos1_char)
+                pos2 = _hashcat_pos(pos2_char)
                 prev = current
                 if pos1 < len(current) and pos2 < len(current):
                     chars = list(current)
@@ -453,9 +462,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             m_char = rule_str[i + 2]
             l_char = rule_str[i + 3]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
-                m = int(m_char, 16) if not m_char.isdigit() else int(m_char)
-                l_pos = int(l_char, 16) if not l_char.isdigit() else int(l_char)
+                n = _hashcat_pos(n_char)
+                m = _hashcat_pos(m_char)
+                l_pos = _hashcat_pos(l_char)
                 prev = current
                 # Extract substring from memorized word
                 if n < len(memorized) and n + m <= len(memorized) and l_pos <= len(current):
@@ -474,7 +483,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             pos_char = rule_str[i + 1]
             check_char = rule_str[i + 2]
             try:
-                pos = int(pos_char, 16) if not pos_char.isdigit() else int(pos_char)
+                pos = _hashcat_pos(pos_char)
             except ValueError:
                 i += 1
                 continue
@@ -516,7 +525,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             n_char = rule_str[i + 1]
             m_char = rule_str[i + 2]
             try:
-                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
+                n = _hashcat_pos(n_char)
             except ValueError:
                 i += 1
                 continue
@@ -560,11 +569,26 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             i += 2
 
         elif char == "B" and i + 2 < len(rule_str):
-            # B is not a documented hashcat opcode; skip as no-op
-            arg1 = rule_str[i + 1]
-            arg2 = rule_str[i + 2]
-            steps.append(f"B{arg1}{arg2}: Unknown opcode B (no-op)")
-            i += 3
+            # BNX: byte at position N += ord(X), mod 256. The second arg is
+            # taken as a literal byte value (its raw ASCII codepoint added),
+            # NOT as a hashcat-encoded position. Verified empirically against
+            # hashcat 7.1.2; this matches the kernel's behavior for the B
+            # opcode even though it's not in the official rules docs.
+            pos_char = rule_str[i + 1]
+            add_char = rule_str[i + 2]
+            try:
+                pos = _hashcat_pos(pos_char)
+                prev = current
+                if pos < len(current):
+                    new_byte = (ord(current[pos]) + ord(add_char)) & 0xFF
+                    current = current[:pos] + chr(new_byte) + current[pos + 1 :]
+                steps.append(
+                    f"B{pos_char}{add_char}: Add ord('{add_char}')={ord(add_char)} "
+                    f"to byte at pos {pos} → {prev} → {current}"
+                )
+                i += 3
+            except (ValueError, IndexError):
+                i += 1
 
         elif char in rule_map:
             name, transform_func = rule_map[char]
