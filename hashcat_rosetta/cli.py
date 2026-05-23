@@ -232,7 +232,10 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             reject_char = rule_str[i + 1]
             if reject_char in current:
                 return None
-            steps.append(f"!{reject_char}: Reject if contains '{reject_char}' (no match)")
+            steps.append(
+                f"!{reject_char}: Reject if contains '{reject_char}' (no match) "
+                f"→ {current} → {current}"
+            )
             i += 2
 
         elif char == ">" and i + 1 < len(rule_str):
@@ -245,7 +248,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 continue
             if len(current) > n:
                 return None
-            steps.append(f">{n_char}: Length {len(current)} <= {n} (filter passed)")
+            steps.append(
+                f">{n_char}: Length {len(current)} <= {n} (filter passed) → {current} → {current}"
+            )
             i += 2
 
         elif char == "<" and i + 1 < len(rule_str):
@@ -258,7 +263,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 continue
             if len(current) < n:
                 return None
-            steps.append(f"<{n_char}: Length {len(current)} >= {n} (filter passed)")
+            steps.append(
+                f"<{n_char}: Length {len(current)} >= {n} (filter passed) → {current} → {current}"
+            )
             i += 2
 
         elif char == "'" and i + 1 < len(rule_str):
@@ -334,7 +341,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             check_char = rule_str[i + 1]
             if check_char not in current:
                 return None
-            steps.append(f"%{check_char}: Contains '{check_char}' (filter passed)")
+            steps.append(
+                f"%{check_char}: Contains '{check_char}' (filter passed) → {current} → {current}"
+            )
             i += 2
 
         elif char == "R" and i + 1 < len(rule_str):
@@ -468,7 +477,8 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             if pos >= len(current) or current[pos] != check_char:
                 return None
             steps.append(
-                f"={pos_char}{check_char}: Char at pos {pos} is '{check_char}' (filter passed)"
+                f"={pos_char}{check_char}: Char at pos {pos} is '{check_char}' (filter passed) "
+                f"→ {current} → {current}"
             )
             i += 3
 
@@ -477,7 +487,10 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             check_char = rule_str[i + 1]
             if not current or current[0] != check_char:
                 return None
-            steps.append(f"({check_char}: First char is '{check_char}' (filter passed)")
+            steps.append(
+                f"({check_char}: First char is '{check_char}' (filter passed) "
+                f"→ {current} → {current}"
+            )
             i += 2
 
         elif char == ")" and i + 1 < len(rule_str):
@@ -485,7 +498,10 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             check_char = rule_str[i + 1]
             if not current or current[-1] != check_char:
                 return None
-            steps.append(f"){check_char}: Last char is '{check_char}' (filter passed)")
+            steps.append(
+                f"){check_char}: Last char is '{check_char}' (filter passed) "
+                f"→ {current} → {current}"
+            )
             i += 2
 
         elif char == "v" and i + 2 < len(rule_str):
