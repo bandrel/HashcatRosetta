@@ -105,10 +105,11 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             i += 3
 
         elif char == "p" and i + 1 < len(rule_str):
-            # Duplicate word: pN - append duplicated word N times
+            # Duplicate word: pN - append duplicated word N times.
+            # Hashcat positional encoding: '0'-'9' = 0-9, 'A'-'Z' = 10-35.
             n_char = rule_str[i + 1]
             try:
-                n = int(n_char)
+                n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
                 prev = current
                 # Hashcat no-ops if result would exceed RP_PASSWORD_SIZE (256)
                 if len(current) + len(current) * n < 256:
@@ -186,7 +187,10 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             try:
                 n = int(n_char, 16) if not n_char.isdigit() else int(n_char)
                 prev = current
-                if n <= len(current):
+                # n==0 must be a no-op; current[-0:] is current[0:] == current,
+                # which would duplicate the whole word. Hashcat treats Y0 as
+                # "append zero chars" = no-op.
+                if 0 < n <= len(current):
                     current = current + current[-n:]
                 steps.append(f"Y{n_char}: Duplicate last {n} chars → {prev} → {current}")
                 i += 2
