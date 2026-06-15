@@ -28,7 +28,7 @@ dev = [
 ]
 
 [project.scripts]
-rosetta = "hashcat_rosetta.cli:main"
+hashcat-rosetta = "hashcat_rosetta.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hashcat_rosetta"]

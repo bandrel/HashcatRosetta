@@ -13,7 +13,7 @@ HashcatRosetta analyzes hashcat debug mode 4 output files to identify efficient 
 uv sync
 
 # Run CLI
-uv run rosetta --help
+uv run hashcat-rosetta --help
 uv run python -m hashcat_rosetta --help
 
 # Run tests
@@ -40,7 +40,7 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 - **`debug_analyzer.py`** - `DebugAnalyzer` wraps `DebugLogParser` and computes rule/baseword statistics (frequency, unique basewords per rule, unique candidates). This is the main entry point for debug file analysis.
 - **`analyzer.py`** - `RuleAnalyzer` wraps `RuleParser` for static rule analysis (complexity, efficiency scoring, characteristics extraction). Does not require debug output - analyzes rules in isolation.
 - **`formatting.py`** - Rule opcode descriptions and display formatting for the `analyze-rules` CLI command.
-- **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--export`, `--explain`, `--analyze-rules`). Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `rosetta` in pyproject.toml.
+- **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--export`, `--explain`, `--analyze-rules`). Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `hashcat-rosetta` in pyproject.toml.
 - **`scripts/sweep_opcodes.py`** - Systematic per-opcode correctness sweep. Generates ~230 rules covering every opcode in `_DEFAULT_IMPLEMENTED` against a canonical arg grid, runs them via `_verify.verify_corpus`, and emits a per-opcode matrix to `reports/opcode-sweep.md`. CI job `opcode-sweep` runs this on every PR; mismatches outside `KNOWN_LATENT` fail the build.
 
 The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `DebugAnalyzer` from `__init__.py`.
@@ -60,10 +60,10 @@ The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `Debu
 The CLI uses a single Click command with multiple flags rather than subcommands (despite the README showing subcommand-style usage). The actual interface is:
 
 ```bash
-rosetta FILE                              # show analysis summary
-rosetta FILE --rules --metric frequency   # top rules
-rosetta FILE --basewords --detail         # baseword analysis
-rosetta FILE --export report.json         # export report
-rosetta --explain "c$1" --baseword admin  # explain a rule
-rosetta rules.txt --analyze-rules        # analyze rule file opcodes
+hashcat-rosetta FILE                              # show analysis summary
+hashcat-rosetta FILE --rules --metric frequency   # top rules
+hashcat-rosetta FILE --basewords --detail         # baseword analysis
+hashcat-rosetta FILE --export report.json         # export report
+hashcat-rosetta --explain "c$1" --baseword admin  # explain a rule
+hashcat-rosetta rules.txt --analyze-rules        # analyze rule file opcodes
 ```
