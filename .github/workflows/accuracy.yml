@@ -6,10 +6,22 @@ on:
   schedule:
     - cron: "17 4 * * *"  # nightly 04:17 UTC
   workflow_dispatch:
+    inputs:
+      seed:
+        description: >-
+          Reproduce a nightly run with this exact seed. Leave blank to run
+          the quick smoke + opcode-sweep checks; provide a seed to re-run
+          the full nightly sweep deterministically (the seed of any run is
+          printed in its job summary).
+        required: false
+        default: ""
 
 jobs:
   smoke:
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    # PRs always; manual runs only when NOT reproducing a nightly (no seed).
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.seed == '')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -42,7 +54,10 @@ jobs:
             --report accuracy-smoke.json
 
   opcode-sweep:
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    # PRs always; manual runs only when NOT reproducing a nightly (no seed).
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.seed == '')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -75,7 +90,10 @@ jobs:
             opcode-sweep.json
 
   nightly:
-    if: github.event_name == 'schedule'
+    # Scheduled nightly, or a manual reproduction run when a seed is given.
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.seed != '')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -102,8 +120,33 @@ jobs:
         # invocations, ~40 min on the runner. The original 10000x5x24 spec
         # (1.2M invocations) would have needed ~6 days. If the runner gets
         # faster or we batch into one hashcat call per baseword, scope back up.
+        #
+        # The workflow owns seed selection so the exact seed is recorded in
+        # the job summary and can be replayed via workflow_dispatch. INPUT_SEED
+        # is passed through env (never interpolated into the shell) and is
+        # validated as numeric before use.
+        env:
+          INPUT_SEED: ${{ inputs.seed }}
         run: |
+          set -euo pipefail
+          if [ -n "${INPUT_SEED}" ]; then
+            if ! printf '%s' "${INPUT_SEED}" | grep -Eq '^[0-9]+$'; then
+              echo "::error::seed input must be a non-negative integer, got: ${INPUT_SEED}"
+              exit 1
+            fi
+            SEED="${INPUT_SEED}"
+          else
+            SEED=$(( $(date +%s) % 100000 ))
+          fi
+          echo "Using seed=${SEED}"
+          {
+            echo "### Accuracy nightly"
+            echo ""
+            echo "- **seed:** \`${SEED}\`"
+            echo "- **reproduce:** Actions → accuracy → Run workflow → seed \`${SEED}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
           uv run python scripts/verify_rules.py --count 500 --rounds 1 \
+            --seed "${SEED}" \
             --basewords tests/data/basewords.json \
             --report accuracy-nightly.json
       - name: Upload report
