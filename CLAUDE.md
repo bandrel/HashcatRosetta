@@ -51,7 +51,7 @@ The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `Debu
 - Line length: 100 (configured in pyproject.toml for ruff)
 - Python: >=3.10
 - Dependencies: click
-- Dev dependencies: pytest, pytest-cov, ruff, mypy (in `[project.optional-dependencies] dev`)
+- Dev dependencies: pytest, pytest-cov, ruff, mypy, pre-commit (in `[dependency-groups] dev`; installed by default with `uv sync`)
 - Test paths configured to `tests/` directory
 - Tests marked with `@pytest.mark.integration` require the hashcat binary
 
