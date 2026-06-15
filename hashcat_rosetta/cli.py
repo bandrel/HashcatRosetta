@@ -39,6 +39,23 @@ def _hashcat_pos(c: str) -> int:
     raise ValueError(f"invalid hashcat position char: {c!r}")
 
 
+# hashcat's rule engine works in a fixed RP_PASSWORD_SIZE (256) byte buffer.
+# A length-expanding opcode is applied only when its result still fits below
+# that size; otherwise hashcat treats the op as a no-op (it does NOT truncate).
+# Verified against hashcat 7.1.2: the boundary is strict — a result of exactly
+# 256 is rejected, so an op applies iff the result length is < 256.
+_RP_PASSWORD_SIZE = 256
+
+
+def _cap(prev: str, new: str) -> str:
+    """Return ``new`` unless it would exceed hashcat's length cap, else ``prev``.
+
+    Mirrors hashcat's no-op-on-overflow behavior for length-expanding opcodes.
+    Length-preserving and shrinking ops pass through unchanged.
+    """
+    return new if len(new) < _RP_PASSWORD_SIZE else prev
+
+
 def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
     if not rule_str:
@@ -88,7 +105,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         if char == "$" and i + 1 < len(rule_str):
             append_char = rule_str[i + 1]
             prev = current
-            current = current + append_char
+            current = _cap(prev, current + append_char)
             steps.append(f"${append_char}: Append '{append_char}' → {prev} → {current}")
             i += 2
 
@@ -96,7 +113,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         elif char == "^" and i + 1 < len(rule_str):
             prepend_char = rule_str[i + 1]
             prev = current
-            current = prepend_char + current
+            current = _cap(prev, prepend_char + current)
             steps.append(f"^{prepend_char}: Prepend '{prepend_char}' → {prev} → {current}")
             i += 2
 
@@ -112,7 +129,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
 
                 prev = current
                 if pos <= len(current):
-                    current = current[:pos] + val_char + current[pos:]
+                    current = _cap(prev, current[:pos] + val_char + current[pos:])
                 steps.append(
                     f"i{pos_char}{val_char}: Insert '{val_char}' at pos {pos} → {prev} → {current}"
                 )
@@ -136,9 +153,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             try:
                 n = _hashcat_pos(n_char)
                 prev = current
-                # Hashcat no-ops if result would exceed RP_PASSWORD_SIZE (256)
-                if len(current) + len(current) * n < 256:
-                    current = current * (n + 1)
+                current = _cap(prev, current * (n + 1))
                 steps.append(f"p{n_char}: Append duplicated word {n} times → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -194,7 +209,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 n = _hashcat_pos(n_char)
                 prev = current
                 if n <= len(current):
-                    current = current[:n] + current
+                    current = _cap(prev, current[:n] + current)
                 steps.append(f"y{n_char}: Duplicate first {n} chars → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -210,7 +225,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 # which would duplicate the whole word. Hashcat treats Y0 as
                 # "append zero chars" = no-op.
                 if 0 < n <= len(current):
-                    current = current + current[-n:]
+                    current = _cap(prev, current + current[-n:])
                 steps.append(f"Y{n_char}: Duplicate last {n} chars → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -223,7 +238,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 n = _hashcat_pos(n_char)
                 prev = current
                 if current:
-                    current = current[0] * n + current
+                    current = _cap(prev, current[0] * n + current)
                 steps.append(f"z{n_char}: Duplicate first char {n} times → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -236,7 +251,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 n = _hashcat_pos(n_char)
                 prev = current
                 if current:
-                    current = current + current[-1] * n
+                    current = _cap(prev, current + current[-1] * n)
                 steps.append(f"Z{n_char}: Duplicate last char {n} times → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -455,7 +470,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             # Append memorized word (RULE_OP_MANGLE_TOGGLECASE_REC in hashcat source,
             # but treated here as append-memorized semantics matching CPU-mode behavior)
             prev = current
-            current = current + memorized
+            current = _cap(prev, current + memorized)
             steps.append(f"a: Append memorized '{memorized}' → {prev} → {current}")
             i += 1
 
@@ -479,7 +494,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 # Extract substring from memorized word
                 if n < len(memorized) and n + m <= len(memorized) and l_pos <= len(current):
                     substring = memorized[n : n + m]
-                    current = current[:l_pos] + substring + current[l_pos:]
+                    current = _cap(prev, current[:l_pos] + substring + current[l_pos:])
                 steps.append(
                     f"X{n_char}{m_char}{l_char}: Insert {m} chars from memorized word"
                     f" at pos {n} into pos {l_pos} → {prev} → {current}"
@@ -553,7 +568,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                         # Partial chunk at end: append remaining chars, no separator
                         result_chars.extend(current[pos:])
                     pos += n
-                current = "".join(result_chars)
+                current = _cap(prev, "".join(result_chars))
             steps.append(
                 f"v{n_char}{m_char}: Insert '{m_char}' after every {n} chars → {prev} → {current}"
             )
@@ -603,7 +618,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         elif char in rule_map:
             name, transform_func = rule_map[char]
             prev = current
-            current = transform_func(current)
+            # d/f/q grow the word; the rest preserve length. _cap only reverts
+            # the growers when they would cross hashcat's 256-byte cap.
+            current = _cap(prev, transform_func(current))
             steps.append(f"{char}: {name} → {prev} → {current}")
             i += 1
 
