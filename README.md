@@ -36,8 +36,14 @@ pip install -e .
 
 ### With development dependencies
 
+The dev tools live in the `dev` [dependency group](https://peps.python.org/pep-0735/).
+
 ```bash
-pip install -e ".[dev]"
+# With uv (installs the dev group by default)
+uv sync
+
+# With pip (25.1+)
+pip install -e . --group dev
 ```
 
 ### Using with uv (recommended)

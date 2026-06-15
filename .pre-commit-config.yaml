@@ -17,7 +17,7 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run --extra dev pytest -m "not integration"
+        entry: uv run --group dev pytest -m "not integration"
         language: system
         types: [python]
         pass_filenames: false
