@@ -66,22 +66,21 @@ class TestVerifyRuleIntegration:
             pytest.skip("hashcat binary not available")
         assert result.status == "match", f"got {result}"
 
-    @pytest.mark.integration
-    def test_filter_rejection_agreement(self) -> None:
-        """When `!a` filter fires, both sides should agree on rejection."""
-        from hashcat_rosetta._verify import verify_rule
-
-        result = verify_rule("!a", "password")
-        if result.status == "skipped_hashcat":
-            pytest.skip("hashcat binary not available")
-        assert result.status == "match", (
-            f"both should reject 'password' for rule '!a', got {result}"
-        )
-
 
 class TestHashcatUnsupportedOpcodes:
     """Rules using M or X are silently rejected by hashcat --stdout in 6.2.6+;
     treat them as unverifiable rather than mismatches."""
+
+    def test_filter_opcode_is_unsupported(self) -> None:
+        """Pure-filter rules (e.g. `!a`) cannot be verified via hashcat
+        --stdout: hashcat refuses to compile a filter-only rule ("No valid
+        rules left", exit 255) whether or not the filter would pass, so it
+        emits no candidate to compare against. The harness classifies these as
+        unverifiable rather than issuing a hashcat call."""
+        from hashcat_rosetta._verify import verify_rule
+
+        result = verify_rule("!a", "password")
+        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
 
     def test_M_alone_is_unsupported(self) -> None:
         from hashcat_rosetta._verify import verify_rule
