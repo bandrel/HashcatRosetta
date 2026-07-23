@@ -284,5 +284,96 @@ class TestDebugAnalyzer:
         assert "top_basewords" in export
 
 
+class TestDebugAnalyzerWordlists:
+    """Tests for wordlist aggregation (mode-5 support) in DebugAnalyzer."""
+
+    def test_wordlist_aggregation(self):
+        """Test per-wordlist aggregation from mode-5 entries."""
+        analyzer = DebugAnalyzer(debug_mode=5)
+        lines = [
+            "password:c:Password:rockyou.txt",
+            "password:u:PASSWORD:rockyou.txt",
+            "admin:c:Admin:rockyou.txt",
+            "root:l:root:common.txt",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        assert result["unique_wordlists"] == 2
+
+        rockyou = analyzer.wordlist_stats["rockyou.txt"]
+        assert rockyou["count"] == 3
+        assert rockyou["basewords"] == {"password", "admin"}
+        assert rockyou["candidates"] == {"Password", "PASSWORD", "Admin"}
+        assert rockyou["rules"] == {"c", "u"}
+
+        common = analyzer.wordlist_stats["common.txt"]
+        assert common["count"] == 1
+        assert common["basewords"] == {"root"}
+        assert common["rules"] == {"l"}
+
+    def test_mode4_input_no_wordlists(self):
+        """Test that mode-4 input (wordlist None) creates no wordlist buckets."""
+        analyzer = DebugAnalyzer()
+        lines = [
+            "password c P@ssword",
+            "password u PASSWORD",
+            "admin c Admin",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        assert result["unique_wordlists"] == 0
+        assert len(analyzer.wordlist_stats) == 0
+        assert analyzer.get_top_wordlists() == []
+        assert analyzer.get_wordlist_statistics_summary() == {}
+
+    def test_get_top_wordlists_ordering(self):
+        """Test top wordlists are ordered by count descending."""
+        analyzer = DebugAnalyzer(debug_mode=5)
+        lines = [
+            "a:c:A:big.txt",
+            "b:c:B:big.txt",
+            "c:c:C:big.txt",
+            "d:c:D:mid.txt",
+            "e:c:E:mid.txt",
+            "f:c:F:small.txt",
+        ]
+        analyzer.analyze_debug_lines(lines)
+        top = analyzer.get_top_wordlists()
+        assert top == [("big.txt", 3), ("mid.txt", 2), ("small.txt", 1)]
+
+    def test_export_includes_wordlist_section(self):
+        """Test export_to_dict includes a JSON-serializable wordlist section."""
+        import json
+
+        analyzer = DebugAnalyzer(debug_mode=5)
+        lines = [
+            "password:c:Password:rockyou.txt",
+            "admin:c:Admin:rockyou.txt",
+        ]
+        analyzer.analyze_debug_lines(lines)
+        export = analyzer.export_to_dict()
+        assert "top_wordlists" in export
+        assert "wordlist_summary" in export
+        assert "all_wordlist_details" in export
+        # Must be JSON-serializable (no sets leaking through).
+        json.dumps(export)
+
+    def test_get_wordlist_detail(self):
+        """Test getting detail for a wordlist, and None for an unknown one."""
+        analyzer = DebugAnalyzer(debug_mode=5)
+        lines = [
+            "password:c:Password:rockyou.txt",
+            "password:u:PASSWORD:rockyou.txt",
+            "admin:c:Admin:rockyou.txt",
+        ]
+        analyzer.analyze_debug_lines(lines)
+        detail = analyzer.get_wordlist_detail("rockyou.txt")
+        assert detail is not None
+        assert detail["wordlist"] == "rockyou.txt"
+        assert detail["total_occurrences"] == 3
+        assert detail["unique_basewords"] == 2
+        assert detail["unique_candidates"] == 3
+        assert detail["unique_rules"] == 2
+        assert analyzer.get_wordlist_detail("missing.txt") is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
