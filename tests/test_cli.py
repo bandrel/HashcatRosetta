@@ -159,6 +159,13 @@ class TestWordlistsFlag:
         assert "rockyou.txt" not in result.output
         assert "common.txt" not in result.output
 
+    def test_wordlists_auto_detect_no_debug_mode(self, runner, debug_file_mode5):
+        """Without --debug-mode, 'auto' must detect mode 5 and attribute wordlists."""
+        result = runner.invoke(main, [debug_file_mode5, "--wordlists"])
+        assert result.exit_code == 0
+        assert "rockyou.txt" in result.output
+        assert "common.txt" in result.output
+
 
 # --- --export flag ---
 
@@ -183,6 +190,18 @@ class TestExportFlag:
             content = f.read()
         assert "Rule" in content
         assert "Baseword" in content
+
+    def test_export_csv_mode5_includes_wordlist_section(self, runner, debug_file_mode5, tmp_path):
+        export_path = str(tmp_path / "report.csv")
+        result = runner.invoke(main, [debug_file_mode5, "--export", export_path, "--format", "csv"])
+        assert result.exit_code == 0
+        assert "CSV report exported" in result.output
+        with open(export_path) as f:
+            content = f.read()
+        assert "# WORDLIST ANALYSIS" in content
+        assert "Wordlist" in content
+        assert "rockyou.txt" in content
+        assert "common.txt" in content
 
 
 # --- --explain flag ---
