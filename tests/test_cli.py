@@ -156,7 +156,8 @@ class TestWordlistsFlag:
         result = runner.invoke(main, [debug_file_mode5, "--debug-mode", "4", "--wordlists"])
         assert result.exit_code == 0
         # No wordlist data parsed, so the wordlist names do not appear as entries.
-        assert "rockyou.txt" not in result.output or "common.txt" not in result.output
+        assert "rockyou.txt" not in result.output
+        assert "common.txt" not in result.output
 
 
 # --- --export flag ---
