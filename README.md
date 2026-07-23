@@ -10,11 +10,12 @@
 
 # HashcatRosetta
 
-A Python project designed to analyze hashcat debug mode 4 output files to identify the most efficient rules and track baseword frequency patterns used during password cracking attacks.
+A Python project designed to analyze hashcat debug mode 4 and mode 5 output files to identify the most efficient rules and track baseword frequency patterns used during password cracking attacks.
 
 ## Features
 
-- **Parse hashcat debug files** (--debug-mode 4 format) with automatic baseword and rule extraction
+- **Parse hashcat debug files** (`--debug-mode 4` and `--debug-mode 5`) with automatic baseword and rule extraction
+- **Attribute candidates to source wordlists** (mode 5) for per-wordlist statistics
 - **Track rule efficiency** by multiple metrics:
   - Application frequency (most commonly applied rules)
   - Baseword spread (rules applied to most unique basewords)
@@ -85,6 +86,25 @@ hashcat-rosetta debug_output.txt --rules --metric candidates
 Show basewords appearing multiple times:
 ```bash
 hashcat-rosetta debug_output.txt --basewords --top 10
+```
+
+Show top wordlists (debug mode 5 only):
+```bash
+hashcat-rosetta debug_output.txt --wordlists --top 10
+```
+
+Show detailed per-wordlist statistics (unique basewords, candidates, and rules):
+```bash
+hashcat-rosetta debug_output.txt --wordlists --top 10 --detail
+```
+
+The `--wordlists` output mirrors `--rules`: a `Top N Wordlists` header followed by
+numbered `Wordlist: <name> (<count>)` lines. When a mode-5 file is analyzed without
+any output flags, the default summary also includes a **Wordlist Statistics** section.
+
+Force a specific debug mode instead of auto-detecting it:
+```bash
+hashcat-rosetta debug_output.txt --debug-mode 5 --wordlists
 ```
 
 Show detailed baseword analysis:
@@ -174,19 +194,58 @@ Each line contains three **colon-separated** fields with the same meaning as abo
 
 **Note**: The analyzer automatically detects which format your file uses. No manual configuration needed!
 
-### Generating debug files
+### Debug mode 5 format (wordlist attribution)
 
-Generate debug output with hashcat using `--debug-mode 4`:
+Hashcat `--debug-mode 5` adds a trailing **wordlist** field to each colon-separated line:
 
-```bash
-# Modern hashcat (produces space-separated format)
-hashcat -m [hash-mode] -a 0 --debug-mode 4 -r rules.rule hashes.txt wordlist.txt > debug.txt
-
-# Older hashcat versions (produces colon-separated format)  
-hashcat -m [hash-mode] -a 0 --debug-mode=4 -r rules.rule hashes.txt wordlist.txt > debug.txt
+```
+baseword:rule:candidate:wordlist
+password:c:P@ssword:/opt/wordlists/rockyou.txt
+admin:l:admin:/opt/wordlists/rockyou.txt
+letmein:[:etmein:<stdin>
 ```
 
-**Important**: Only use `--debug-mode 4`. Other debug modes (1-3) produce different output formats that are not compatible with this analyzer.
+Each line contains four fields:
+- **baseword**: The original dictionary word
+- **rule**: The hashcat rule applied
+- **candidate**: The resulting password candidate
+- **wordlist**: The source dictionary path, or a sentinel (`<stdin>`, `<generic>`, `<none>`) when hashcat has no path to report
+
+Mode 5 unlocks the `--wordlists` output and a **Wordlist Statistics** section in the
+default summary. Mode-4 analysis is unchanged.
+
+### Choosing the debug mode
+
+By default the analyzer auto-detects the mode by counting fields. Use `--debug-mode`
+to force interpretation:
+
+```bash
+hashcat-rosetta debug.txt --debug-mode auto   # default: detect from field count
+hashcat-rosetta debug.txt --debug-mode 4      # force mode 4
+hashcat-rosetta debug.txt --debug-mode 5      # force mode 5
+```
+
+`--debug-mode` applies to debug-file analysis only (not `--analyze-rules`).
+
+**Windows path limitation**: Hashcat does not escape colons, so basewords, candidates,
+and Windows wordlist paths (e.g. `C:\wordlists\rockyou.txt`) may contain `:`. The parser
+assumes the trailing wordlist field contains no colon, which holds for Linux paths and the
+sentinels but not for Windows drive-letter paths. Forcing `--debug-mode 5` mitigates this
+by treating everything after the candidate as the wordlist field.
+
+### Generating debug files
+
+Generate debug output with hashcat using `--debug-mode 4` or `--debug-mode 5`:
+
+```bash
+# Mode 4 (baseword rule candidate)
+hashcat -m [hash-mode] -a 0 --debug-mode 4 -r rules.rule hashes.txt wordlist.txt > debug.txt
+
+# Mode 5 (baseword:rule:candidate:wordlist — adds source wordlist attribution)
+hashcat -m [hash-mode] -a 0 --debug-mode 5 -r rules.rule hashes.txt wordlist.txt > debug.txt
+```
+
+**Important**: Use `--debug-mode 4` or `--debug-mode 5`. Other debug modes (1-3) produce different output formats that are not compatible with this analyzer.
 
 ## Project Structure
 
@@ -260,6 +319,8 @@ This helps identify:
 hashcat-rosetta FILE                                  Show analysis summary
 hashcat-rosetta FILE --rules --metric frequency       Show top rules by metric
 hashcat-rosetta FILE --basewords --detail             Show baseword analysis
+hashcat-rosetta FILE --wordlists --detail             Show wordlist analysis (mode 5)
+hashcat-rosetta FILE --debug-mode 5 --wordlists       Force mode 5, show wordlists
 hashcat-rosetta FILE --export report.json             Export analysis report
 hashcat-rosetta --explain "c$1" --baseword admin      Explain a rule step-by-step
 hashcat-rosetta rules.txt --analyze-rules             Analyze rule file opcodes
