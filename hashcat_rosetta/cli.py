@@ -828,7 +828,7 @@ def main(
                 f"      Average per Wordlist: {wl_stats.get('avg_entries_per_wordlist', 0):.2f}"
             )
             click.echo(f"      Max Entries: {wl_stats.get('max_entries', 0)}")
-            click.echo("      Top Wordlists:")
+            click.echo("      Top 5 Wordlists:")
             for wordlist, count in analyzer.get_top_wordlists(5):
                 click.echo(f"         {wordlist} ({count})")
         return
