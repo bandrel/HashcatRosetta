@@ -929,6 +929,31 @@ def _export_to_csv(analyzer: DebugAnalyzer, filepath: str) -> None:
                     ]
                 )
 
+        # Wordlist section (mode-5 only; mode-4 files yield header with no rows)
+        f.write("\n# WORDLIST ANALYSIS\n")
+        writer.writerow(
+            [
+                "Wordlist",
+                "Total Occurrences",
+                "Unique Basewords",
+                "Unique Candidates",
+                "Unique Rules",
+            ]
+        )
+
+        for wordlist in sorted(analyzer.wordlist_stats.keys()):
+            wl_detail = analyzer.get_wordlist_detail(wordlist)
+            assert wl_detail is not None  # key came from wordlist_stats
+            writer.writerow(
+                [
+                    wordlist,
+                    wl_detail["total_occurrences"],
+                    wl_detail["unique_basewords"],
+                    wl_detail["unique_candidates"],
+                    wl_detail["unique_rules"],
+                ]
+            )
+
 
 if __name__ == "__main__":
     main()
