@@ -5,20 +5,58 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class DebugLogParser:
-    """Parse hashcat debug mode 4 output files."""
+# Sentinel wordlist values hashcat emits when there is no real dict path.
+_WORDLIST_SENTINELS = frozenset({"<stdin>", "<generic>", "<none>"})
+# Extensions commonly used for wordlist files, used by mode auto-detection.
+_WORDLIST_EXTENSIONS = (".txt", ".dict", ".lst", ".wordlist")
+# Number of leading non-empty, non-comment lines sampled for format/mode
+# auto-detection.
+_DETECTION_SAMPLE_SIZE = 20
 
-    def __init__(self):
-        """Initialize the debug log parser."""
+
+class DebugLogParser:
+    """Parse hashcat debug mode 4 and mode 5 output files.
+
+    Mode 4 lines are ``baseword:rule:candidate`` (or the legacy space-separated
+    ``baseword rule candidate``). Mode 5 adds a trailing WORDLIST field:
+    ``baseword:rule:candidate:wordlist`` where wordlist is the dict path or one
+    of the sentinels ``<stdin>``/``<generic>``/``<none>``.
+
+    Colon-in-data limitation: hashcat does not escape colons, so basewords,
+    candidates, and Windows drive-letter wordlist paths (``C:\\...``) may contain
+    ``:``. This parser keeps the existing mode-4 assumption (baseword has no
+    colon; candidate may contain colons) and additionally assumes the wordlist
+    field (the LAST field) has no colon. That holds for Linux paths and the
+    sentinels; Windows drive-letter paths are a known, documented limitation,
+    mitigated by passing an explicit ``debug_mode`` override.
+    """
+
+    def __init__(self, debug_mode: int | None = None):
+        """Initialize the debug log parser.
+
+        Args:
+            debug_mode: Optional override for the hashcat debug mode. ``None``
+                auto-detects, ``4`` forces mode-4 parsing (no wordlist field),
+                ``5`` forces mode-5 parsing (trailing wordlist field). An
+                explicit override always wins over auto-detection.
+        """
+        self.debug_mode: int | None = debug_mode
         self.entries: list = []
         self._format: str | None = None  # "space" or "colon", detected per file/batch
+        self._mode: int | None = None  # 4 or 5, detected per file/batch (colon only)
 
     def parse_debug_file(self, filepath: str) -> list:
         """
-        Parse a hashcat debug mode 4 file.
+        Parse a hashcat debug mode 4 or mode 5 file.
 
-        Format: baseword rule candidate
-        Example: password c P@ssword
+        Mode 4 format: baseword:rule:candidate (or space-separated)
+        Mode 5 format: baseword:rule:candidate:wordlist
+        Example (mode 4): password c P@ssword
+        Example (mode 5): password:c:P@ssword:rockyou.txt
+
+        The format (space vs colon) and debug mode (4 vs 5) are auto-detected
+        from a sample of lines unless an explicit ``debug_mode`` was passed to
+        the constructor.
 
         Args:
             filepath: Path to the debug file
@@ -29,6 +67,7 @@ class DebugLogParser:
                 'baseword': str,
                 'rule': str,
                 'candidate': str,
+                'wordlist': str | None (dict path/sentinel for mode 5, else None),
                 'matched': bool (whether candidate matched a hash)
             }
         """
@@ -39,10 +78,12 @@ class DebugLogParser:
                 # Read all lines for format detection
                 all_lines = f.readlines()
 
-            # Detect format from sample of lines
-            self._format = self._detect_format(
-                [line.strip() for line in all_lines if line.strip() and not line.startswith("#")]
-            )
+            # Detect format and mode from a sample of lines
+            sample = [
+                line.strip() for line in all_lines if line.strip() and not line.startswith("#")
+            ]
+            self._format = self._detect_format(sample)
+            self._mode = self._resolve_mode(sample)
 
             for line_num, line in enumerate(all_lines, 1):
                 parsed = self._parse_line(line.strip())
@@ -81,7 +122,7 @@ class DebugLogParser:
         """
         Detect whether the file uses space-separated or colon-separated format.
 
-        Samples up to the first 20 non-empty, non-comment lines. Uses heuristics
+        Samples up to _DETECTION_SAMPLE_SIZE non-empty, non-comment lines. Uses heuristics
         to distinguish between the two formats:
         - If space-split produces 3+ parts with a clean baseword (no colons),
           it is space-separated.
@@ -94,7 +135,7 @@ class DebugLogParser:
         Returns:
             "colon" or "space"
         """
-        sample = lines[:20]
+        sample = lines[:_DETECTION_SAMPLE_SIZE]
         if not sample:
             return "space"
 
@@ -122,6 +163,65 @@ class DebugLogParser:
                     space_votes += 1
 
         return "colon" if colon_votes > space_votes else "space"
+
+    def _resolve_mode(self, lines: list[str]) -> int:
+        """Resolve the debug mode, honoring an explicit override.
+
+        The explicit ``debug_mode`` override always wins. Mode detection only
+        applies to colon format; space format is always treated as mode-4-style
+        (3 fields, wordlist=None).
+
+        Args:
+            lines: List of stripped, non-empty, non-comment lines
+
+        Returns:
+            4 or 5
+        """
+        if self.debug_mode is not None:
+            return self.debug_mode
+        if self._format != "colon":
+            return 4
+        return self._detect_mode(lines)
+
+    @staticmethod
+    def _looks_like_wordlist(field: str) -> bool:
+        """Return True if a trailing field looks like a hashcat wordlist value."""
+        if field in _WORDLIST_SENTINELS:
+            return True
+        if "/" in field or "\\" in field:
+            return True
+        return any(field.endswith(ext) for ext in _WORDLIST_EXTENSIONS)
+
+    def _detect_mode(self, lines: list[str]) -> int:
+        """Auto-detect mode 4 vs mode 5 for colon-format lines.
+
+        Uses a majority vote over the sample (mirroring _detect_format): a line
+        votes mode 5 when it has >= 3 colons AND its trailing colon-separated
+        field looks like a wordlist -- a sentinel, or path-like (contains a
+        slash or a common wordlist extension). If the majority of sampled lines
+        vote mode 5 the file is mode 5, otherwise mode 4. Voting tolerates the
+        occasional odd line (e.g. a candidate ending in ':' or a wordlist with
+        no recognized extension) without flipping the whole file.
+
+        Args:
+            lines: List of stripped, non-empty, non-comment lines
+
+        Returns:
+            4 or 5
+        """
+        sample = lines[:_DETECTION_SAMPLE_SIZE]
+        if not sample:
+            return 4
+
+        mode_five_votes = 0
+        for line in sample:
+            if line.count(":") < 3:
+                continue
+            last_field = line.rsplit(":", 1)[1]
+            if self._looks_like_wordlist(last_field):
+                mode_five_votes += 1
+
+        return 5 if mode_five_votes > len(sample) / 2 else 4
 
     def _parse_line(self, line: str) -> dict | None:
         """
@@ -155,13 +255,39 @@ class DebugLogParser:
             # detect from this single line using the same heuristic
             detected = self._detect_format([line])
             if detected == "colon":
+                self._mode = self._resolve_mode([line])
                 return self._parse_colon_line(line)
             return self._parse_space_line(line)
 
     def _parse_colon_line(self, line: str) -> dict | None:
-        """Parse a colon-separated debug line."""
+        """Parse a colon-separated debug line (mode 4 or mode 5)."""
         if ":" not in line:
             return None
+
+        mode = self.debug_mode if self.debug_mode is not None else self._mode
+
+        if mode == 5:
+            parts = line.split(":", 2)
+            if len(parts) != 3:
+                return None
+            baseword, rule, remainder = parts
+            candidate, sep, wordlist = remainder.rpartition(":")
+            if not sep:
+                # remainder had no colon: this line has only 3 fields and no
+                # wordlist. Under forced/detected mode 5 that is malformed --
+                # skip it rather than silently misassigning the candidate.
+                logger.warning("Skipping malformed mode-5 line (missing wordlist field): %r", line)
+                return None
+            if not baseword and not rule and not candidate and not wordlist:
+                return None
+            return {
+                "baseword": baseword,
+                "rule": rule,
+                "candidate": candidate,
+                "wordlist": wordlist,
+                "matched": False,
+            }
+
         parts = line.split(":", 2)
         if len(parts) != 3:
             return None
@@ -172,6 +298,7 @@ class DebugLogParser:
             "baseword": baseword,
             "rule": rule,
             "candidate": candidate,
+            "wordlist": None,
             "matched": False,
         }
 
@@ -198,6 +325,7 @@ class DebugLogParser:
             "baseword": baseword,
             "rule": rule,
             "candidate": candidate,
+            "wordlist": None,
             "matched": False,
         }
 
@@ -215,6 +343,7 @@ class DebugLogParser:
         stripped = [line.strip() for line in lines if line and line.strip()]
         non_comment = [line for line in stripped if not line.startswith("#")]
         self._format = self._detect_format(non_comment)
+        self._mode = self._resolve_mode(non_comment)
 
         entries: list = []
         for line_num, line in enumerate(lines, 1):
