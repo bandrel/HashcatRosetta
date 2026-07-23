@@ -5,6 +5,8 @@ preservation inside candidates, auto-detection of the debug mode from a sample
 of lines, and the explicit debug_mode override.
 """
 
+import tempfile
+
 from hashcat_rosetta.parser import DebugLogParser
 
 
@@ -123,6 +125,73 @@ class TestOverride:
         entries = parser.parse_debug_lines(["password:c:Password:rockyou.txt"])
         assert entries[0]["candidate"] == "Password:rockyou.txt"
         assert entries[0]["wordlist"] is None
+
+    def test_force_mode_five_three_field_line_skipped(self):
+        # A 3-field line has no wordlist field. Forcing mode 5 must skip it
+        # rather than silently misassigning the candidate to the wordlist.
+        parser = DebugLogParser(debug_mode=5)
+        entries = parser.parse_debug_lines(["password:c:Password"])
+        assert entries == []
+
+    def test_force_mode_five_trailing_colon_empty_wordlist(self):
+        # Trailing colon => explicit empty wordlist field. Candidate keeps its
+        # value and wordlist is the empty string.
+        parser = DebugLogParser(debug_mode=5)
+        entries = parser.parse_debug_lines(["password:c:Password:"])
+        assert len(entries) == 1
+        assert entries[0]["candidate"] == "Password"
+        assert entries[0]["wordlist"] == ""
+
+
+class TestDetectModeMajorityVote:
+    """Mode auto-detection uses a majority vote, tolerating odd lines."""
+
+    def test_single_odd_line_does_not_flip_to_mode_four(self):
+        # Majority of lines are clearly mode 5; one odd line (trailing field
+        # not wordlist-like) must not flip the whole file to mode 4.
+        lines = [
+            "password:c:Password:rockyou.txt",
+            "admin:c:Admin:rockyou.txt",
+            "letmein:c:Letmein:rockyou.txt",
+            "weird:c:Weird:notawordlist",
+        ]
+        parser = DebugLogParser()
+        entries = parser.parse_debug_lines(lines)
+        assert len(entries) == 4
+        assert entries[0]["wordlist"] == "rockyou.txt"
+
+    def test_majority_mode_four_stays_mode_four(self):
+        lines = [
+            "password:c:Password",
+            "admin:c:Admin",
+            "letmein:c:Letmein",
+            "weird:c:Weird:rockyou.txt",
+        ]
+        parser = DebugLogParser()
+        entries = parser.parse_debug_lines(lines)
+        assert all(e["wordlist"] is None for e in entries)
+
+
+class TestParseDebugFile:
+    """parse_debug_file (on-disk) honors the debug_mode constructor arg."""
+
+    def test_file_with_explicit_mode_five(self):
+        content = (
+            "password:c:Password:rockyou.txt\n"
+            "admin:c:Admin:rockyou.txt\n"
+            "letmein:c:Letmein:rockyou.txt\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tf:
+            tf.write(content)
+            path = tf.name
+
+        parser = DebugLogParser(debug_mode=5)
+        entries = parser.parse_debug_file(path)
+        assert len(entries) == 3
+        assert entries[0]["baseword"] == "password"
+        assert entries[0]["candidate"] == "Password"
+        assert entries[0]["wordlist"] == "rockyou.txt"
+        assert all(e["wordlist"] == "rockyou.txt" for e in entries)
 
 
 class TestSpaceFormat:
