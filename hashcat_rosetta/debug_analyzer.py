@@ -21,9 +21,15 @@ def _median(values: list[int]) -> float:
 class DebugAnalyzer:
     """Analyze hashcat debug files for rule efficiency and baseword patterns."""
 
-    def __init__(self) -> None:
-        """Initialize the debug analyzer."""
-        self.parser = DebugLogParser()
+    def __init__(self, debug_mode: int | None = None) -> None:
+        """Initialize the debug analyzer.
+
+        Args:
+            debug_mode: Optional override for the hashcat debug mode passed
+                through to the parser. ``None`` auto-detects, ``4`` forces
+                mode-4 parsing, ``5`` forces mode-5 parsing (wordlist field).
+        """
+        self.parser = DebugLogParser(debug_mode=debug_mode)
         self.entries: list[dict[str, Any]] = []
 
         # Rule statistics
@@ -42,6 +48,17 @@ class DebugAnalyzer:
                 "occurrences": [],  # List of {rule, candidate, matched}
                 "count": 0,
                 "match_count": 0,
+            }
+        )
+
+        # Wordlist statistics (mode-5 only)
+        self.wordlist_stats: defaultdict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "count": 0,  # Total entries attributed to this wordlist
+                "basewords": set(),  # Unique basewords from this wordlist
+                "candidates": set(),  # Unique candidates from this wordlist
+                "rules": set(),  # Unique rules seen with this wordlist
+                "match_count": 0,  # Successful matches
             }
         )
 
@@ -75,11 +92,13 @@ class DebugAnalyzer:
         """Compute statistics from parsed entries."""
         self.rule_stats.clear()
         self.baseword_stats.clear()
+        self.wordlist_stats.clear()
 
         for entry in self.entries:
             baseword = entry["baseword"]
             rule = entry["rule"]
             candidate = entry["candidate"]
+            wordlist = entry.get("wordlist")
 
             # Update rule statistics
             self.rule_stats[rule]["count"] += 1
@@ -102,12 +121,23 @@ class DebugAnalyzer:
             if entry.get("matched", False):
                 self.baseword_stats[baseword]["match_count"] += 1
 
+            # Update wordlist statistics (mode-5 only; skip mode-4 entries).
+            if wordlist is not None:
+                self.wordlist_stats[wordlist]["count"] += 1
+                self.wordlist_stats[wordlist]["basewords"].add(baseword)
+                self.wordlist_stats[wordlist]["candidates"].add(candidate)
+                self.wordlist_stats[wordlist]["rules"].add(rule)
+                if entry.get("matched", False):
+                    self.wordlist_stats[wordlist]["match_count"] += 1
+
         return {
             "total_entries": len(self.entries),
             "unique_rules": len(self.rule_stats),
             "unique_basewords": len(self.baseword_stats),
+            "unique_wordlists": len(self.wordlist_stats),
             "rule_stats": self._make_serializable(dict(self.rule_stats)),
             "baseword_stats": self._make_serializable(dict(self.baseword_stats)),
+            "wordlist_stats": self._make_serializable(dict(self.wordlist_stats)),
         }
 
     def get_top_rules_by_frequency(self, top_n: int = 10) -> list:
@@ -280,6 +310,82 @@ class DebugAnalyzer:
             "min_occurrences": min(counts) if counts else 0,
         }
 
+    def get_top_wordlists(self, top_n: int = 10) -> list:
+        """
+        Get top wordlists by number of attributed entries.
+
+        Args:
+            top_n: Number of top wordlists to return
+
+        Returns:
+            List of (wordlist, count) tuples, sorted by count descending
+        """
+        wordlists = sorted(self.wordlist_stats.items(), key=lambda x: x[1]["count"], reverse=True)[
+            :top_n
+        ]
+        return [(wl, stats["count"]) for wl, stats in wordlists]
+
+    def get_wordlist_statistics_summary(self) -> dict:
+        """
+        Get summary statistics about all wordlists.
+
+        Returns:
+            Dictionary with aggregate statistics (empty if no wordlists)
+        """
+        if not self.wordlist_stats:
+            return {}
+
+        counts = [stats["count"] for stats in self.wordlist_stats.values()]
+        match_counts = [stats["match_count"] for stats in self.wordlist_stats.values()]
+        unique_bw_counts = [len(stats["basewords"]) for stats in self.wordlist_stats.values()]
+        unique_cand_counts = [len(stats["candidates"]) for stats in self.wordlist_stats.values()]
+        unique_rule_counts = [len(stats["rules"]) for stats in self.wordlist_stats.values()]
+
+        return {
+            "total_wordlists": len(self.wordlist_stats),
+            "total_attributed_entries": sum(counts),
+            "total_match_count": sum(match_counts),
+            "avg_entries_per_wordlist": sum(counts) / len(counts) if counts else 0,
+            "median_entries": _median(counts),
+            "max_entries": max(counts) if counts else 0,
+            "min_entries": min(counts) if counts else 0,
+            "avg_basewords_per_wordlist": sum(unique_bw_counts) / len(unique_bw_counts)
+            if unique_bw_counts
+            else 0,
+            "avg_candidates_per_wordlist": sum(unique_cand_counts) / len(unique_cand_counts)
+            if unique_cand_counts
+            else 0,
+            "avg_rules_per_wordlist": sum(unique_rule_counts) / len(unique_rule_counts)
+            if unique_rule_counts
+            else 0,
+        }
+
+    def get_wordlist_detail(self, wordlist: str) -> dict | None:
+        """
+        Get detailed information about a specific wordlist.
+
+        Args:
+            wordlist: The wordlist to analyze
+
+        Returns:
+            Dictionary with wordlist details, or None if not present
+        """
+        if wordlist not in self.wordlist_stats:
+            return None
+
+        stats = self.wordlist_stats[wordlist]
+        return {
+            "wordlist": wordlist,
+            "total_occurrences": stats["count"],
+            "match_count": stats["match_count"],
+            "unique_basewords": len(stats["basewords"]),
+            "unique_candidates": len(stats["candidates"]),
+            "unique_rules": len(stats["rules"]),
+            "basewords": sorted(list(stats["basewords"])),
+            "candidates": sorted(list(stats["candidates"])),
+            "rules": sorted(list(stats["rules"])),
+        }
+
     def export_to_dict(self) -> Any:
         """
         Export complete analysis data as a JSON-serializable dictionary.
@@ -292,14 +398,19 @@ class DebugAnalyzer:
                 "total_entries": len(self.entries),
                 "rules": self.get_rule_statistics_summary(),
                 "basewords": self.get_baseword_statistics_summary(),
+                "wordlists": self.get_wordlist_statistics_summary(),
             },
             "top_rules_by_frequency": self.get_top_rules_by_frequency(20),
             "top_rules_by_basewords": self.get_top_rules_by_unique_basewords(20),
             "top_rules_by_candidates": self.get_top_rules_by_unique_candidates(20),
             "top_basewords": self.get_top_basewords_by_frequency(20),
             "basewords_with_duplicates": self.get_basewords_with_min_occurrences(2),
+            "top_wordlists": self.get_top_wordlists(20),
             "all_rule_details": {
                 rule: self.get_rule_detail(rule) for rule in sorted(self.rule_stats.keys())
+            },
+            "all_wordlist_details": {
+                wl: self.get_wordlist_detail(wl) for wl in sorted(self.wordlist_stats.keys())
             },
         }
         return self._make_serializable(data)
