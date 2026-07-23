@@ -336,6 +336,7 @@ class DebugAnalyzer:
             return {}
 
         counts = [stats["count"] for stats in self.wordlist_stats.values()]
+        match_counts = [stats["match_count"] for stats in self.wordlist_stats.values()]
         unique_bw_counts = [len(stats["basewords"]) for stats in self.wordlist_stats.values()]
         unique_cand_counts = [len(stats["candidates"]) for stats in self.wordlist_stats.values()]
         unique_rule_counts = [len(stats["rules"]) for stats in self.wordlist_stats.values()]
@@ -343,6 +344,7 @@ class DebugAnalyzer:
         return {
             "total_wordlists": len(self.wordlist_stats),
             "total_attributed_entries": sum(counts),
+            "total_match_count": sum(match_counts),
             "avg_entries_per_wordlist": sum(counts) / len(counts) if counts else 0,
             "median_entries": _median(counts),
             "max_entries": max(counts) if counts else 0,
@@ -375,6 +377,7 @@ class DebugAnalyzer:
         return {
             "wordlist": wordlist,
             "total_occurrences": stats["count"],
+            "match_count": stats["match_count"],
             "unique_basewords": len(stats["basewords"]),
             "unique_candidates": len(stats["candidates"]),
             "unique_rules": len(stats["rules"]),
@@ -403,7 +406,6 @@ class DebugAnalyzer:
             "top_basewords": self.get_top_basewords_by_frequency(20),
             "basewords_with_duplicates": self.get_basewords_with_min_occurrences(2),
             "top_wordlists": self.get_top_wordlists(20),
-            "wordlist_summary": self.get_wordlist_statistics_summary(),
             "all_rule_details": {
                 rule: self.get_rule_detail(rule) for rule in sorted(self.rule_stats.keys())
             },
