@@ -313,6 +313,14 @@ class TestExplainRuleEdgeCases:
         result = explain_rule("sa")
         assert result is not None  # 'a' (append memorized) produces a step
 
+    def test_opcode_3_consumes_two_args_in_fallback(self):
+        """'3' is a 2-arg op (3NX); the fallback skip must consume both args so a
+        following opcode is explained correctly rather than being swallowed."""
+        result = explain_rule("31s$1", "password")
+        assert result is not None
+        # After '31s' is skipped (3 chars), '$1' must be explained as an append.
+        assert any(step.startswith("$1:") and "Append" in step for step in result)
+
     def test_incomplete_delete_pos(self):
         """D at end with no position."""
         result = explain_rule("D")
