@@ -627,7 +627,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         else:
             # Arity-aware skip for unknown opcodes
             _three_arg = set("X")
-            _two_arg = set("soix*=OB")
+            _two_arg = set("soi3x*=OB")
             _one_arg = set("TDpyYezZ^$@!><'+-.,%LR()")
             if char in _three_arg and i + 3 < len(rule_str):
                 i += 4
