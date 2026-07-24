@@ -5,7 +5,7 @@ import json
 import pytest
 from click.testing import CliRunner
 
-from hashcat_rosetta.cli import explain_rule, main
+from hashcat_rosetta.cli import _escape_bytes, explain_rule, main
 
 
 # Shared fixtures
@@ -371,3 +371,60 @@ class TestExplainRuleEdgeCases:
         result = explain_rule("T0", "hello")
         assert result is not None
         assert "Hello" in result[0]
+
+
+class TestEscapeBytesHelper:
+    """_escape_bytes renders raw bytes for display without touching genuine
+    Unicode (issue #31)."""
+
+    def test_high_byte_escaped(self):
+        assert _escape_bytes("\x99ello0") == "\\x99ello0"
+
+    def test_control_byte_escaped(self):
+        assert _escape_bytes("\x00abc") == "\\x00abc"
+        assert _escape_bytes("\x1f") == "\\x1f"
+
+    def test_printable_ascii_unchanged(self):
+        assert _escape_bytes("hello0!") == "hello0!"
+
+    def test_unicode_above_ff_unchanged(self):
+        # The '→' arrow (U+2192) is >= 0x100 and must be left intact.
+        assert _escape_bytes("a → b") == "a → b"
+
+
+class TestExplainBytewiseWrap:
+    """explain_rule keeps raw byte values internally (so the verify harness can
+    compare against hashcat) and wraps +/- mod 256 like hashcat (issue #31)."""
+
+    def test_explain_returns_raw_high_byte(self):
+        # B01 on 'hello0': 0x68 + 0x31 = 0x99. explain_rule returns the raw code
+        # point; escaping for display happens only in the CLI layer.
+        steps = explain_rule("B01", "hello0")
+        assert steps is not None
+        assert "\x99ello0" in steps[-1]
+
+    def test_increment_wraps_mod_256(self):
+        # '+0' on byte 0xff wraps to 0x00 (verified against hashcat).
+        steps = explain_rule("+0", "\xffabc")
+        assert steps is not None
+        assert "\x00abc" in steps[-1]
+
+    def test_decrement_wraps_mod_256_no_crash(self):
+        # '-0' on byte 0x00 wraps to 0xff (verified against hashcat). Previously
+        # chr(-1) raised ValueError and the step was silently dropped.
+        steps = explain_rule("-0", "\x00abc")
+        assert steps is not None
+        assert "\xffabc" in steps[-1]
+
+
+class TestExplainCliByteRendering:
+    """The --explain CLI output must render high bytes as \\xNN, never as a
+    UTF-8-mis-encoded multibyte sequence (issue #31)."""
+
+    def test_cli_explain_escapes_high_byte(self, runner):
+        result = runner.invoke(main, ["--explain", "B01", "--baseword", "hello0"])
+        assert result.exit_code == 0
+        assert "\\x99ello0" in result.output
+        # The raw U+0099 code point (which would UTF-8-encode to c2 99) must not
+        # appear in the user-facing output.
+        assert "\x99" not in result.output
