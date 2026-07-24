@@ -56,6 +56,26 @@ def _cap(prev: str, new: str) -> str:
     return new if len(new) < _RP_PASSWORD_SIZE else prev
 
 
+def _escape_bytes(text: str) -> str:
+    r"""Render raw byte values (control chars and 0x80-0xFF) as ``\xNN``.
+
+    ``explain_rule`` builds transformed words from code points 0-255 (one code
+    point per byte). Emitting those directly would UTF-8-encode code points
+    0x80-0xFF into multibyte sequences, misrepresenting hashcat's single-byte
+    output (e.g. 0x99 -> ``c2 99``). Escape any code point below 0x100 that
+    isn't printable ASCII; genuine Unicode in the descriptions (such as the
+    U+2192 ``->`` arrow) is >= 0x100 and left intact.
+    """
+    out = []
+    for ch in text:
+        o = ord(ch)
+        if o < 0x100 and not (0x20 <= o <= 0x7E):
+            out.append(f"\\x{o:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
     if not rule_str:
@@ -325,7 +345,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
-                    current = current[:pos] + chr(ord(current[pos]) + 1) + current[pos + 1 :]
+                    current = (
+                        current[:pos] + chr((ord(current[pos]) + 1) & 0xFF) + current[pos + 1 :]
+                    )
                 steps.append(f"+{pos_char}: Increment ASCII at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -338,7 +360,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
-                    current = current[:pos] + chr(ord(current[pos]) - 1) + current[pos + 1 :]
+                    current = (
+                        current[:pos] + chr((ord(current[pos]) - 1) & 0xFF) + current[pos + 1 :]
+                    )
                 steps.append(f"-{pos_char}: Decrement ASCII at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -749,7 +773,7 @@ def main(
                     if explanations:
                         click.echo(f"\nLine {line_number}: {rule_line}")
                         for explanation in explanations:
-                            click.echo(f"  {explanation}")
+                            click.echo(f"  {_escape_bytes(explanation)}")
                     else:
                         click.echo(f"\nLine {line_number}: {rule_line}")
                         click.echo("  [!] Unknown rule or no explanation available")
@@ -761,7 +785,7 @@ def main(
                 click.echo(f"\nRule Explanation: '{explain}' applied to '{baseword}'")
                 click.echo("=" * 70)
                 for explanation in explanations:
-                    click.echo(f"  {explanation}")
+                    click.echo(f"  {_escape_bytes(explanation)}")
                 click.echo("=" * 70)
                 click.echo("\nNote: Each character is a rule operation applied sequentially.")
                 click.echo("      Complex rules combine multiple operations from left to right.")
