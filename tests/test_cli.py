@@ -39,6 +39,23 @@ def rule_file(tmp_path):
     return str(path)
 
 
+# Mode-5 debug output: baseword:rule:candidate:wordlist
+SAMPLE_DEBUG_LINES_MODE5 = (
+    "password:c:Password:rockyou.txt\n"
+    "password:u:PASSWORD:rockyou.txt\n"
+    "admin:c:Admin:rockyou.txt\n"
+    "letmein:$1:letmein1:common.txt\n"
+    "letmein:c:Letmein:common.txt\n"
+)
+
+
+@pytest.fixture
+def debug_file_mode5(tmp_path):
+    path = tmp_path / "debug5.txt"
+    path.write_text(SAMPLE_DEBUG_LINES_MODE5)
+    return str(path)
+
+
 # --- Default summary output ---
 
 
@@ -93,6 +110,63 @@ class TestBasewordsFlag:
         assert "Rules Applied" in result.output
 
 
+# --- --wordlists flag / --debug-mode (mode 5) ---
+
+
+class TestWordlistsFlag:
+    def test_debug_mode_5_wordlists(self, runner, debug_file_mode5):
+        result = runner.invoke(main, [debug_file_mode5, "--debug-mode", "5", "--wordlists"])
+        assert result.exit_code == 0
+        assert "Wordlists" in result.output
+        assert "rockyou.txt" in result.output
+        assert "common.txt" in result.output
+
+    def test_wordlists_detail(self, runner, debug_file_mode5):
+        result = runner.invoke(
+            main, [debug_file_mode5, "--debug-mode", "5", "--wordlists", "--detail"]
+        )
+        assert result.exit_code == 0
+        assert "rockyou.txt" in result.output
+        assert "Unique Basewords" in result.output
+        assert "Unique Candidates" in result.output
+        assert "Unique Rules" in result.output
+
+    def test_wordlists_alone_no_default_summary(self, runner, debug_file_mode5):
+        result = runner.invoke(main, [debug_file_mode5, "--debug-mode", "5", "--wordlists"])
+        assert result.exit_code == 0
+        # Default summary header must NOT appear when --wordlists is given alone.
+        assert "Debug File Analysis" not in result.output
+
+    def test_default_summary_mode5_includes_wordlist_stats(self, runner, debug_file_mode5):
+        result = runner.invoke(main, [debug_file_mode5, "--debug-mode", "5"])
+        assert result.exit_code == 0
+        assert "Debug File Analysis" in result.output
+        assert "Wordlist Statistics" in result.output
+        assert "rockyou.txt" in result.output
+
+    def test_default_summary_mode4_no_wordlist_section(self, runner, debug_file):
+        result = runner.invoke(main, [debug_file])
+        assert result.exit_code == 0
+        assert "Debug File Analysis" in result.output
+        # A mode-4 file has no wordlist data; no wordlist section should print.
+        assert "Wordlist" not in result.output
+
+    def test_debug_mode_4_forces_mode4(self, runner, debug_file_mode5):
+        """Forcing mode 4 on a mode-5-looking file: no wordlist attribution."""
+        result = runner.invoke(main, [debug_file_mode5, "--debug-mode", "4", "--wordlists"])
+        assert result.exit_code == 0
+        # No wordlist data parsed, so the wordlist names do not appear as entries.
+        assert "rockyou.txt" not in result.output
+        assert "common.txt" not in result.output
+
+    def test_wordlists_auto_detect_no_debug_mode(self, runner, debug_file_mode5):
+        """Without --debug-mode, 'auto' must detect mode 5 and attribute wordlists."""
+        result = runner.invoke(main, [debug_file_mode5, "--wordlists"])
+        assert result.exit_code == 0
+        assert "rockyou.txt" in result.output
+        assert "common.txt" in result.output
+
+
 # --- --export flag ---
 
 
@@ -116,6 +190,18 @@ class TestExportFlag:
             content = f.read()
         assert "Rule" in content
         assert "Baseword" in content
+
+    def test_export_csv_mode5_includes_wordlist_section(self, runner, debug_file_mode5, tmp_path):
+        export_path = str(tmp_path / "report.csv")
+        result = runner.invoke(main, [debug_file_mode5, "--export", export_path, "--format", "csv"])
+        assert result.exit_code == 0
+        assert "CSV report exported" in result.output
+        with open(export_path) as f:
+            content = f.read()
+        assert "# WORDLIST ANALYSIS" in content
+        assert "Wordlist" in content
+        assert "rockyou.txt" in content
+        assert "common.txt" in content
 
 
 # --- --explain flag ---
@@ -226,6 +312,14 @@ class TestExplainRuleEdgeCases:
         # skipped as incomplete. 'a' is then processed as the append-memorized opcode.
         result = explain_rule("sa")
         assert result is not None  # 'a' (append memorized) produces a step
+
+    def test_opcode_3_consumes_two_args_in_fallback(self):
+        """'3' is a 2-arg op (3NX); the fallback skip must consume both args so a
+        following opcode is explained correctly rather than being swallowed."""
+        result = explain_rule("31s$1", "password")
+        assert result is not None
+        # After '31s' is skipped (3 chars), '$1' must be explained as an append.
+        assert any(step.startswith("$1:") and "Append" in step for step in result)
 
     def test_incomplete_delete_pos(self):
         """D at end with no position."""

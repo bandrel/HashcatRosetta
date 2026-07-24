@@ -314,7 +314,7 @@ class TestTokenizerOpcodes:
 
     def test_two_arg_ops(self):
         parser = RuleParser()
-        for op in "soix*XOB":
+        for op in "soix*OB":
             rule = f"{op}ab"
             result = parser.parse_rule(rule)
             assert result is not None, f"Two-arg opcode '{op}' should parse"
@@ -339,6 +339,47 @@ class TestTokenizerOpcodes:
         result = parser.parse_rule("c $1 u")
         assert result is not None
         assert result["components"] == ["c", "$1", "u"]
+
+    def test_opcode_3_is_two_arg(self):
+        """'3' is 3NX (2-arg), verified against hashcat: 31s/30a valid, 3/31 rejected."""
+        parser = RuleParser()
+        result = parser.parse_rule("31s")
+        assert result is not None
+        assert result["components"] == ["31s"]
+
+    def test_opcode_3_two_arg_in_context(self):
+        parser = RuleParser()
+        result = parser.parse_rule("c31s$1")
+        assert result is not None
+        assert result["components"] == ["c", "31s", "$1"]
+
+    def test_opcode_X_is_three_arg(self):
+        """'X' is XNMI (3-arg): insert M chars of memory at pos N into pos I."""
+        parser = RuleParser()
+        result = parser.parse_rule("X012")
+        assert result is not None
+        assert result["components"] == ["X012"]
+
+    def test_opcode_a_is_no_arg(self):
+        """'a' is a 0-arg legacy op; it must not consume the following opcode."""
+        parser = RuleParser()
+        result = parser.parse_rule("a$1")
+        assert result is not None
+        assert result["components"] == ["a", "$1"]
+
+    def test_space_separated_rule_no_false_incomplete_warning(self, caplog):
+        """BARRAGE-style space-separated rule tokenizes cleanly (regression).
+
+        hashcat accepts 'd ] ] ] 31e eE 31s' and produces output; the tokenizer
+        previously emitted a false 'Incomplete 2-arg opcode' warning for the
+        trailing 31s because '3' was misclassified as no-arg.
+        """
+        parser = RuleParser()
+        with caplog.at_level(logging.WARNING, logger="hashcat_rosetta.parser"):
+            result = parser.parse_rule("d ] ] ] 31e eE 31s")
+        assert result is not None
+        assert result["components"] == ["d", "]", "]", "]", "31e", "eE", "31s"]
+        assert len(caplog.records) == 0
 
 
 class TestCLIErrorHandling:

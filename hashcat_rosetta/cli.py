@@ -627,7 +627,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         else:
             # Arity-aware skip for unknown opcodes
             _three_arg = set("X")
-            _two_arg = set("soix*=OB")
+            _two_arg = set("soi3x*=OB")
             _one_arg = set("TDpyYezZ^$@!><'+-.,%LR()")
             if char in _three_arg and i + 3 < len(rule_str):
                 i += 4
@@ -652,6 +652,11 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
 )
 @click.option("--rules", is_flag=True, help="Show top rules by efficiency")
 @click.option("--basewords", is_flag=True, help="Show basewords that appear multiple times")
+@click.option(
+    "--wordlists",
+    is_flag=True,
+    help="Show top wordlists by attributed entries (debug mode 5 only)",
+)
 @click.option("--export", type=click.Path(), help="Export analysis report to file")
 @click.option(
     "--metric",
@@ -673,6 +678,16 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     is_flag=True,
     help="Analyze rule file opcodes (FILE should be a rule file, not debug output)",
 )
+@click.option(
+    "--debug-mode",
+    type=click.Choice(["auto", "4", "5"]),
+    default="auto",
+    help=(
+        "Hashcat debug mode of the input file. 'auto' detects the format; "
+        "'4' forces mode 4 (baseword rule candidate); '5' forces mode 5 "
+        "(baseword:rule:candidate:wordlist with wordlist attribution)."
+    ),
+)
 @click.pass_context
 def main(
     ctx,
@@ -681,6 +696,7 @@ def main(
     baseword,
     rules,
     basewords,
+    wordlists,
     export,
     metric,
     format,
@@ -688,13 +704,21 @@ def main(
     min_occurrences,
     detail,
     analyze_rules,
+    debug_mode,
 ):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
+
+    Supports both debug mode 4 (baseword rule candidate) and debug mode 5
+    (baseword:rule:candidate:wordlist). The format is auto-detected by default;
+    use --debug-mode 4 or --debug-mode 5 to force a mode. Mode-5 files carry a
+    trailing wordlist field, enabling per-wordlist analysis via --wordlists.
 
     Basic usage:
         rosetta debug.txt
         rosetta debug.txt --rules --metric frequency
         rosetta debug.txt --basewords --detail
+        rosetta debug.txt --wordlists --detail
+        rosetta debug.txt --debug-mode 5 --wordlists
         rosetta debug.txt --export report.json --format json
 
     Explain rules:
@@ -760,7 +784,8 @@ def main(
             sys.exit(1)
         return
 
-    analyzer = DebugAnalyzer()
+    mode_map: dict[str, int | None] = {"auto": None, "4": 4, "5": 5}
+    analyzer = DebugAnalyzer(debug_mode=mode_map[debug_mode])
     try:
         result = analyzer.analyze_debug_file(file)
     except FileNotFoundError:
@@ -771,9 +796,10 @@ def main(
         sys.exit(1)
 
     # Default behavior: show analysis summary
-    if not rules and not basewords and not export:
+    if not rules and not basewords and not wordlists and not export:
         stats = analyzer.get_rule_statistics_summary()
         bw_stats = analyzer.get_baseword_statistics_summary()
+        wl_stats = analyzer.get_wordlist_statistics_summary()
 
         click.echo(f"\nDebug File Analysis: {file}")
         click.echo(f"   Total Entries: {result['total_entries']}")
@@ -791,6 +817,20 @@ def main(
             f"      Average per Baseword: {bw_stats.get('avg_occurrences_per_baseword', 0):.2f}"
         )
         click.echo(f"      Max Occurrences: {bw_stats.get('max_occurrences', 0)}")
+
+        # Wordlist statistics (mode-5 only; omit entirely when absent).
+        if wl_stats and result.get("unique_wordlists", 0) > 0:
+            click.echo()
+            click.echo("   Wordlist Statistics:")
+            click.echo(f"      Total Wordlists: {wl_stats.get('total_wordlists', 0)}")
+            click.echo(f"      Attributed Entries: {wl_stats.get('total_attributed_entries', 0)}")
+            click.echo(
+                f"      Average per Wordlist: {wl_stats.get('avg_entries_per_wordlist', 0):.2f}"
+            )
+            click.echo(f"      Max Entries: {wl_stats.get('max_entries', 0)}")
+            click.echo("      Top 5 Wordlists:")
+            for wordlist, count in analyzer.get_top_wordlists(5):
+                click.echo(f"         {wordlist} ({count})")
         return
 
     # Show rules
@@ -829,6 +869,22 @@ def main(
                     click.echo(
                         f"  Rules Applied: {', '.join(sorted(set(occ['rule'] for occ in bw_detail['occurrences'])))}"
                     )
+
+    # Show wordlists (mode-5 attribution)
+    if wordlists:
+        wordlist_list = analyzer.get_top_wordlists(top)
+
+        click.echo(f"\nTop {top} Wordlists")
+        click.echo("-" * 50)
+        for i, (wordlist, count) in enumerate(wordlist_list, 1):
+            click.echo(f"{i:2}. Wordlist: {wordlist:20} ({count})")
+
+            if detail:
+                wl_detail = analyzer.get_wordlist_detail(wordlist)
+                if wl_detail:
+                    click.echo(f"      Unique Basewords: {wl_detail['unique_basewords']}")
+                    click.echo(f"      Unique Candidates: {wl_detail['unique_candidates']}")
+                    click.echo(f"      Unique Rules: {wl_detail['unique_rules']}")
 
     # Export report
     if export:
@@ -872,6 +928,31 @@ def _export_to_csv(analyzer: DebugAnalyzer, filepath: str) -> None:
                         detail["unique_candidates"],
                     ]
                 )
+
+        # Wordlist section (mode-5 only; mode-4 files yield header with no rows)
+        f.write("\n# WORDLIST ANALYSIS\n")
+        writer.writerow(
+            [
+                "Wordlist",
+                "Total Occurrences",
+                "Unique Basewords",
+                "Unique Candidates",
+                "Unique Rules",
+            ]
+        )
+
+        for wordlist in sorted(analyzer.wordlist_stats.keys()):
+            wl_detail = analyzer.get_wordlist_detail(wordlist)
+            assert wl_detail is not None  # key came from wordlist_stats
+            writer.writerow(
+                [
+                    wordlist,
+                    wl_detail["total_occurrences"],
+                    wl_detail["unique_basewords"],
+                    wl_detail["unique_candidates"],
+                    wl_detail["unique_rules"],
+                ]
+            )
 
 
 if __name__ == "__main__":
