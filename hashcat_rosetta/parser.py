@@ -1,8 +1,23 @@
 """Parser module for hashcat rules and debug files."""
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+# hashcat decodes ``\xNN`` byte escapes in rule strings (e.g. ``s\x20_``
+# substitutes a literal space). Decode them to the single byte they denote so
+# downstream tokenizing/simulation sees the same characters hashcat does.
+_HEX_ESCAPE_RE = re.compile(r"\\x([0-9A-Fa-f]{2})")
+
+
+def decode_hex_escapes(rule_str: str) -> str:
+    r"""Replace ``\xNN`` hex escapes with the single byte (code point 0-255).
+
+    Mirrors hashcat's rule parser. A backslash not followed by ``x`` and two
+    hex digits is left untouched (it is a literal character in hashcat).
+    """
+    return _HEX_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), rule_str)
 
 
 # Sentinel wordlist values hashcat emits when there is no real dict path.

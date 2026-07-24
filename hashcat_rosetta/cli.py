@@ -9,6 +9,7 @@ import click
 
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
+from .parser import decode_hex_escapes
 
 _BANNER = r"""
  _   _           _               _   ____                _   _
@@ -76,20 +77,47 @@ def _escape_bytes(text: str) -> str:
     return "".join(out)
 
 
+def _ascii_lower(s: str) -> str:
+    """Lowercase only ASCII A-Z, like hashcat (leaves 0x80-0xFF untouched)."""
+    return "".join(chr(ord(c) + 0x20) if "A" <= c <= "Z" else c for c in s)
+
+
+def _ascii_upper(s: str) -> str:
+    """Uppercase only ASCII a-z, like hashcat."""
+    return "".join(chr(ord(c) - 0x20) if "a" <= c <= "z" else c for c in s)
+
+
+def _ascii_swapcase(s: str) -> str:
+    """Toggle case of only ASCII letters, like hashcat."""
+    out = []
+    for c in s:
+        if "A" <= c <= "Z":
+            out.append(chr(ord(c) + 0x20))
+        elif "a" <= c <= "z":
+            out.append(chr(ord(c) - 0x20))
+        else:
+            out.append(c)
+    return "".join(out)
+
+
 def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
     if not rule_str:
         return None
 
+    # hashcat decodes \xNN byte escapes before applying the rule; do the same
+    # so the simulated result matches hashcat (e.g. s\x20_ substitutes a space).
+    rule_str = decode_hex_escapes(rule_str)
+
     # Rule explanations
     rule_map = {
         ":": ("No-op", lambda x: x),
-        "c": ("Capitalize", lambda x: x[0].upper() + x[1:].lower() if x else x),
-        "u": ("Uppercase all", lambda x: x.upper()),
-        "l": ("Lowercase all", lambda x: x.lower()),
+        "c": ("Capitalize", lambda x: _ascii_upper(x[0]) + _ascii_lower(x[1:]) if x else x),
+        "u": ("Uppercase all", lambda x: _ascii_upper(x)),
+        "l": ("Lowercase all", lambda x: _ascii_lower(x)),
         "d": ("Duplicate word", lambda x: x + x),
         "r": ("Reverse", lambda x: x[::-1]),
-        "t": ("Toggle case all", lambda x: "".join(c.swapcase() for c in x)),
+        "t": ("Toggle case all", lambda x: _ascii_swapcase(x)),
         "[": ("Remove first", lambda x: x[1:] if x else x),
         "]": ("Remove last", lambda x: x[:-1] if x else x),
         "{": ("Rotate left", lambda x: x[1:] + x[0] if x else x),
@@ -100,12 +128,15 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         "q": ("Duplicate every char", lambda x: "".join(c + c for c in x)),
         "C": (
             "Invert capitalize",
-            lambda x: x[0].lower() + x[1:].upper() if x else x,
+            lambda x: _ascii_lower(x[0]) + _ascii_upper(x[1:]) if x else x,
         ),
         "E": (
             "Title case",
             lambda x: (
-                " ".join(w[0].upper() + w[1:].lower() if w else w for w in x.lower().split(" "))
+                " ".join(
+                    _ascii_upper(w[0]) + _ascii_lower(w[1:]) if w else w
+                    for w in _ascii_lower(x).split(" ")
+                )
                 if x
                 else x
             ),
@@ -199,7 +230,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 pos = _hashcat_pos(pos_char)
                 prev = current
                 if pos < len(current):
-                    current = current[:pos] + current[pos].swapcase() + current[pos + 1 :]
+                    current = current[:pos] + _ascii_swapcase(current[pos]) + current[pos + 1 :]
                 steps.append(f"T{pos_char}: Toggle case at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
@@ -606,13 +637,13 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             sep = rule_str[i + 1]
             prev = current
             orig = current  # preserve original for separator matching
-            lowered = current.lower()
+            lowered = _ascii_lower(current)
             chars = list(lowered)
             if chars:
-                chars[0] = chars[0].upper()
+                chars[0] = _ascii_upper(chars[0])
             for idx in range(1, len(chars)):
                 if orig[idx - 1] == sep:
-                    chars[idx] = chars[idx].upper()
+                    chars[idx] = _ascii_upper(chars[idx])
             current = "".join(chars)
             steps.append(f"e{sep}: Title-case with separator '{sep}' → {prev} → {current}")
             i += 2
@@ -634,6 +665,36 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 steps.append(
                     f"B{pos_char}{add_char}: Add ord('{add_char}')={ord(add_char)} "
                     f"to byte at pos {pos} → {prev} → {current}"
+                )
+                i += 3
+            except (ValueError, IndexError):
+                i += 1
+
+        elif char == "3" and i + 2 < len(rule_str):
+            # 3NX: toggle the case of the character immediately after the Nth
+            # (0-indexed) occurrence of separator char X. If there is no Nth
+            # occurrence (or no char after it) the word is unchanged. Verified
+            # against hashcat: '30s' password -> pasSword, '31s' -> passWord.
+            n_char = rule_str[i + 1]
+            sep = rule_str[i + 2]
+            try:
+                n = _hashcat_pos(n_char)
+                prev = current
+                idx = -1
+                count = 0
+                for k, ch2 in enumerate(current):
+                    if ch2 == sep:
+                        if count == n:
+                            idx = k
+                            break
+                        count += 1
+                if idx != -1 and idx + 1 < len(current):
+                    current = (
+                        current[: idx + 1] + _ascii_swapcase(current[idx + 1]) + current[idx + 2 :]
+                    )
+                steps.append(
+                    f"3{n_char}{sep}: Toggle case after occurrence {n} of "
+                    f"'{sep}' → {prev} → {current}"
                 )
                 i += 3
             except (ValueError, IndexError):

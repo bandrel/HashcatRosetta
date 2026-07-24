@@ -134,6 +134,18 @@ class TestHashcatUnsupportedOpcodes:
         assert _has_truncated_opcode("u s.")
         assert _has_truncated_opcode("$")
 
+    def test_space_is_a_valid_argument_not_truncation(self) -> None:
+        """A space is a valid literal argument (e.g. decoded from \\x20), not a
+        truncation marker. hashcat accepts '$ ' (append space) and 's _'
+        (substitute space->_); only running off the end is real truncation."""
+        from hashcat_rosetta._verify import _has_truncated_opcode
+
+        assert not _has_truncated_opcode("s _")  # substitute space -> _
+        assert not _has_truncated_opcode("$ ")  # append space
+        assert not _has_truncated_opcode("i0 ")  # insert space at pos 0
+        # trailing opcode still missing its args at end-of-string is truncated
+        assert _has_truncated_opcode("s _ i1")
+
 
 class TestExtractFinal:
     """_extract_final must preserve leading/trailing whitespace in the final
