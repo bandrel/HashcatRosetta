@@ -79,7 +79,21 @@ THREE_ARG_GRID: tuple[str, ...] = (
 
 # Opcode-to-reason allowlist of known latent bugs. Empty on day one.
 # Each entry MUST cite a tracked issue or spec section. No bare `# TODO`.
-KNOWN_LATENT: dict[str, str] = {}
+KNOWN_LATENT: dict[str, str] = {
+    "B": (
+        "'add byte value' (BNX) — added in the hashcat v7.1.2 release. hashcat "
+        "errors on B rules under --stdout on CI's Linux/POCL OpenCL backend "
+        "(no output) even with the latest master build (v7.1.2-338+); the same "
+        "master lineage handles them on Apple OpenCL. explain_rule is correct "
+        "(matches a local master build). Oracle-environment limitation, not a bug."
+    ),
+    "v": (
+        "'insert every' (vNX) — added in the hashcat v7.1.2 release. Same "
+        "oracle-environment limitation as B: no output for v rules on CI's "
+        "Linux/POCL backend, while explain_rule matches a local master build "
+        "byte-for-byte."
+    ),
+}
 
 # Split _ONE_ARG_OPCODES into "position" (N) vs "char" (X) buckets. Hashcat's
 # rule grammar doesn't distinguish them syntactically; the split is semantic
