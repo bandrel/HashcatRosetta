@@ -28,8 +28,26 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install hashcat
         run: |
+          # The opcode sweep needs a hashcat oracle that implements every
+          # modeled opcode. Ubuntu's apt hashcat is v6.2.6 (2022) and even the
+          # tagged v7.1.2 release mishandles the brand-new 'B' (add byte value)
+          # and 'v' (insert every) rule ops under --stdout; only post-release
+          # master builds handle them. So fetch the latest hashcat beta (built
+          # from master) and overlay it on the apt package, which still sets up
+          # the POCL OpenCL ICD. The beta filename rotates as master advances,
+          # so resolve it at runtime to always track the newest build.
           sudo apt-get update
-          sudo apt-get install -y hashcat
+          sudo apt-get install -y hashcat p7zip-full
+          BETA=$(curl -fsSL https://hashcat.net/beta/ \
+            | grep -oiE 'href="(hashcat-[0-9][^"]*\.7z)"' \
+            | sed -E 's/^href="//; s/"$//' | sort -uV | tail -1)
+          test -n "$BETA"
+          echo "Latest hashcat beta: $BETA"
+          curl -fsSL "https://hashcat.net/beta/${BETA}" -o /tmp/hashcat.7z
+          sudo rm -rf /opt/hashcat-*
+          7z x -y /tmp/hashcat.7z -o/opt >/dev/null
+          HCDIR=$(ls -d /opt/hashcat-*/ | sort -V | tail -1)
+          sudo ln -sf "${HCDIR%/}/hashcat.bin" /usr/local/bin/hashcat
           hashcat --version
       - name: Build hashcat-utils generate-rules.bin
         run: |
@@ -64,8 +82,26 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install hashcat
         run: |
+          # The opcode sweep needs a hashcat oracle that implements every
+          # modeled opcode. Ubuntu's apt hashcat is v6.2.6 (2022) and even the
+          # tagged v7.1.2 release mishandles the brand-new 'B' (add byte value)
+          # and 'v' (insert every) rule ops under --stdout; only post-release
+          # master builds handle them. So fetch the latest hashcat beta (built
+          # from master) and overlay it on the apt package, which still sets up
+          # the POCL OpenCL ICD. The beta filename rotates as master advances,
+          # so resolve it at runtime to always track the newest build.
           sudo apt-get update
-          sudo apt-get install -y hashcat
+          sudo apt-get install -y hashcat p7zip-full
+          BETA=$(curl -fsSL https://hashcat.net/beta/ \
+            | grep -oiE 'href="(hashcat-[0-9][^"]*\.7z)"' \
+            | sed -E 's/^href="//; s/"$//' | sort -uV | tail -1)
+          test -n "$BETA"
+          echo "Latest hashcat beta: $BETA"
+          curl -fsSL "https://hashcat.net/beta/${BETA}" -o /tmp/hashcat.7z
+          sudo rm -rf /opt/hashcat-*
+          7z x -y /tmp/hashcat.7z -o/opt >/dev/null
+          HCDIR=$(ls -d /opt/hashcat-*/ | sort -V | tail -1)
+          sudo ln -sf "${HCDIR%/}/hashcat.bin" /usr/local/bin/hashcat
           hashcat --version
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
@@ -100,8 +136,26 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install hashcat
         run: |
+          # The opcode sweep needs a hashcat oracle that implements every
+          # modeled opcode. Ubuntu's apt hashcat is v6.2.6 (2022) and even the
+          # tagged v7.1.2 release mishandles the brand-new 'B' (add byte value)
+          # and 'v' (insert every) rule ops under --stdout; only post-release
+          # master builds handle them. So fetch the latest hashcat beta (built
+          # from master) and overlay it on the apt package, which still sets up
+          # the POCL OpenCL ICD. The beta filename rotates as master advances,
+          # so resolve it at runtime to always track the newest build.
           sudo apt-get update
-          sudo apt-get install -y hashcat
+          sudo apt-get install -y hashcat p7zip-full
+          BETA=$(curl -fsSL https://hashcat.net/beta/ \
+            | grep -oiE 'href="(hashcat-[0-9][^"]*\.7z)"' \
+            | sed -E 's/^href="//; s/"$//' | sort -uV | tail -1)
+          test -n "$BETA"
+          echo "Latest hashcat beta: $BETA"
+          curl -fsSL "https://hashcat.net/beta/${BETA}" -o /tmp/hashcat.7z
+          sudo rm -rf /opt/hashcat-*
+          7z x -y /tmp/hashcat.7z -o/opt >/dev/null
+          HCDIR=$(ls -d /opt/hashcat-*/ | sort -V | tail -1)
+          sudo ln -sf "${HCDIR%/}/hashcat.bin" /usr/local/bin/hashcat
           hashcat --version
       - name: Build hashcat-utils generate-rules.bin
         run: |

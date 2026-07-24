@@ -42,10 +42,13 @@ def opcodes(reference: dict[str, Any]) -> list[dict[str, Any]]:
 # Hardcoded parser arity sets — mirrors _tokenize_rule() in parser.py.
 # If parser.py changes, update this block AND the reference JSON.
 # ---------------------------------------------------------------------------
-PARSER_NO_ARG_OPS: set[str] = set(":lucCtdfr{}[]kKqEMmSwWhH34579")
-PARSER_ONE_ARG_OPS: set[str] = set("TDpyYezZ^$@!><'+-.,%LRa()")
-PARSER_TWO_ARG_OPS: set[str] = set("soix*X=vOB")
-PARSER_ALL_OPS: set[str] = PARSER_NO_ARG_OPS | PARSER_ONE_ARG_OPS | PARSER_TWO_ARG_OPS
+PARSER_NO_ARG_OPS: set[str] = set(":lucCtdfr{}[]kKqEMmSwWhH4579a")
+PARSER_ONE_ARG_OPS: set[str] = set("TDpyYezZ^$@!><'+-.,%LR()")
+PARSER_TWO_ARG_OPS: set[str] = set("soi3x*=vOB")
+PARSER_THREE_ARG_OPS: set[str] = set("X")
+PARSER_ALL_OPS: set[str] = (
+    PARSER_NO_ARG_OPS | PARSER_ONE_ARG_OPS | PARSER_TWO_ARG_OPS | PARSER_THREE_ARG_OPS
+)
 
 
 def parser_arity(char: str) -> int | None:
@@ -56,6 +59,8 @@ def parser_arity(char: str) -> int | None:
         return 1
     if char in PARSER_TWO_ARG_OPS:
         return 2
+    if char in PARSER_THREE_ARG_OPS:
+        return 3
     return None
 
 
@@ -98,11 +103,7 @@ KNOWN_ABSENT_FROM_PARSER: set[str] = {"6", "Q"}
 # Known arity bugs: parser.py assigns the wrong arity for these opcodes.
 # When any of these bugs is fixed, the corresponding test will XPASS → FAIL
 # (strict=True), forcing an explicit update here and in the reference JSON.
-KNOWN_ARITY_BUGS: dict[str, str] = {
-    "X": "X is 3-arg (XNML) but in two_arg_ops in parser.py",
-    "3": "3 is 2-arg (3NX) but in no_arg_ops in parser.py",
-    "a": "a is 0-arg (no-op stub) but in one_arg_ops in parser.py",
-}
+KNOWN_ARITY_BUGS: dict[str, str] = {}
 
 _ALL_OPCODES = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))["opcodes"]
 
