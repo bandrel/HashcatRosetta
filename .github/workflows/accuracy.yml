@@ -23,7 +23,7 @@ jobs:
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.seed == '')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install hashcat
@@ -33,11 +33,15 @@ jobs:
           # tagged v7.1.2 release mishandles the brand-new 'B' (add byte value)
           # and 'v' (insert every) rule ops under --stdout; only post-release
           # master builds handle them. So fetch the latest hashcat beta (built
-          # from master) and overlay it on the apt package, which still sets up
-          # the POCL OpenCL ICD. The beta filename rotates as master advances,
+          # from master) instead. The beta filename rotates as master advances,
           # so resolve it at runtime to always track the newest build.
+          #
+          # Install only the POCL OpenCL ICD (a CPU device for --stdout) plus
+          # 7z, NOT the heavy apt hashcat package we would just override — that
+          # apt payload is hundreds of MB and its download time is highly
+          # variable on the runners, which previously blew the job timeout.
           sudo apt-get update
-          sudo apt-get install -y hashcat p7zip-full
+          sudo apt-get install -y pocl-opencl-icd p7zip-full
           BETA=$(curl -fsSL https://hashcat.net/beta/ \
             | grep -oiE 'href="(hashcat-[0-9][^"]*\.7z)"' \
             | sed -E 's/^href="//; s/"$//' | sort -uV | tail -1)
@@ -77,7 +81,7 @@ jobs:
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.seed == '')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install hashcat
@@ -87,11 +91,15 @@ jobs:
           # tagged v7.1.2 release mishandles the brand-new 'B' (add byte value)
           # and 'v' (insert every) rule ops under --stdout; only post-release
           # master builds handle them. So fetch the latest hashcat beta (built
-          # from master) and overlay it on the apt package, which still sets up
-          # the POCL OpenCL ICD. The beta filename rotates as master advances,
+          # from master) instead. The beta filename rotates as master advances,
           # so resolve it at runtime to always track the newest build.
+          #
+          # Install only the POCL OpenCL ICD (a CPU device for --stdout) plus
+          # 7z, NOT the heavy apt hashcat package we would just override — that
+          # apt payload is hundreds of MB and its download time is highly
+          # variable on the runners, which previously blew the job timeout.
           sudo apt-get update
-          sudo apt-get install -y hashcat p7zip-full
+          sudo apt-get install -y pocl-opencl-icd p7zip-full
           BETA=$(curl -fsSL https://hashcat.net/beta/ \
             | grep -oiE 'href="(hashcat-[0-9][^"]*\.7z)"' \
             | sed -E 's/^href="//; s/"$//' | sort -uV | tail -1)
@@ -141,11 +149,15 @@ jobs:
           # tagged v7.1.2 release mishandles the brand-new 'B' (add byte value)
           # and 'v' (insert every) rule ops under --stdout; only post-release
           # master builds handle them. So fetch the latest hashcat beta (built
-          # from master) and overlay it on the apt package, which still sets up
-          # the POCL OpenCL ICD. The beta filename rotates as master advances,
+          # from master) instead. The beta filename rotates as master advances,
           # so resolve it at runtime to always track the newest build.
+          #
+          # Install only the POCL OpenCL ICD (a CPU device for --stdout) plus
+          # 7z, NOT the heavy apt hashcat package we would just override — that
+          # apt payload is hundreds of MB and its download time is highly
+          # variable on the runners, which previously blew the job timeout.
           sudo apt-get update
-          sudo apt-get install -y hashcat p7zip-full
+          sudo apt-get install -y pocl-opencl-icd p7zip-full
           BETA=$(curl -fsSL https://hashcat.net/beta/ \
             | grep -oiE 'href="(hashcat-[0-9][^"]*\.7z)"' \
             | sed -E 's/^href="//; s/"$//' | sort -uV | tail -1)
