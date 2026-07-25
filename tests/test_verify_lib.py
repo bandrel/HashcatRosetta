@@ -134,6 +134,18 @@ class TestHashcatUnsupportedOpcodes:
         assert _has_truncated_opcode("u s.")
         assert _has_truncated_opcode("$")
 
+    def test_space_is_a_valid_argument_not_truncation(self) -> None:
+        """A space is a valid literal argument (e.g. decoded from \\x20), not a
+        truncation marker. hashcat accepts '$ ' (append space) and 's _'
+        (substitute space->_); only running off the end is real truncation."""
+        from hashcat_rosetta._verify import _has_truncated_opcode
+
+        assert not _has_truncated_opcode("s _")  # substitute space -> _
+        assert not _has_truncated_opcode("$ ")  # append space
+        assert not _has_truncated_opcode("i0 ")  # insert space at pos 0
+        # trailing opcode still missing its args at end-of-string is truncated
+        assert _has_truncated_opcode("s _ i1")
+
 
 class TestExtractFinal:
     """_extract_final must preserve leading/trailing whitespace in the final
@@ -244,6 +256,18 @@ class TestOOBPositionSkip:
         assert _has_oob_position("T2", "cat") is False  # last valid pos
         assert _has_oob_position("*01", "cat") is False
         assert _has_oob_position("u $a", "cat") is False
+
+    def test_3_position_encoding_validated_but_not_oob(self) -> None:
+        """3NX's N is a position-ENCODED occurrence index: hashcat rejects an
+        invalid encoding (lowercase 'a') but never rejects it as out-of-bounds
+        (an occurrence index beyond the separators is a silent no-op)."""
+        from hashcat_rosetta._verify import _has_invalid_position_arg, _has_oob_position
+
+        assert _has_invalid_position_arg("3ab") is True  # 'a' is not 0-9/A-Z
+        assert _has_invalid_position_arg("30s") is False
+        assert _has_invalid_position_arg("3Az") is False  # 'A' = position 10
+        # occurrence index far beyond the word is NOT out-of-bounds for '3'
+        assert _has_oob_position("3Zs", "password") is False
 
 
 class TestHexValueHelper:
