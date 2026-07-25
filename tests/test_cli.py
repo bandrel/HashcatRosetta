@@ -373,6 +373,94 @@ class TestExplainRuleEdgeCases:
         assert "Hello" in result[0]
 
 
+class TestAsciiOnlyCasing:
+    """hashcat case ops (l u c C t E e T 3) only affect ASCII A-Z/a-z; they
+    leave high bytes (0x80-0xFF) untouched. Python str casing does not, which
+    diverged after L/R/B/+/- produced accented bytes (issue: BARRAGE 'L6 l')."""
+
+    def _f(self, rule, bw):
+        s = explain_rule(rule, bw)
+        assert s is not None
+        # strip only the ASCII spaces around the arrow, not high bytes like
+        # 0xA0 (NBSP) which str.strip() would wrongly remove.
+        return s[-1].split("→")[-1].strip(" ")
+
+    def test_lower_leaves_high_byte(self):
+        assert self._f("l", "\xc8") == "\xc8"  # 'È' stays (python would give è)
+
+    def test_upper_leaves_high_byte(self):
+        assert self._f("u", "\xe8") == "\xe8"  # 'è' stays
+
+    def test_toggle_leaves_high_byte(self):
+        assert self._f("t", "\xc8") == "\xc8"
+
+    def test_L_then_lower_matches_hashcat(self):
+        # 'L6 l' on 'password': L shifts byte 6 ('r'=0x72<<1=0xe4)... use the
+        # observed repro pattern; the high byte must not be case-mapped.
+        out = self._f("L0 l", "Password")  # L0: 'P'=0x50<<1=0xa0; l leaves 0xa0
+        assert out == "\xa0assword"
+
+    def test_ascii_casing_unchanged(self):
+        assert self._f("u", "abc") == "ABC"
+        assert self._f("l", "ABC") == "abc"
+        assert self._f("c", "hELLO") == "Hello"
+        assert self._f("t", "aBc") == "AbC"
+
+
+class TestExplainToggleAtSep:
+    """3NX: toggle case of the char after the Nth (0-indexed) occurrence of
+    separator X. Values verified against hashcat --stdout."""
+
+    def _final(self, rule, bw):
+        steps = explain_rule(rule, bw)
+        assert steps is not None, f"{rule} returned None"
+        return steps[-1].split("→")[-1].strip()
+
+    def test_3_first_occurrence(self):
+        assert self._final("30s", "password") == "pasSword"
+
+    def test_3_second_occurrence(self):
+        assert self._final("31s", "password") == "passWord"
+
+    def test_3_missing_occurrence_noop(self):
+        assert self._final("32s", "password") == "password"
+
+    def test_3_nonletter_after_sep_noop(self):
+        assert self._final("30.", "a.1b") == "a.1b"
+
+    def test_3_letter_after_sep(self):
+        assert self._final("30.", "a.b") == "a.B"
+
+
+class TestHexEscapeDecoding:
+    """hashcat decodes \\xNN byte escapes in rules; explain_rule must too, so
+    its output matches hashcat for BARRAGE rules that use them."""
+
+    def test_substitute_space_via_hex_escape(self):
+        # s\x20X = substitute space -> X. hashcat 'a b' -> 'aXb'.
+        steps = explain_rule("s\\x20X", "a b")
+        assert steps is not None
+        assert steps[-1].split("→")[-1].strip() == "aXb"
+
+    def test_append_hex_escape(self):
+        # $\x41 = append 'A' (0x41). 'ab' -> 'abA'.
+        steps = explain_rule("$\\x41", "ab")
+        assert steps is not None
+        assert steps[-1].split("→")[-1].strip() == "abA"
+
+    def test_hex_escape_not_mistokenized(self):
+        # \x73 = 's'; $\x73 must be "append 's'", not a substitute op.
+        steps = explain_rule("$\\x73", "ab")
+        assert steps is not None
+        assert steps[-1].split("→")[-1].strip() == "abs"
+
+    def test_non_hex_backslash_left_literal(self):
+        # A backslash not forming \xNN is a literal char (append it).
+        steps = explain_rule("$\\", "ab")
+        assert steps is not None
+        assert steps[-1].split("→")[-1].strip() == "ab\\"
+
+
 class TestEscapeBytesHelper:
     """_escape_bytes renders raw bytes for display without touching genuine
     Unicode (issue #31)."""

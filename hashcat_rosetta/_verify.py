@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from hashcat_rosetta.cli import explain_rule
-from hashcat_rosetta.parser import RuleParser
+from hashcat_rosetta.parser import RuleParser, decode_hex_escapes
 
 VerifyStatus = Literal[
     "match",
@@ -77,7 +77,7 @@ def decide_rejection_status(
 
 # Mirrors verify_rules.py - keep in sync if hashcat adds opcodes.
 _THREE_ARG_OPCODES: set[str] = set("X")
-_TWO_ARG_OPCODES: set[str] = set("soix*=vOB")
+_TWO_ARG_OPCODES: set[str] = set("soix*=vOB3")
 _ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,%LR()e")
 _ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMa")
 _ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | _ZERO_ARG_OPCODES
@@ -151,6 +151,7 @@ _DEFAULT_IMPLEMENTED: set[str] = {
     ")",
     "v",
     "e",
+    "3",
 }
 
 
@@ -185,6 +186,12 @@ _POS_2ARG_FIRST: set[str] = set("io=*xOvB")
 # table like O omit-count and x extract-length). Hashcat validates them
 # identically, so they get the same arg-encoding check.
 _POS_2ARG_SECOND: set[str] = set("*Ox")
+# Opcodes whose first arg uses the position ENCODING (0-9/A-Z) — hashcat
+# rejects any other encoding — but whose value is NOT a word position, so it is
+# never out-of-bounds (e.g. 3NX's N is an occurrence index; N beyond the number
+# of separators is a silent no-op, not a rejection). These get the invalid-
+# encoding check but NOT the OOB check.
+_POS_2ARG_FIRST_ENCODING_ONLY: set[str] = set("3")
 
 
 def _hex_value(c: str) -> int | None:
@@ -307,7 +314,11 @@ def _has_invalid_position_arg(rule_str: str) -> bool:
         args = rule_str[i + 1 : i + 1 + arity]
         if c in _POS_1ARG_FIRST and arity >= 1 and _hex_value(args[0]) is None:
             return True
-        if c in _POS_2ARG_FIRST and arity >= 2 and _hex_value(args[0]) is None:
+        if (
+            (c in _POS_2ARG_FIRST or c in _POS_2ARG_FIRST_ENCODING_ONLY)
+            and arity >= 2
+            and _hex_value(args[0]) is None
+        ):
             return True
         if c in _POS_2ARG_SECOND and arity >= 2 and _hex_value(args[1]) is None:
             return True
@@ -337,8 +348,12 @@ def _has_truncated_opcode(rule_str: str) -> bool:
         else:
             i += 1
             continue
+        # A space is a valid literal argument (e.g. decoded from \x20, or
+        # `$ ` appending a space), NOT a separator here — hashcat consumes the
+        # next byte as the arg regardless. Only running off the end of the
+        # string is genuine truncation.
         for k in range(1, args_needed + 1):
-            if i + k >= n or rule_str[i + k] == " ":
+            if i + k >= n:
                 return True
         i += args_needed + 1
     return False
@@ -437,7 +452,13 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
             baseword=baseword,
         )
 
-    unimpl = _unimplemented_opcodes(rule, implemented)
+    # hashcat decodes \xNN byte escapes before parsing the rule; decode first
+    # so opcode/position analysis sees the same characters. explain_rule and
+    # _hashcat_output are given the ORIGINAL rule (each decodes once itself /
+    # internally) to avoid a non-idempotent double decode.
+    decoded = decode_hex_escapes(rule)
+
+    unimpl = _unimplemented_opcodes(decoded, implemented)
     if unimpl:
         return VerifyResult(
             status="skipped_unimpl",
@@ -446,16 +467,16 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
             unimpl_opcodes=unimpl,
         )
 
-    extracted_opcodes = _extract_opcodes(rule)
+    extracted_opcodes = _extract_opcodes(decoded)
     unsupported = any(
         op in _HASHCAT_STDOUT_UNSUPPORTED or op not in _ALL_KNOWN_OPCODES
         for op in extracted_opcodes
     )
     if (
         unsupported
-        or _has_truncated_opcode(rule)
-        or _has_oob_position(rule, baseword)
-        or _has_invalid_position_arg(rule)
+        or _has_truncated_opcode(decoded)
+        or _has_oob_position(decoded, baseword)
+        or _has_invalid_position_arg(decoded)
     ):
         return VerifyResult(
             status="skipped_hashcat_unsupported",
