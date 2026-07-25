@@ -186,6 +186,12 @@ _POS_2ARG_FIRST: set[str] = set("io=*xOvB")
 # table like O omit-count and x extract-length). Hashcat validates them
 # identically, so they get the same arg-encoding check.
 _POS_2ARG_SECOND: set[str] = set("*Ox")
+# Opcodes whose first arg uses the position ENCODING (0-9/A-Z) — hashcat
+# rejects any other encoding — but whose value is NOT a word position, so it is
+# never out-of-bounds (e.g. 3NX's N is an occurrence index; N beyond the number
+# of separators is a silent no-op, not a rejection). These get the invalid-
+# encoding check but NOT the OOB check.
+_POS_2ARG_FIRST_ENCODING_ONLY: set[str] = set("3")
 
 
 def _hex_value(c: str) -> int | None:
@@ -308,7 +314,11 @@ def _has_invalid_position_arg(rule_str: str) -> bool:
         args = rule_str[i + 1 : i + 1 + arity]
         if c in _POS_1ARG_FIRST and arity >= 1 and _hex_value(args[0]) is None:
             return True
-        if c in _POS_2ARG_FIRST and arity >= 2 and _hex_value(args[0]) is None:
+        if (
+            (c in _POS_2ARG_FIRST or c in _POS_2ARG_FIRST_ENCODING_ONLY)
+            and arity >= 2
+            and _hex_value(args[0]) is None
+        ):
             return True
         if c in _POS_2ARG_SECOND and arity >= 2 and _hex_value(args[1]) is None:
             return True

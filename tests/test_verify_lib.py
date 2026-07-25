@@ -257,6 +257,18 @@ class TestOOBPositionSkip:
         assert _has_oob_position("*01", "cat") is False
         assert _has_oob_position("u $a", "cat") is False
 
+    def test_3_position_encoding_validated_but_not_oob(self) -> None:
+        """3NX's N is a position-ENCODED occurrence index: hashcat rejects an
+        invalid encoding (lowercase 'a') but never rejects it as out-of-bounds
+        (an occurrence index beyond the separators is a silent no-op)."""
+        from hashcat_rosetta._verify import _has_invalid_position_arg, _has_oob_position
+
+        assert _has_invalid_position_arg("3ab") is True  # 'a' is not 0-9/A-Z
+        assert _has_invalid_position_arg("30s") is False
+        assert _has_invalid_position_arg("3Az") is False  # 'A' = position 10
+        # occurrence index far beyond the word is NOT out-of-bounds for '3'
+        assert _has_oob_position("3Zs", "password") is False
+
 
 class TestHexValueHelper:
     def test_digit(self) -> None:
