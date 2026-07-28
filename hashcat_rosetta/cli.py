@@ -799,22 +799,22 @@ def main(
     trailing wordlist field, enabling per-wordlist analysis via --wordlists.
 
     Basic usage:
-        rosetta debug.txt
-        rosetta debug.txt --rules --metric frequency
-        rosetta debug.txt --basewords --detail
-        rosetta debug.txt --wordlists --detail
-        rosetta debug.txt --debug-mode 5 --wordlists
-        rosetta debug.txt --export report.json --format json
+        hashcat-rosetta debug.txt
+        hashcat-rosetta debug.txt --rules --metric frequency
+        hashcat-rosetta debug.txt --basewords --detail
+        hashcat-rosetta debug.txt --wordlists --detail
+        hashcat-rosetta debug.txt --debug-mode 5 --wordlists
+        hashcat-rosetta debug.txt --export report.json --format json
 
     Explain rules:
-        rosetta --explain "c"
-        rosetta --explain "i74i81i92iA3"
-        rosetta --explain "cD0sao" --baseword "admin"
-        rosetta --explain "u$!" --baseword "myword"
-        rosetta --explain rules.txt --baseword "admin"
+        hashcat-rosetta --explain "c"
+        hashcat-rosetta --explain "i74i81i92iA3"
+        hashcat-rosetta --explain "cD0sao" --baseword "admin"
+        hashcat-rosetta --explain "u$!" --baseword "myword"
+        hashcat-rosetta --explain rules.txt --baseword "admin"
 
     Analyze rule file opcodes:
-        rosetta rules.txt --analyze-rules
+        hashcat-rosetta rules.txt --analyze-rules
     """
 
     # Show the banner (to stderr so it never pollutes piped/exported stdout)
