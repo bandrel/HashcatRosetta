@@ -259,6 +259,20 @@ class TestErrorPaths:
         assert "Error" in result.output
 
 
+class TestHelpMatchesEntryPoint:
+    """Regression guard: --help examples must use the real registered command name.
+
+    The docstring previously showed `rosetta ...` while pyproject.toml registers
+    `hashcat-rosetta` as the entry point, so copy-pasting --help output failed.
+    """
+
+    def test_help_uses_registered_entry_point_name(self, runner):
+        result = runner.invoke(main, ["--help"])
+        assert result.exit_code == 0
+        assert "hashcat-rosetta " in result.output
+        assert "rosetta " not in result.output.replace("hashcat-rosetta ", "")
+
+
 # --- export_to_dict JSON serialization ---
 
 

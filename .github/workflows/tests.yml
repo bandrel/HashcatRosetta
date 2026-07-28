@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    # Fast unit-test/lint/type gate — no hashcat binary needed. Complements
+    # accuracy.yml, which is heavier (needs a hashcat oracle) and PR-scoped.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+      - name: Sync dependencies
+        run: uv sync
+      - name: Lint
+        run: uv run ruff check hashcat_rosetta/ tests/
+      - name: Format check
+        run: uv run ruff format --check hashcat_rosetta/ tests/
+      - name: Type check
+        run: uv run mypy hashcat_rosetta/
+      - name: Run tests
+        # Integration tests require the hashcat binary; keep this job fast.
+        run: uv run pytest -m "not integration" --cov=hashcat_rosetta tests/
