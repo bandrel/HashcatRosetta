@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tag-triggered runs check out the tag; full history is not needed,
+          # but the changelog extraction below reads the working tree only.
+          fetch-depth: 1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Verify tag matches pyproject version
+        # The version lives in pyproject.toml and is bumped by hand, so a tag
+        # can easily disagree with it (v0.4.0 tagged while pyproject still
+        # says 0.3.1). Fail loudly here rather than publishing a mislabeled
+        # artifact.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          proj="$(python3 -c \
+            'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=$tag pyproject=$proj"
+          if [ "$tag" != "$proj" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject version $proj. Bump pyproject.toml or retag."
+            exit 1
+          fi
+
+      - name: Verify CHANGELOG has an entry for this version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[$tag\]" CHANGELOG.md; then
+            echo "::error::No '## [$tag]' section in CHANGELOG.md."
+            exit 1
+          fi
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check hashcat_rosetta/ tests/
+
+      - name: Format check
+        run: uv run ruff format --check hashcat_rosetta/ tests/
+
+      - name: Type check
+        run: uv run mypy hashcat_rosetta/
+
+      - name: Run tests
+        # Integration tests need a hashcat binary as an oracle; accuracy.yml
+        # covers those. A release must not be gated on provisioning hashcat.
+        run: uv run pytest -m "not integration" tests/
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Extract release notes from CHANGELOG
+        # Pull just this version's section: from its heading to the next
+        # top-level heading, dropping the heading line itself.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v ver="$tag" '
+            $0 ~ "^## \\[" ver "\\]" { inside = 1; next }
+            inside && /^## / { exit }
+            inside { print }
+          ' CHANGELOG.md > release-notes.md
+          echo "--- release notes ---"
+          cat release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            dist/*
