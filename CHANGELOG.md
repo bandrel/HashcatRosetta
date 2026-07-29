@@ -24,6 +24,13 @@ hashcat does not perform.
   installed 0.3.0 and have `rosetta` in a script or in muscle memory, update
   it. `python -m hashcat_rosetta` works as before, and `hashcat_rosetta` with
   an underscore remains the import name rather than a command.
+- **The distribution is now named `hashcat-rosetta`, not `hashcatrosetta`.** The
+  project had four spellings of its own name in play, and the smashed-together
+  one appeared exactly once — as the `[project] name` — where it normalized to a
+  different package name than everything else. Distribution and console script
+  are now both `hashcat-rosetta`, the import package stays `hashcat_rosetta`,
+  and built artifacts are `hashcat_rosetta-<version>`. Nothing was published to
+  PyPI under the old name, so this breaks no installs.
 - **ASCII-only case mapping.** `l`, `u`, `c`, `C`, `t`, `E`, `e`, `T`, and `3`
   now case-map only ASCII `A-Z`/`a-z`, matching hashcat. Python's
   `str.lower()`/`upper()`/`swapcase()` also map Latin-1 accented bytes, which
