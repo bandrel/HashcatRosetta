@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "hashcatrosetta"
+name = "hashcat-rosetta"
 version = "0.4.0"
 description = "Analyze hashcat debug output to identify efficient rules and baseword patterns"
 
