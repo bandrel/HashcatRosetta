@@ -825,18 +825,18 @@ def main(
         if os.path.isfile(explain):
             click.echo(f"\nRule File Explanation: '{explain}' applied to '{baseword}'")
             click.echo("=" * 70)
-            with open(explain, "r", encoding="utf-8") as rule_file:
+            with open(explain, "r", encoding="latin-1") as rule_file:
                 for line_number, raw_line in enumerate(rule_file, 1):
-                    rule_line = raw_line.strip()
+                    rule_line = raw_line.rstrip("\r\n")
                     if not rule_line or rule_line.startswith("#"):
                         continue
                     explanations = explain_rule(rule_line, baseword)
                     if explanations:
-                        click.echo(f"\nLine {line_number}: {rule_line}")
+                        click.echo(f"\nLine {line_number}: {_escape_bytes(rule_line)}")
                         for explanation in explanations:
                             click.echo(f"  {_escape_bytes(explanation)}")
                     else:
-                        click.echo(f"\nLine {line_number}: {rule_line}")
+                        click.echo(f"\nLine {line_number}: {_escape_bytes(rule_line)}")
                         click.echo("  [!] Unknown rule or no explanation available")
             click.echo("\nNote: Each character is a rule operation applied sequentially.")
             click.echo("      Complex rules combine multiple operations from left to right.")

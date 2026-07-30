@@ -229,6 +229,37 @@ class TestExplainFlag:
         assert result.exit_code == 0
         assert "Unknown rule" in result.output
 
+    def test_explain_high_byte_rule_file_overwrite(self, runner, high_byte_rule_file):
+        """A raw 0xBA byte in the rule file must not raise UnicodeDecodeError."""
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        assert "o1\\xba: Overwrite pos 1" in result.output
+
+    def test_explain_high_byte_rule_file_preserves_trailing_space(
+        self, runner, high_byte_rule_file
+    ):
+        """`$ ` (append a literal space) must not be collapsed to `$` by strip()."""
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        assert "Append ' '" in result.output
+
+    def test_explain_high_byte_rule_file_escapes_output_bytes(self, runner, high_byte_rule_file):
+        """Output must be escaped ASCII (b"\\xba"), never a raw/UTF-8-encoded high byte."""
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        stdout_bytes = result.stdout_bytes
+        assert b"o1\\xba" in stdout_bytes
+        assert b"\xc2\xba" not in stdout_bytes
+
+    def test_explain_high_byte_rule_file_skips_comment_and_blank(self, runner, high_byte_rule_file):
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        assert "# comment" not in result.output
+        assert "Line 4" not in result.output
+        assert "Line 5" not in result.output
+        assert "Line 6: c" in result.output
+        assert "Capitalize" in result.output
+
 
 # --- --analyze-rules flag ---
 
