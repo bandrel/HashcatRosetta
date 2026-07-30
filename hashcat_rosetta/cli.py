@@ -100,8 +100,15 @@ def _ascii_swapcase(s: str) -> str:
     return "".join(out)
 
 
-def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
-    """Explain what a hashcat rule does with examples."""
+def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str], str] | None:
+    """Simulate a hashcat rule, returning its steps and the resulting word.
+
+    Returns ``(steps, final_word)``, or ``None`` when there is nothing to
+    explain — an empty rule, a filter opcode that rejected the word, or a rule
+    that produced no recognized steps. ``final_word`` is the transformed word
+    itself, not a value re-parsed out of the step text: steps such as ``M:
+    Memorize ...`` carry no ``->`` arrow, so text parsing is unreliable.
+    """
     if not rule_str:
         return None
 
@@ -723,7 +730,18 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             else:
                 i += 1
 
-    return steps if steps else None
+    return (steps, current) if steps else None
+
+
+def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
+    """Explain what a hashcat rule does with examples.
+
+    Thin wrapper over :func:`_simulate_rule` that drops the final word. Kept
+    with an unchanged signature because the verification harness, the scripts,
+    and the test suite all call it.
+    """
+    simulated = _simulate_rule(rule_str, baseword)
+    return simulated[0] if simulated else None
 
 
 @click.command()

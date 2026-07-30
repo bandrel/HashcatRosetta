@@ -298,6 +298,45 @@ class TestExportSerialization:
 # --- explain_rule() edge cases ---
 
 
+class TestSimulateRule:
+    """_simulate_rule returns both the steps and the true final word."""
+
+    def test_steps_match_explain_rule(self):
+        from hashcat_rosetta.cli import _simulate_rule
+
+        for rule in ("c", "u$1", "sa@", "^!d", "i74", "31s$1"):
+            simulated = _simulate_rule(rule, "password")
+            assert simulated is not None, rule
+            steps, _final = simulated
+            assert steps == explain_rule(rule, "password"), rule
+
+    def test_final_word_is_the_transformed_word(self):
+        from hashcat_rosetta.cli import _simulate_rule
+
+        simulated = _simulate_rule("c$1", "admin")
+        assert simulated is not None
+        _steps, final = simulated
+        assert final == "Admin1"
+
+    def test_final_word_correct_when_last_step_has_no_arrow(self):
+        """A trailing M step prints no ' -> ' arrow; the final word is still the word.
+
+        The old string-parsing recovery returned the whole step sentence here.
+        """
+        from hashcat_rosetta.cli import _simulate_rule
+
+        simulated = _simulate_rule("c$1M", "admin")
+        assert simulated is not None
+        _steps, final = simulated
+        assert final == "Admin1"
+
+    def test_returns_none_where_explain_rule_returns_none(self):
+        from hashcat_rosetta.cli import _simulate_rule
+
+        assert _simulate_rule("") is None
+        assert _simulate_rule("!s", "password") is None  # filter rejects
+
+
 class TestExplainRuleEdgeCases:
     def test_empty_rule(self):
         assert explain_rule("") is None
