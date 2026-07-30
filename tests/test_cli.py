@@ -264,6 +264,33 @@ class TestExplainFlag:
         assert "Line 6: c" in result.output
         assert "Capitalize" in result.output
 
+    def test_explain_skips_indented_comment_and_blank_but_keeps_space_arg(
+        self, runner, indented_comment_rule_file
+    ):
+        """An indented "#" comment and a whitespace-only line must be skipped,
+        while a real rule's trailing-space argument must still survive.
+
+        The skip decision has to be made on the *stripped* line -- otherwise
+        "  # note" doesn't start with "#" (it starts with a space) and gets
+        explained as a bogus rule, and "   " is treated as a real (blank)
+        rule line instead of being skipped. But the line actually handed to
+        explain_rule/echoed must stay un-stripped, or "$ " loses its
+        trailing-space argument -- which is the inverse mistake this test
+        also catches: if the fix regresses to using the stripped line for
+        explain_rule, the transformed candidate loses its trailing space.
+        """
+        result = runner.invoke(main, ["--explain", indented_comment_rule_file])
+        assert result.exit_code == 0
+        assert "# note" not in result.output
+        assert "Line 1" not in result.output
+        assert "Line 2" not in result.output
+        assert "Line 3: $ " in result.output
+        assert "Append ' '" in result.output
+        # The transformed candidate must retain the trailing space.
+        assert "→ password \n" in result.output
+        assert "Line 4: c" in result.output
+        assert "Capitalize" in result.output
+
 
 # --- --analyze-rules flag ---
 

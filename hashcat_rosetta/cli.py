@@ -828,7 +828,12 @@ def main(
             with open(explain, "r", encoding="latin-1") as rule_file:
                 for line_number, raw_line in enumerate(rule_file, 1):
                     rule_line = raw_line.rstrip("\r\n")
-                    if not rule_line or rule_line.startswith("#"):
+                    # Skip decision on the stripped line (so an indented "#"
+                    # comment and a whitespace-only line are recognized), but
+                    # explain/echo the un-stripped rule_line so a real rule's
+                    # leading/trailing whitespace argument (e.g. "$ ") survives.
+                    stripped = rule_line.strip()
+                    if not stripped or stripped.startswith("#"):
                         continue
                     explanations = explain_rule(rule_line, baseword)
                     if explanations:

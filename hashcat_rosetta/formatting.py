@@ -95,8 +95,14 @@ def extract_rule_opcodes(rule_file: str) -> tuple[dict[str, int], int]:
     with open(rule_file, "r", encoding="latin-1") as f:
         for line in f:
             line = line.rstrip("\r\n")
-            # Skip empty lines and comments
-            if not line or line.startswith("#"):
+            # Skip empty/whitespace-only lines and (possibly indented) comments.
+            # The skip decision is made on the stripped line so an indented
+            # "# ..." comment and a whitespace-only line are both recognized,
+            # but `line` itself stays un-stripped for tokenizing below, so a
+            # real rule's leading/trailing whitespace argument (e.g. "$ ")
+            # survives intact.
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
                 continue
 
             rule_count += 1
