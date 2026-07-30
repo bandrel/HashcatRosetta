@@ -230,6 +230,43 @@ class TestExplainFlag:
         assert "Unknown rule" in result.output
 
 
+class TestExplainOptionalValue:
+    """--explain takes an optional value: bare with a FILE, or a rule string."""
+
+    def test_bare_explain_before_another_flag_is_the_sentinel(self, runner, debug_file):
+        """`--explain --rules` must not swallow --rules as the explain value."""
+        result = runner.invoke(main, [debug_file, "--explain", "--rules"])
+        assert result.exit_code == 0
+        assert "Top 10 Rules" in result.output
+
+    def test_bare_explain_at_end_of_argv(self, runner, debug_file):
+        result = runner.invoke(main, [debug_file, "--rules", "--explain"])
+        assert result.exit_code == 0
+        assert "Top 10 Rules" in result.output
+
+    def test_explain_with_value_still_explains_one_rule(self, runner):
+        result = runner.invoke(main, ["--explain", "c$1", "--baseword", "admin"])
+        assert result.exit_code == 0
+        assert "Rule Explanation" in result.output
+        assert "Admin1" in result.output
+
+    def test_bare_explain_without_file_errors(self, runner):
+        result = runner.invoke(main, ["--explain"])
+        assert result.exit_code != 0
+        assert "--explain needs a rule" in result.output
+
+    def test_bare_explain_with_analyze_rules_errors(self, runner, rule_file):
+        result = runner.invoke(main, [rule_file, "--analyze-rules", "--explain"])
+        assert result.exit_code != 0
+        assert "--analyze-rules" in result.output
+
+    def test_baseword_with_bare_explain_warns(self, runner, debug_file):
+        """--baseword is meaningless in log mode; say so instead of ignoring it."""
+        result = runner.invoke(main, [debug_file, "--rules", "--explain", "--baseword", "admin"])
+        assert result.exit_code == 0
+        assert "--baseword is ignored" in result.output
+
+
 # --- --analyze-rules flag ---
 
 

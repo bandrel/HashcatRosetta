@@ -21,6 +21,11 @@ _BANNER = r"""
     Decode the Rosetta Stone of Password Cracking Rules
 """
 
+# --explain takes an optional value. Bare, it means "explain the rules found in
+# the debug FILE"; with a value it means "explain this rule string or rule
+# file". The sentinel holds a NUL byte so no real rule or path can collide.
+_EXPLAIN_FROM_LOG = "\x00explain-from-log"
+
 
 def _hashcat_pos(c: str) -> int:
     """Parse a hashcat position char.
@@ -746,7 +751,15 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
 
 @click.command()
 @click.argument("file", type=click.Path(exists=True), required=False)
-@click.option("--explain", type=str, help="Explain what a hashcat rule does")
+@click.option(
+    "--explain",
+    is_flag=False,
+    flag_value=_EXPLAIN_FROM_LOG,
+    help=(
+        "Explain what a hashcat rule does. Pass a rule string or a rule file; "
+        "or pass it bare alongside a debug FILE to explain the rules in that log."
+    ),
+)
 @click.option(
     "--baseword",
     type=str,
@@ -838,8 +851,8 @@ def main(
     # Show the banner (to stderr so it never pollutes piped/exported stdout)
     click.echo(_BANNER, err=True)
 
-    # Handle rule explanation
-    if explain:
+    # Rule-string / rule-file explanation: unchanged behavior, returns early.
+    if explain is not None and explain != _EXPLAIN_FROM_LOG:
         if os.path.isfile(explain):
             click.echo(f"\nRule File Explanation: '{explain}' applied to '{baseword}'")
             click.echo("=" * 70)
@@ -871,6 +884,27 @@ def main(
             else:
                 click.echo(f"[!] Unknown rule or no explanation available for: '{explain}'")
         return
+
+    if explain == _EXPLAIN_FROM_LOG:
+        if not file:
+            click.echo(
+                "Error: --explain needs a rule, a rule file, or a debug file argument",
+                err=True,
+            )
+            sys.exit(1)
+        if analyze_rules:
+            click.echo(
+                "Error: --explain cannot be combined with --analyze-rules "
+                "(--analyze-rules reads a rule file, not a debug log)",
+                err=True,
+            )
+            sys.exit(1)
+        if baseword != "password":
+            click.echo(
+                "Note: --baseword is ignored with --explain on a debug file; "
+                "basewords come from the log.",
+                err=True,
+            )
 
     # Require file for other operations
     if not file:
