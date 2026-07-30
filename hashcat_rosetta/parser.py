@@ -108,7 +108,7 @@ class DebugLogParser:
             sample = [
                 line.rstrip("\r\n")
                 for line in all_lines
-                if line.rstrip("\r\n") and not line.startswith("#")
+                if line.strip() and not line.lstrip().startswith("#")
             ]
             self._format = self._detect_format(sample)
             self._mode = self._resolve_mode(sample)
@@ -367,15 +367,21 @@ class DebugLogParser:
         Returns:
             List of parsed entries
         """
-        # Detect format from the batch of lines
-        stripped = [line.strip() for line in lines if line and line.strip()]
-        non_comment = [line for line in stripped if not line.startswith("#")]
-        self._format = self._detect_format(non_comment)
-        self._mode = self._resolve_mode(non_comment)
+        # Detect format and mode from a sample of lines. Decide skip/blank on
+        # the stripped line, but keep the un-stripped (terminator-only-
+        # stripped) content: leading/trailing whitespace can be part of a
+        # real field (baseword, candidate, or wordlist).
+        sample = [
+            line.rstrip("\r\n")
+            for line in lines
+            if line and line.strip() and not line.lstrip().startswith("#")
+        ]
+        self._format = self._detect_format(sample)
+        self._mode = self._resolve_mode(sample)
 
         entries: list = []
         for line_num, line in enumerate(lines, 1):
-            parsed = self._parse_line(line.strip())
+            parsed = self._parse_line(line.rstrip("\r\n"))
             if parsed:
                 parsed["line_number"] = line_num
                 entries.append(parsed)

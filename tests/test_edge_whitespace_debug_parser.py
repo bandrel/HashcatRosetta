@@ -21,7 +21,115 @@ These tests use the shared fixtures in tests/fixtures/high_byte_rules.py
 (registered globally via tests/conftest.py's pytest_plugins).
 """
 
-from hashcat_rosetta.parser import DebugLogParser
+from hashcat_rosetta.parser import DebugLogParser, _DETECTION_SAMPLE_SIZE
+
+
+def _mode5_colon_line(n: int) -> str:
+    return f"password{n}:c:Password{n}:rockyou.txt\n"
+
+
+class TestDebugParserWhitespaceOnlyLinesDoNotStarveDetectionSample:
+    """Regression test: whitespace-only lines must not survive into the
+    format/mode detection sample.
+
+    parse_debug_file's sample-building filter changed from `if line.strip()`
+    to `if line.rstrip("\\r\\n")`. A truly empty line ("\\n") rstrips to ""
+    (falsy) and is still filtered, but a whitespace-only line (e.g. "   \\n")
+    rstrips to "   " (truthy) and now survives into the sample. Since the
+    sample is capped at _DETECTION_SAMPLE_SIZE (20) lines, and whitespace-only
+    lines cast no format/mode vote but still consume a slot, enough of them
+    prepended before the real data starves the real lines out of the sample
+    entirely -- silently degrading mode-5 detection to mode-4, and eventually
+    raising "No valid debug entries found" even though every real line in the
+    file is well-formed mode-5 colon data.
+    """
+
+    def _build_file(self, tmp_path, num_whitespace_lines, num_real_lines=50):
+        lines = ["   \n"] * num_whitespace_lines
+        lines += [_mode5_colon_line(i) for i in range(num_real_lines)]
+        path = tmp_path / "whitespace_starved.log"
+        path.write_text("".join(lines))
+        return str(path)
+
+    def test_whitespace_only_lines_excluded_from_detection_sample_directly(self):
+        sample_input = ["   \n", "\t\n", "password:c:Password:rockyou.txt\n"]
+        # Mirrors the filter used to build `sample` in parse_debug_file.
+        sample = [
+            line.rstrip("\r\n")
+            for line in sample_input
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert sample == ["password:c:Password:rockyou.txt"]
+
+    def test_whitespace_only_lines_do_not_degrade_mode_detection(self, tmp_path):
+        # Fewer whitespace-only lines than the sample cap: real lines still
+        # get in, but should not be diluted.
+        filepath = self._build_file(tmp_path, num_whitespace_lines=5)
+        parser = DebugLogParser()
+        entries = parser.parse_debug_file(filepath)
+        assert parser._mode == 5
+        assert len(entries) == 50
+        assert entries[0]["wordlist"] == "rockyou.txt"
+        assert entries[0]["candidate"] == "Password0"
+
+    def test_whitespace_only_lines_at_sample_cap_do_not_break_mode5_detection(self, tmp_path):
+        # Exactly _DETECTION_SAMPLE_SIZE whitespace-only lines prepended: under
+        # the bug, this fully starves the sample of real lines, silently
+        # degrading detection from mode 5 to mode 4 (wordlist attribution
+        # destroyed) instead of raising or correctly detecting mode 5.
+        filepath = self._build_file(tmp_path, num_whitespace_lines=_DETECTION_SAMPLE_SIZE)
+        parser = DebugLogParser()
+        entries = parser.parse_debug_file(filepath)
+        assert parser._mode == 5
+        assert len(entries) == 50
+        assert entries[0]["wordlist"] == "rockyou.txt"
+
+    def test_whitespace_only_lines_beyond_sample_cap_do_not_raise(self, tmp_path):
+        # Twice the sample cap of whitespace-only lines prepended: under the
+        # bug, this raises ValueError("No valid debug entries found") even
+        # though every real line in the file is well-formed mode-5 data.
+        filepath = self._build_file(tmp_path, num_whitespace_lines=_DETECTION_SAMPLE_SIZE * 2)
+        parser = DebugLogParser()
+        entries = parser.parse_debug_file(filepath)
+        assert parser._mode == 5
+        assert len(entries) == 50
+
+
+class TestParseDebugLinesMatchesParseDebugFile:
+    """parse_debug_lines (the in-memory sibling of parse_debug_file, reached
+    from debug_analyzer.py) must apply the same edge-whitespace-faithful
+    rstrip("\\r\\n") pattern, not .strip(), so the two paths do not drift.
+    """
+
+    def test_leading_whitespace_on_mode4_baseword_survives(self):
+        parser = DebugLogParser()
+        entries = parser.parse_debug_lines(["  password:c:Password"])
+
+        assert entries[0]["baseword"] == "  password"
+        assert entries[0]["rule"] == "c"
+        assert entries[0]["candidate"] == "Password"
+
+    def test_trailing_whitespace_on_mode5_wordlist_survives(self):
+        parser = DebugLogParser()
+        lines = [
+            "password:c:Password:wordlist.txt",
+            "password2:c:Password2:wordlist.txt ",
+            "password3:c:Password3:wordlist.txt",
+        ]
+        entries = parser.parse_debug_lines(lines)
+
+        assert parser._mode == 5
+        assert entries[1]["wordlist"] == "wordlist.txt "
+
+    def test_whitespace_only_lines_do_not_starve_detection_sample(self):
+        parser = DebugLogParser()
+        lines = ["   "] * _DETECTION_SAMPLE_SIZE * 2
+        lines += [_mode5_colon_line(i).rstrip("\n") for i in range(50)]
+        entries = parser.parse_debug_lines(lines)
+
+        assert parser._mode == 5
+        assert len(entries) == 50
+        assert entries[0]["wordlist"] == "rockyou.txt"
 
 
 class TestDebugParserEdgeWhitespace:
