@@ -92,9 +92,9 @@ def extract_rule_opcodes(rule_file: str) -> tuple[dict[str, int], int]:
     parser = RuleParser()
     rule_count = 0
 
-    with open(rule_file, "r", encoding="utf-8", errors="ignore") as f:
+    with open(rule_file, "r", encoding="latin-1") as f:
         for line in f:
-            line = line.strip()
+            line = line.rstrip("\r\n")
             # Skip empty lines and comments
             if not line or line.startswith("#"):
                 continue

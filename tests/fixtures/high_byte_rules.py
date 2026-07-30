@@ -26,3 +26,40 @@ def high_byte_rule_file(tmp_path):
     path = tmp_path / "high_byte_rules.rule"
     path.write_bytes(HIGH_BYTE_RULE_LINES)
     return str(path)
+
+
+# Mode-4/mode-5 colon-format debug lines exercising the edge-whitespace bug in
+# DebugLogParser.parse_debug_file: a leading space on a baseword (an edge
+# adjacent to the raw line's start), and a mode-5 file where one line's
+# wordlist field has a trailing space (an edge adjacent to the raw line's
+# end) alongside two clean mode-5 lines so format/mode detection's majority
+# vote is exercised too. Unlike HIGH_BYTE_RULE_LINES, these fixtures are pure
+# ASCII: DebugLogParser.parse_debug_file deliberately stays on
+# utf-8 + errors="ignore" (not latin-1) because debug-log basewords/
+# candidates commonly come from real UTF-8 wordlists and export is UTF-8; see
+# the comment at parser.py's parse_debug_file open() call.
+EDGE_WHITESPACE_DEBUG_MODE4_LINES = (
+    b"  password:c:Password\n"  # leading space belongs to the baseword
+)
+
+EDGE_WHITESPACE_DEBUG_MODE5_LINES = (
+    b"password:c:Password:wordlist.txt\n"
+    b"password2:c:Password2:wordlist.txt \n"  # trailing space belongs to wordlist
+    b"password3:c:Password3:wordlist.txt\n"
+)
+
+
+@pytest.fixture
+def edge_whitespace_debug_mode4_file(tmp_path):
+    """Write a raw-byte mode-4 debug log to tmp_path and return its path."""
+    path = tmp_path / "edge_whitespace_debug_mode4.log"
+    path.write_bytes(EDGE_WHITESPACE_DEBUG_MODE4_LINES)
+    return str(path)
+
+
+@pytest.fixture
+def edge_whitespace_debug_mode5_file(tmp_path):
+    """Write a raw-byte mode-5 debug log to tmp_path and return its path."""
+    path = tmp_path / "edge_whitespace_debug_mode5.log"
+    path.write_bytes(EDGE_WHITESPACE_DEBUG_MODE5_LINES)
+    return str(path)
