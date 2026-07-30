@@ -242,6 +242,10 @@ class TestExplainFlag:
         result = runner.invoke(main, ["--explain", high_byte_rule_file])
         assert result.exit_code == 0
         assert "Append ' '" in result.output
+        # The transformed candidate must retain the trailing space: default
+        # baseword "password" becomes "password " (with a trailing space), not
+        # "password" (which is what a lost/stripped space argument would produce).
+        assert "→ password \n" in result.output
 
     def test_explain_high_byte_rule_file_escapes_output_bytes(self, runner, high_byte_rule_file):
         """Output must be escaped ASCII (b"\\xba"), never a raw/UTF-8-encoded high byte."""
