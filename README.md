@@ -27,26 +27,6 @@ A Python project designed to analyze hashcat debug mode 4 and mode 5 output file
 
 ## Installation
 
-### From source
-
-```bash
-git clone https://github.com/bandrel/HashcatRosetta.git
-cd HashcatRosetta
-pip install -e .
-```
-
-### With development dependencies
-
-The dev tools live in the `dev` [dependency group](https://peps.python.org/pep-0735/).
-
-```bash
-# With uv (installs the dev group by default)
-uv sync
-
-# With pip (25.1+)
-pip install -e . --group dev
-```
-
 ### Using with uv (recommended)
 
 If you're using [uv](https://github.com/astral-sh/uv), you can run without installation:
@@ -61,6 +41,24 @@ uv run python -m hashcat_rosetta --help
 
 # Or use the installed command
 uv run hashcat-rosetta --help
+```
+
+### From source
+
+```bash
+uv tool install git+https://github.com/bandrel/HashcatRosetta.git
+```
+
+### With development dependencies
+
+The dev tools live in the `dev` [dependency group](https://peps.python.org/pep-0735/).
+
+```bash
+# With uv (installs the dev group by default)
+uv sync
+
+# With pip (25.1+)
+pip install -e . --group dev
 ```
 
 ## Quick Start
