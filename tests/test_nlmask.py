@@ -152,6 +152,29 @@ class TestGenerateMasksHappyPath:
         assert result[0].custom_charsets == ["ab"]
         assert result[0].line.custom == ["ab"]
 
+    def test_request_kwargs_include_model_temperature_and_response_format(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks("six digit pin", model="my-model", temperature=0.5, client=client)
+
+        assert len(completions.calls) == 1
+        kwargs = completions.calls[0].kwargs
+        assert kwargs["model"] == "my-model"
+        assert kwargs["temperature"] == 0.5
+        assert kwargs["response_format"]["type"] == "json_schema"
+        assert kwargs["response_format"]["json_schema"]["schema"] == MASK_SCHEMA
+        assert kwargs["response_format"]["json_schema"]["strict"] is True
+
+    def test_ollama_model_env_var_used_when_model_is_none(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_MODEL", "env-model:latest")
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks("six digit pin", model=None, client=client)
+
+        assert completions.calls[0].kwargs["model"] == "env-model:latest"
+
 
 class TestGenerateMasksRetry:
     def test_invalid_then_valid_triggers_exactly_one_retry(self):
@@ -163,6 +186,23 @@ class TestGenerateMasksRetry:
         assert len(completions.calls) == 2
         assert len(result) == 1
         assert result[0].mask == "?d?d?d?d?d?d"
+
+        # Minor #7: the retry conversation must carry forward context rather
+        # than blindly re-asking - the original system+user turns, the
+        # assistant's first (invalid) response, and a new user message
+        # naming the specific failing mask line and its error.
+        first_messages = completions.calls[0].kwargs["messages"]
+        retry_messages = completions.calls[1].kwargs["messages"]
+
+        assert retry_messages[0] == first_messages[0]  # system prompt
+        assert retry_messages[1] == first_messages[1]  # original user description
+        assert retry_messages[2] == {
+            "role": "assistant",
+            "content": INVALID_JSON_UNKNOWN_TOKEN,
+        }
+        assert retry_messages[3]["role"] == "user"
+        assert "?z?d?d" in retry_messages[3]["content"]
+        assert "unknown token" in retry_messages[3]["content"]
 
     def test_invalid_twice_raises(self):
         completions = FakeCompletions([INVALID_JSON_UNKNOWN_TOKEN, INVALID_JSON_UNKNOWN_TOKEN])
@@ -204,6 +244,76 @@ class TestGenerateMasksRetry:
 
         assert len(completions.calls) == 1
         assert result[0].mask == "?d?d?d?d?d?d"
+
+
+NON_DICT_TOP_LEVEL_JSON = json.dumps([{"mask": "?d", "custom_charsets": [], "why": "x"}])
+
+NON_DICT_ITEM_JSON = json.dumps({"masks": ["?d?d"]})
+
+EMPTY_MASKS_JSON = json.dumps({"masks": []})
+
+
+class TestGenerateMasksMalformedShapes:
+    """Important #1/#2/#3: non-dict top-level JSON, non-dict items, empty masks array."""
+
+    def test_non_dict_top_level_json_retries_then_succeeds(self):
+        completions = FakeCompletions([NON_DICT_TOP_LEVEL_JSON, VALID_JSON])
+        client = FakeClient(completions)
+
+        result = generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert len(result) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+
+    def test_non_dict_top_level_json_both_calls_raises(self):
+        completions = FakeCompletions([NON_DICT_TOP_LEVEL_JSON, NON_DICT_TOP_LEVEL_JSON])
+        client = FakeClient(completions)
+
+        with pytest.raises(MaskGenerationError):
+            generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+
+    def test_non_dict_item_in_masks_array_retries_then_succeeds(self):
+        completions = FakeCompletions([NON_DICT_ITEM_JSON, VALID_JSON])
+        client = FakeClient(completions)
+
+        result = generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert len(result) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+
+    def test_non_dict_item_in_masks_array_both_calls_raises(self):
+        completions = FakeCompletions([NON_DICT_ITEM_JSON, NON_DICT_ITEM_JSON])
+        client = FakeClient(completions)
+
+        with pytest.raises(MaskGenerationError) as exc_info:
+            generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert "not an object" in str(exc_info.value)
+
+    def test_empty_masks_array_retries_then_succeeds(self):
+        completions = FakeCompletions([EMPTY_MASKS_JSON, VALID_JSON])
+        client = FakeClient(completions)
+
+        result = generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert len(result) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+
+    def test_empty_masks_array_both_calls_raises(self):
+        completions = FakeCompletions([EMPTY_MASKS_JSON, EMPTY_MASKS_JSON])
+        client = FakeClient(completions)
+
+        with pytest.raises(MaskGenerationError) as exc_info:
+            generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert "no mask suggestions" in str(exc_info.value)
 
 
 class TestGenerateMasksConnectionError:
