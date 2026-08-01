@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import tempfile
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -388,7 +389,7 @@ def _hashcat_output(rule: str, baseword: str, engine: str = "gpu") -> tuple[str 
     including 255. Exit 255 is "No valid rules left", a rule-compilation
     failure, not a filter rejection.
     """
-    session = f"rosetta-{os.getpid()}-{abs(hash((rule, baseword, engine)))}"
+    session = f"rosetta-{uuid.uuid4().hex}"
     common = [
         "hashcat",
         "-a0",
