@@ -188,3 +188,31 @@ steps was running the full `uv run pytest -q` suite as a final sanity check
 (825 passed), which is not itself part of the brief's Step 5 gates but adds
 confidence that the `X`-branch change didn't regress anything else in the
 codebase.
+
+## Fix Round 1: Correct documentation and test placement
+
+A reviewer independently verified the shipped code against 880 randomized
+test cases against real hashcat and confirmed it was fully correct (zero
+mismatches). However, the reviewer identified two issues:
+
+**Documentation fix:** The written derivation in Step 0 incorrectly stated
+a two-way split for the residual memory buffer update, when the actual
+code (and hashcat) implement a three-way split. The piecewise formula should
+be:
+- `m <= p < m+write_len` → splice from current's tail
+- else if `p < mem_len - n` → shift in from `old_mem[n+p]`
+- else → unchanged (only for `p >= mem_len - n` and `p < m`)
+
+The reviewer's counterexample `M X118 X014` on `abcdefgh` demonstrated the
+error: position 0 becomes 'b' (shifted in from `old_mem[1]`), not 'a',
+confirming the shift-in is gated by `p < mem_len - n`, not `p < m`.
+
+**Test structure fix:** `TestChainedXMemoryMutation` was inadvertently
+inserted inside `TestNoOpOpcode` during implementation, which orphaned
+`test_a_still_emits_a_step` into the wrong class. The method was moved
+back to `TestNoOpOpcode` where it belongs, restoring proper class
+boundaries.
+
+All 30 tests in `test_missing_opcodes.py` pass after both fixes.
+
+Commit: **`ede5718`**
