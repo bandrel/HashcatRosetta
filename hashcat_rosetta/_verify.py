@@ -80,7 +80,7 @@ def decide_rejection_status(
 _THREE_ARG_OPCODES: set[str] = set("X")
 _TWO_ARG_OPCODES: set[str] = set("soix*=vOB3%")
 _ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,LR()")
-_ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMa")
+_ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMahH")
 _ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | _ZERO_ARG_OPCODES
 
 # Opcodes hashcat refuses to compile into a `-r` rule file, in every mode
@@ -163,6 +163,8 @@ _DEFAULT_IMPLEMENTED: set[str] = {
     "v",
     "e",
     "3",
+    "h",
+    "H",
 }
 
 

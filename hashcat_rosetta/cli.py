@@ -708,6 +708,18 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             except (ValueError, IndexError):
                 i += 1
 
+        elif char == "h":
+            prev = current
+            current = _cap(prev, current.encode("latin-1", errors="replace").hex())
+            steps.append(f"h: Hex encode lowercase → {prev} → {current}")
+            i += 1
+
+        elif char == "H":
+            prev = current
+            current = _cap(prev, current.encode("latin-1", errors="replace").hex().upper())
+            steps.append(f"H: Hex encode uppercase → {prev} → {current}")
+            i += 1
+
         elif char in rule_map:
             name, transform_func = rule_map[char]
             prev = current
