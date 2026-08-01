@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases predating this file are summarized from their git history; see the tags
 for exact timing.
 
+## [Unreleased]
+
+### Added
+
+- **Natural language to hcmask generation via `--mask` flag.** Describe a password
+  pattern in English (e.g., `"The word 'Summer' followed by six digits."`) and
+  HashcatRosetta generates one or more candidate hashcat masks using a local Ollama
+  server. Every generated mask is validated deterministically through the mask module
+  before being shown to the user. Configurable via `--ollama-host` and `--model` CLI
+  flags, or the `OLLAMA_HOST` and `OLLAMA_MODEL` environment variables. Output can be
+  written to an `.hcmask` file via `-o`/`--mask-out`. All descriptions and generations
+  remain local to the machine — no cloud API calls are made.
+- **`openai` dependency (>=2.52.0)** for OpenAI-compatible API calls to local Ollama.
+
 ## [0.4.0] - 2026-07-29
 
 The headline is accuracy. A full byte-for-byte comparison against hashcat 7.1.2

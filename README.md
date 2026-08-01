@@ -126,6 +126,47 @@ hashcat-rosetta --explain "c$1" --baseword admin
 hashcat-rosetta --explain "u$!" --baseword myword
 ```
 
+### Generating Masks with Natural Language
+
+Generate hashcat masks from English descriptions using a local LLM:
+
+```bash
+hashcat-rosetta --mask "The word 'Summer' followed by six digits."
+```
+
+Output:
+```
+Mask: Summer?d?d?d?d?d?d
+Keyspace: 1,000,000
+```
+
+Save the generated mask to a file:
+```bash
+hashcat-rosetta --mask "The word 'Summer' followed by six digits." -o masks.hcmask
+```
+
+Generate masks from other descriptions:
+```bash
+hashcat-rosetta --mask "a capitalized season, two digits, and a special char"
+hashcat-rosetta --mask "year 2020-2025 followed by exclamation or question mark"
+```
+
+The mask generation feature uses a local Ollama server running an OpenAI-compatible chat
+endpoint. By default, it connects to `http://localhost:11434` and uses the model
+`qwen3.6:35b-a3b`. These can be configured via environment variables or CLI flags:
+
+```bash
+# Using environment variables
+OLLAMA_HOST=http://192.168.1.100:11434 OLLAMA_MODEL=llama2:70b \
+  hashcat-rosetta --mask "your description here"
+
+# Using CLI flags (override environment variables)
+hashcat-rosetta --mask "your description" --ollama-host http://custom.host:11434 --model llama2
+```
+
+**Security note:** All mask descriptions and generations remain local to your machine.
+There are no cloud API calls — everything runs through your local Ollama instance.
+
 ### Using the Python API
 
 ```python
