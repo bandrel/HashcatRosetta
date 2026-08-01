@@ -9,9 +9,13 @@ import click
 
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
-from .mask import describe, format_hcmask_line, keyspace
-from .nlmask import MaskGenerationError, generate_masks
+from .mask import describe, format_hcmask_line
 from .parser import decode_hex_escapes
+
+# NOTE: hashcat_rosetta.nlmask is deliberately NOT imported here. It pulls in
+# the ``openai`` SDK, which costs ~450ms of import time that every non-LLM
+# invocation (--explain, debug-file analysis, ...) would otherwise pay. It is
+# imported lazily inside the ``--mask`` branch of main().
 
 _BANNER = r"""
  _   _           _               _   ____                _   _
@@ -855,9 +859,13 @@ def main(
 
     # Handle natural-language mask generation
     if mask:
+        # Lazy import: keeps the openai SDK out of the import path of every
+        # other command. See the note at the top of this module.
+        from . import nlmask
+
         try:
-            suggestions = generate_masks(mask, model=model, host=ollama_host)
-        except MaskGenerationError as e:
+            suggestions = nlmask.generate_masks(mask, model=model, host=ollama_host)
+        except nlmask.MaskGenerationError as e:
             click.echo(f"[!] {e}", err=True)
             sys.exit(1)
 
@@ -866,16 +874,38 @@ def main(
         for i, suggestion in enumerate(suggestions, 1):
             line_str = format_hcmask_line(suggestion.custom_charsets, suggestion.mask)
             click.echo(f"\n{i}. {line_str}")
+            # describe() already ends with "→ N candidates", so the keyspace
+            # is not printed a second time on its own line.
             click.echo(f"   {describe(suggestion.line)}")
-            click.echo(f"   Keyspace: {keyspace(suggestion.line):,} candidates")
             click.echo(f"   Why: {suggestion.why}")
         click.echo()
 
         if mask_out:
-            with open(mask_out, "w", encoding="utf-8") as f:
-                f.write(f"# {mask}\n")
-                for suggestion in suggestions:
-                    f.write(format_hcmask_line(suggestion.custom_charsets, suggestion.mask) + "\n")
+            # The description is written as a header comment; collapse any
+            # newlines so it cannot inject extra lines into the file.
+            header = " ".join(mask.splitlines())
+            lines = [
+                format_hcmask_line(suggestion.custom_charsets, suggestion.mask)
+                for suggestion in suggestions
+            ]
+            try:
+                with open(mask_out, "w", encoding="utf-8") as f:
+                    f.write(f"# {header}\n")
+                    for line_str in lines:
+                        # hashcat skips any line starting with '#' as a
+                        # comment; '\#' is its accepted escape for a literal
+                        # leading '#'.
+                        if line_str.startswith("#"):
+                            click.echo(
+                                f"[!] mask '{line_str}' starts with '#'; written as "
+                                f"'\\{line_str}' so hashcat does not treat it as a comment",
+                                err=True,
+                            )
+                            line_str = "\\" + line_str
+                        f.write(line_str + "\n")
+            except OSError as e:
+                click.echo(f"[!] could not write {mask_out}: {e}", err=True)
+                sys.exit(1)
             click.echo(f"Done: Mask(s) written to: {mask_out}")
         return
 

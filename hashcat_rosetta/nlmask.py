@@ -5,8 +5,15 @@ This is the only module in the package that talks to a network or imports
 Ollama's OpenAI-compatible chat completions endpoint), asks for one or more
 hashcat mask suggestions in a strict JSON schema, and validates every
 suggested line through :mod:`hashcat_rosetta.mask` before returning it to the
-caller. Nothing here is imported by ``mask.py``, ``cli.py``, or
-``__init__.py`` at module scope for anything other than this validation path.
+caller.
+
+Import isolation invariant: this module is the *only* place in the package
+that imports the third-party ``openai`` SDK. ``cli.py`` and ``__init__.py``
+do import names from here (``generate_masks``, ``MaskGenerationError``,
+``MaskSuggestion``) — that is expected — but they do so lazily, so that the
+cost of importing ``openai`` is paid only when the mask-generation feature is
+actually used. ``mask.py`` does not import this module at all; the dependency
+runs the other way.
 """
 
 import json
@@ -229,6 +236,57 @@ def _parse_response_json(content: str | None) -> tuple[dict[str, Any] | None, st
     return decoded, None
 
 
+def _check_item_types(index: int, mask_field: Any, custom_charsets: Any) -> str | None:
+    """Check that a suggestion item's fields have the expected types.
+
+    Args:
+        index: Position of the item in the ``masks`` array (for messages).
+        mask_field: The raw ``mask`` value from the model.
+        custom_charsets: The raw ``custom_charsets`` value from the model.
+
+    Returns:
+        ``None`` if the types are acceptable, otherwise a human-readable
+        error message suitable for the retry prompt.
+    """
+    if not isinstance(mask_field, str):
+        return f"item {index}: 'mask' must be a string (got {type(mask_field).__name__})"
+
+    if not isinstance(custom_charsets, list):
+        return (
+            f"item {index}: 'custom_charsets' must be an array of strings "
+            f"(got {type(custom_charsets).__name__})"
+        )
+
+    for position, charset in enumerate(custom_charsets):
+        if not isinstance(charset, str):
+            return (
+                f"item {index}: custom_charsets[{position}] must be a string "
+                f"(got {type(charset).__name__})"
+            )
+
+    return None
+
+
+def _placeholder_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Build a type-safe stand-in for an item with wrongly-typed fields.
+
+    Failure records are later re-rendered through
+    :func:`~hashcat_rosetta.mask.format_hcmask_line`, which assumes strings,
+    so a badly-typed item is replaced by one whose ``mask`` and
+    ``custom_charsets`` are guaranteed to be a ``str`` and a ``list[str]``.
+    """
+    mask_field = item.get("mask", "")
+    custom_charsets = item.get("custom_charsets", [])
+
+    safe_mask = mask_field if isinstance(mask_field, str) else repr(mask_field)
+    if isinstance(custom_charsets, list) and all(isinstance(c, str) for c in custom_charsets):
+        safe_custom = list(custom_charsets)
+    else:
+        safe_custom = []
+
+    return {"mask": safe_mask, "custom_charsets": safe_custom, "why": ""}
+
+
 def _validate_items(
     items: list[Any],
 ) -> tuple[list[MaskSuggestion], list[tuple[dict[str, Any], str]]]:
@@ -245,8 +303,10 @@ def _validate_items(
         :class:`MaskSuggestion` per item that validated successfully, and
         ``failures`` holds ``(item, error_message)`` pairs for every item
         that failed to validate. All items are checked, not just the first
-        failure. An item that isn't a JSON object is recorded as a failure
-        (wrapped in a placeholder dict) rather than raising.
+        failure. An item that isn't a JSON object, or whose ``mask`` is not
+        a string, or whose ``custom_charsets`` is not an array of strings,
+        is recorded as a failure (wrapped in a placeholder dict) rather than
+        raising.
     """
     suggestions: list[MaskSuggestion] = []
     failures: list[tuple[dict[str, Any], str]] = []
@@ -262,6 +322,15 @@ def _validate_items(
         mask_field = item.get("mask", "")
         custom_charsets = item.get("custom_charsets", [])
         why = item.get("why", "")
+
+        # Model output is untrusted: guard field *types* before handing them
+        # to mask.py, which assumes strings. A wrong type here must be a
+        # normal validation failure (feeding the retry prompt), never an
+        # uncaught TypeError/AttributeError.
+        type_error = _check_item_types(index, mask_field, custom_charsets)
+        if type_error is not None:
+            failures.append((_placeholder_item(item), type_error))
+            continue
 
         raw_line = format_hcmask_line(custom_charsets, mask_field)
         try:

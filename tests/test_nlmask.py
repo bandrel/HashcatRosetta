@@ -4,6 +4,8 @@ Uses a fake OpenAI-shaped client so no real network access is required.
 """
 
 import json
+import subprocess
+import sys
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -19,6 +21,7 @@ from hashcat_rosetta.nlmask import (
     generate_masks,
     resolve_base_url,
 )
+from hashcat_rosetta.nlmask import _build_retry_message, _validate_items
 
 
 def _make_response(content: str) -> SimpleNamespace:
@@ -345,3 +348,125 @@ class TestModuleConstants:
         assert "?1" in SYSTEM_PROMPT
         assert "?d" in SYSTEM_PROMPT
         assert "why" in SYSTEM_PROMPT
+
+
+NON_STRING_MASK_JSON = json.dumps(
+    {"masks": [{"mask": 123, "custom_charsets": [], "why": "a number, not a mask"}]}
+)
+
+STRING_CUSTOM_CHARSETS_JSON = json.dumps(
+    {"masks": [{"mask": "?1?1", "custom_charsets": "abc", "why": "string, not an array"}]}
+)
+
+NON_STRING_CHARSET_ELEMENT_JSON = json.dumps(
+    {"masks": [{"mask": "?1?1", "custom_charsets": ["ab", 7], "why": "element is a number"}]}
+)
+
+
+class TestGenerateMasksWronglyTypedFields:
+    """Model output is untrusted: wrongly-typed fields must be validation
+    failures feeding the retry, never an uncaught TypeError/AttributeError."""
+
+    def test_validate_items_does_not_raise_on_non_string_mask(self):
+        suggestions, failures = _validate_items([{"mask": 123, "custom_charsets": [], "why": "x"}])
+        assert suggestions == []
+        assert len(failures) == 1
+        assert "'mask' must be a string" in failures[0][1]
+        assert "int" in failures[0][1]
+
+    def test_validate_items_does_not_silently_split_a_string_charset(self):
+        # A bare string used to iterate character-by-character into three
+        # single-char custom charsets, silently producing a wrong mask.
+        suggestions, failures = _validate_items(
+            [{"mask": "?1?1", "custom_charsets": "abc", "why": "x"}]
+        )
+        assert suggestions == []
+        assert len(failures) == 1
+        assert "'custom_charsets' must be an array of strings" in failures[0][1]
+
+    def test_validate_items_rejects_non_string_charset_element(self):
+        suggestions, failures = _validate_items(
+            [{"mask": "?1?1", "custom_charsets": ["ab", 7], "why": "x"}]
+        )
+        assert suggestions == []
+        assert len(failures) == 1
+        assert "custom_charsets[1] must be a string" in failures[0][1]
+
+    def test_failures_render_into_a_retry_prompt_without_raising(self):
+        _, failures = _validate_items(
+            [
+                {"mask": 123, "custom_charsets": [], "why": "x"},
+                {"mask": "?1?1", "custom_charsets": "abc", "why": "x"},
+            ]
+        )
+        message = _build_retry_message(failures)
+        assert "'mask' must be a string" in message
+        assert "'custom_charsets' must be an array of strings" in message
+
+    def test_non_string_mask_retries_then_succeeds(self):
+        completions = FakeCompletions([NON_STRING_MASK_JSON, VALID_JSON])
+        client = FakeClient(completions)
+
+        result = generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert len(result) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+
+    def test_non_string_mask_both_calls_raises_mask_generation_error(self):
+        completions = FakeCompletions([NON_STRING_MASK_JSON, NON_STRING_MASK_JSON])
+        client = FakeClient(completions)
+
+        with pytest.raises(MaskGenerationError) as exc_info:
+            generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert "'mask' must be a string" in str(exc_info.value)
+
+    def test_string_custom_charsets_both_calls_raises_mask_generation_error(self):
+        completions = FakeCompletions([STRING_CUSTOM_CHARSETS_JSON, STRING_CUSTOM_CHARSETS_JSON])
+        client = FakeClient(completions)
+
+        with pytest.raises(MaskGenerationError) as exc_info:
+            generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert "'custom_charsets' must be an array of strings" in str(exc_info.value)
+
+    def test_non_string_charset_element_retries_then_succeeds(self):
+        completions = FakeCompletions([NON_STRING_CHARSET_ELEMENT_JSON, VALID_JSON])
+        client = FakeClient(completions)
+
+        result = generate_masks("something", client=client)
+
+        assert len(completions.calls) == 2
+        assert result[0].mask == "?d?d?d?d?d?d"
+
+
+class TestImportIsolation:
+    """nlmask is the only module importing the openai SDK, and it is loaded
+    lazily so non-LLM commands do not pay its import cost."""
+
+    def test_importing_package_does_not_import_openai(self):
+        code = (
+            "import sys; import hashcat_rosetta, hashcat_rosetta.cli; "
+            "assert 'openai' not in sys.modules, 'openai was imported eagerly'; "
+            "assert 'hashcat_rosetta.nlmask' not in sys.modules"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)
+
+    def test_lazy_attribute_access_still_works(self):
+        code = (
+            "from hashcat_rosetta import generate_masks, MaskGenerationError, MaskSuggestion; "
+            "import hashcat_rosetta; assert hashcat_rosetta.generate_masks is generate_masks; "
+            "assert 'generate_masks' in dir(hashcat_rosetta)"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)
+
+    def test_unknown_attribute_still_raises_attribute_error(self):
+        import hashcat_rosetta
+
+        with pytest.raises(AttributeError):
+            # getattr(), not attribute syntax: a literal bad attribute is a
+            # static error mypy rightly flags on a module with __all__.
+            getattr(hashcat_rosetta, "definitely_not_a_real_export")
