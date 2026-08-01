@@ -1,5 +1,6 @@
 import pytest
 from hashcat_rosetta.cli import explain_rule
+from hashcat_rosetta.parser import RuleParser
 
 
 def _final(rule, word):
@@ -30,3 +31,28 @@ class TestLengthFilters:
             assert result == word
         else:
             assert result is None
+
+
+class TestContainsCountFilter:
+    """hashcat's % is %NX: reject unless word contains char X at least N times.
+    Ground truth on 'password' (two s's): %1s keep, %2s keep, %3s reject.
+    """
+
+    @pytest.mark.parametrize(
+        "rule,word,kept",
+        [
+            ("%1s", "password", True),
+            ("%2s", "password", True),
+            ("%3s", "password", False),
+            ("%1z", "password", False),
+        ],
+    )
+    def test_percent_matches_hashcat(self, rule, word, kept):
+        result = _final(rule, word)
+        assert (result == word) if kept else (result is None)
+
+    def test_percent_consumes_two_argument_bytes(self):
+        """Wrong arity shifts every later opcode by one byte, which corrupts
+        --analyze-rules statistics for any file containing a %."""
+        tokens = RuleParser()._tokenize_rule("%2s$1")
+        assert len(tokens) == 2, f"expected ['%2s', '$1'], got {tokens}"

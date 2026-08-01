@@ -429,15 +429,23 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             except (ValueError, IndexError):
                 i += 1
 
-        elif char == "%" and i + 1 < len(rule_str):
-            # Reject unless word contains char X
-            check_char = rule_str[i + 1]
-            if check_char not in current:
+        elif char == "%" and i + 2 < len(rule_str):
+            # hashcat %NX: reject unless `current` contains X at least N times
+            n_char = rule_str[i + 1]
+            check_char = rule_str[i + 2]
+            try:
+                n = _hashcat_pos(n_char)
+            except ValueError:
+                i += 1
+                continue
+            if current.count(check_char) < n:
                 return None
             steps.append(
-                f"%{check_char}: Contains '{check_char}' (filter passed) → {current} → {current}"
+                f"%{n_char}{check_char}: Contains '{check_char}' "
+                f"{current.count(check_char)} >= {n} times (filter passed) "
+                f"→ {current} → {current}"
             )
-            i += 2
+            i += 3
 
         elif char == "R" and i + 1 < len(rule_str):
             # Bitwise shift right character at position N

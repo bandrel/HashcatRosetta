@@ -864,11 +864,11 @@ class TestFilterRejection:
         assert explain_rule(">5", "password") is not None
 
     def test_percent_rejects_when_char_absent(self) -> None:
-        # %a means reject unless contains 'a'; "test" has no 'a' so reject.
-        assert explain_rule("%a", "test") is None
+        # %1a means reject unless contains 'a' at least once; "test" has no 'a' so reject.
+        assert explain_rule("%1a", "test") is None
 
     def test_percent_passes_when_char_present(self) -> None:
-        assert explain_rule("%a", "admin") is not None
+        assert explain_rule("%1a", "admin") is not None
 
     def test_equals_rejects_when_char_at_pos_differs(self) -> None:
         # =0a means reject unless char at pos 0 is 'a'; "password" pos 0 is 'p'
