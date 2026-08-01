@@ -24,8 +24,6 @@ BUILTIN_CHARSETS: dict[str, str] = {
 class MaskError(Exception):
     """Raised when mask parsing or validation fails."""
 
-    pass
-
 
 @dataclass
 class HcmaskLine:
@@ -65,11 +63,8 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
     # Split on unescaped commas
     fields = _split_unescaped_commas(line)
 
-    if not fields:
-        raise MaskError("Empty hcmask line")
-
     # Last field is the mask; all others are custom charsets
-    mask = fields[-1]
+    mask = _unescape_field(fields[-1])
     custom_fields = fields[:-1]
 
     if len(custom_fields) > 4:
@@ -128,8 +123,16 @@ def validate_mask(mask: str, custom: list[str]) -> None:
 
     Raises:
         MaskError: If the mask is invalid (dangling ``?``, unknown token,
-            reference to non-existent custom charset, etc.)
+            reference to non-existent custom charset, >4 custom charsets, etc.)
     """
+    if len(custom) > 4:
+        raise MaskError(f"at most 4 custom charsets allowed, got {len(custom)}")
+
+    # Reject empty custom charsets (cannot generate any candidates)
+    for idx, charset in enumerate(custom, start=1):
+        if not charset:
+            raise MaskError(f"custom charset ?{idx} is empty")
+
     i = 0
     while i < len(mask):
         char = mask[i]
@@ -148,7 +151,7 @@ def validate_mask(mask: str, custom: list[str]) -> None:
                 continue
 
             # Check for builtin charset
-            if next_char in "ludhHsab":
+            if f"?{next_char}" in BUILTIN_CHARSETS:
                 i += 2
                 continue
 
@@ -213,9 +216,13 @@ def tokens(line: HcmaskLine) -> list[tuple[str, int]]:
             # Custom charset reference
             if next_char in "1234":
                 custom_index = int(next_char) - 1
-                if custom_index < len(line.custom):
-                    charset = line.custom[custom_index]
-                    result.append((f"?{next_char}", len(charset)))
+                if custom_index >= len(line.custom):
+                    raise MaskError(
+                        f"referenced ?{next_char} but only {len(line.custom)} "
+                        f"custom charset(s) provided"
+                    )
+                charset = line.custom[custom_index]
+                result.append((f"?{next_char}", len(charset)))
                 i += 2
                 continue
 
@@ -305,10 +312,8 @@ def describe(line: HcmaskLine) -> str:
         if group_type == "literal":
             # Escape quotes in the literal
             escaped = token_or_literal.replace('"', '\\"')
-            if count == 1:
-                parts.append(f'literal "{escaped}"')
-            else:
-                parts.append(f'{count} × literal "{escaped}"')
+            # Literals always show the full string, never with a count prefix
+            parts.append(f'literal "{escaped}"')
         else:
             # Token
             if count == 1:
@@ -326,13 +331,16 @@ def describe(line: HcmaskLine) -> str:
     # Format keyspace with thousands separators
     ks_str = f"{ks:,}"
 
-    # Add scientific notation if > 10^9
-    if ks > 10**9:
-        parts.append(f"→ {ks_str} (~{ks:.1e}) candidates")
-    else:
-        parts.append(f"→ {ks_str} candidates")
+    # Join parts with ", then " to build the description
+    description = ", then ".join(parts)
 
-    return ", then ".join(parts)
+    # Add keyspace: scientific notation if > 10^9, otherwise just the number
+    if ks > 10**9:
+        description += f" → {ks_str} (~{ks:.1e}) candidates"
+    else:
+        description += f" → {ks_str} candidates"
+
+    return description
 
 
 def _describe_token(token: str) -> str:
@@ -386,7 +394,8 @@ def format_hcmask_line(custom: list[str], mask: str) -> str:
         escaped = charset.replace(",", "\\,")
         fields.append(escaped)
 
-    # Add mask (no escaping needed for mask field)
-    fields.append(mask)
+    # Escape mask field (commas must be escaped as \,)
+    escaped_mask = mask.replace(",", "\\,")
+    fields.append(escaped_mask)
 
     return ",".join(fields)

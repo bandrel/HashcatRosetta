@@ -111,12 +111,22 @@ class TestEscapedCommas:
         assert line.mask == "?1?2"
 
     def test_escaped_comma_in_mask_not_separates(self):
-        # Escaped comma in mask field (last field) — no unescaping happens
-        # Actually, since mask is the last field, escaped commas there stay
-        # as-is and are not treated as field separators. But they don't get
-        # unescaped either because mask is not unescaped.
-        # Round-trip tests below will cover comma handling comprehensively.
-        pass  # Skip for now; we'll test via round-trip
+        # Escaped comma in mask field — should be treated as literal comma,
+        # not as a field separator. The comma should be unescaped during parse.
+        line = parse_hcmask_line("?d?d\\,test")
+        # Mask field contains a literal comma (after unescaping)
+        assert line.mask == "?d?d,test"
+        assert line.custom == []
+
+    def test_escaped_comma_in_mask_roundtrip(self):
+        # Comma in mask must be escaped on output for round-trip property
+        original = "?d?d\\,test"
+        line = parse_hcmask_line(original)
+        # Mask should have unescaped comma
+        assert line.mask == "?d?d,test"
+        # Re-format should re-escape it
+        formatted = format_hcmask_line(line.custom, line.mask)
+        assert formatted == original
 
 
 class TestEscapedQuestion:
@@ -305,8 +315,10 @@ class TestDescribe:
         # ?b is 256, so ?b^6 = 256^6 = 281,474,976,710,656 > 10^9
         line = parse_hcmask_line("?b?b?b?b?b?b")
         desc = describe(line)
-        # Should contain both the full number and scientific notation
-        assert "e+" in desc or "e" in desc  # Scientific notation
+        # Should contain the full number with thousands separators
+        assert "281,474,976,710,656" in desc
+        # Should contain scientific notation in the exact format
+        assert "(~2.8e+14)" in desc
 
     def test_describe_custom_charset(self):
         line = parse_hcmask_line("abc,?1?1?1")
@@ -377,11 +389,10 @@ class TestEdgeCases:
     """Test edge cases and corner cases."""
 
     def test_empty_custom_charset(self):
-        # Custom charset can be empty (size 0), which would make keyspace 0
-        # But this might not be meaningful. For now, allow it.
-        line = HcmaskLine(custom=[""], mask="?1", raw="")
-        # tokenizing will work but keyspace is 0
-        assert keyspace(line) == 0
+        # Empty custom charsets are invalid — they cannot generate any candidates.
+        # validate_mask should reject them with a clear error.
+        with pytest.raises(MaskError, match="custom charset \\?1 is empty"):
+            validate_mask("?1", [""])
 
     def test_all_escapes_in_custom_charset(self):
         # Custom charset with only escaped commas
