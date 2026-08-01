@@ -7,12 +7,14 @@ from hashcat_rosetta.mask import (
     HcmaskLine,
     MaskError,
     describe,
+    expand_custom_charsets,
     format_hcmask_line,
     keyspace,
     parse_hcmask_line,
     tokens,
     validate_mask,
 )
+from hashcat_rosetta.mask import _short_scientific
 
 
 class TestBuiltinCharsets:
@@ -395,17 +397,20 @@ class TestEdgeCases:
             validate_mask("?1", [""])
 
     def test_all_escapes_in_custom_charset(self):
-        # Custom charset with only escaped commas
+        # Custom charset with only escaped commas. hashcat deduplicates the
+        # characters of a custom charset, so "a,,b" is the 3-char set {a , b}.
+        # Verified: `hashcat --stdout -a 3` on "a\,\,b,?1" emits b, a, ",".
         line = parse_hcmask_line("a\\,\\,b,?1")
         assert line.custom == ["a,,b"]
-        assert keyspace(line) == 4  # length of "a,,b"
+        assert keyspace(line) == 3
 
     def test_question_mark_in_middle_of_custom(self):
-        # Question marks in custom charsets are literal (no unescaping in
-        # custom fields)
+        # hashcat expands ?X tokens INSIDE a custom charset definition too, so
+        # "a?b" is 'a' plus all 256 byte values, deduplicated => 256 chars.
+        # Verified: `hashcat --stdout -a 3` on "a?b,?1?1" emits 65536 candidates.
         line = parse_hcmask_line("a?b,?1?1")
         assert line.custom == ["a?b"]
-        assert keyspace(line) == 3 * 3  # custom charset "a?b" has length 3
+        assert keyspace(line) == 256 * 256
 
     def test_mask_with_special_literals(self):
         # Mask can contain any literal characters (including special ones)
@@ -469,3 +474,94 @@ class TestHcmaskLineDataclass:
         assert parsed.custom == ["abc"]
         assert parsed.mask == "?1?1"
         assert parsed.raw == "abc,?1?1"
+
+
+class TestCustomCharsetExpansion:
+    """hashcat expands ?X tokens inside custom charset *definitions* too.
+
+    Every expected value in this class was cross-checked against the real
+    hashcat binary (v7.1.2) with `hashcat --stdout -a 3 <file.hcmask>`.
+    """
+
+    def test_builtin_tokens_expand_inside_custom_charset(self):
+        # "?l?d" is 26 + 10 = 36 characters, not the 4-character literal
+        # string. hashcat --stdout emits 36^4 = 1,679,616 candidates.
+        line = parse_hcmask_line("?l?d,?1?1?1?1")
+        assert keyspace(line) == 1_679_616
+        assert keyspace(line) == 36**4
+
+    def test_expand_charset_returns_deduplicated_set(self):
+        # hashcat deduplicates: "ab?l" is just the 26 lowercase letters.
+        assert expand_custom_charsets(["ab?l"]) == [BUILTIN_CHARSETS["?l"]]
+        assert expand_custom_charsets(["aa"]) == ["a"]
+        assert expand_custom_charsets(["?l?d"]) == [BUILTIN_CHARSETS["?l"] + BUILTIN_CHARSETS["?d"]]
+
+    def test_byte_token_inside_custom_charset(self):
+        # "a?b" => 'a' plus 256 byte values, deduplicated => 256.
+        line = parse_hcmask_line("a?b,?1?1")
+        assert keyspace(line) == 65_536
+
+    def test_double_question_is_literal_inside_custom_charset(self):
+        # "a??b" is the 3-char set {a, ?, b}: hashcat emits 3 candidates.
+        line = parse_hcmask_line("a??b,?1")
+        assert keyspace(line) == 3
+        assert expand_custom_charsets(["a??b"]) == ["a?b"]
+
+    def test_tokens_reports_expanded_custom_size(self):
+        line = parse_hcmask_line("?d?d,?1?1")
+        # "?d?d" deduplicates back down to the 10 digits.
+        assert tokens(line) == [("?1", 10), ("?1", 10)]
+
+    def test_custom_charset_may_reference_an_earlier_one(self):
+        # Verified: "abc,?1?d,?2?2" emits 169 candidates (13^2).
+        line = parse_hcmask_line("abc,?1?d,?2?2")
+        assert keyspace(line) == 169
+
+    def test_custom_charset_cannot_reference_itself_or_a_later_one(self):
+        with pytest.raises(MaskError, match="not defined yet"):
+            parse_hcmask_line("ab?1,?1")
+        with pytest.raises(MaskError, match="not defined yet"):
+            parse_hcmask_line("abc,?2,?1")
+
+    def test_dangling_question_in_custom_charset_raises(self):
+        # hashcat: "Syntax error in mask: abc?"
+        with pytest.raises(MaskError, match="dangling trailing"):
+            parse_hcmask_line("abc?,?1")
+
+    def test_unknown_token_in_custom_charset_raises(self):
+        # hashcat: "Syntax error in mask: ab?z"
+        with pytest.raises(MaskError, match=r"unknown token '\?z'"):
+            parse_hcmask_line("ab?z,?1")
+
+    def test_uppercase_hex_token_inside_custom_charset(self):
+        line = parse_hcmask_line("?H,?1?1")
+        assert keyspace(line) == 16 * 16
+
+    def test_empty_custom_charset_still_rejected(self):
+        with pytest.raises(MaskError, match=r"custom charset \?1 is empty"):
+            parse_hcmask_line(",?1")
+
+
+class TestVeryLargeKeyspaceDescribe:
+    """describe() must not overflow on keyspaces beyond float range."""
+
+    def test_describe_does_not_overflow_on_huge_keyspace(self):
+        # ?b * 200 => 256^200 ~= 10^481, far beyond float's ~1.8e308.
+        line = parse_hcmask_line("?b" * 200)
+        ks = keyspace(line)
+        assert ks == 256**200
+        desc = describe(line)
+        assert "200 × byte" in desc
+        # digits - 1 == the exponent; 256^200 has 482 digits.
+        assert f"e+{len(str(ks)) - 1}" in desc
+        assert "(~4.4e+481)" in desc
+
+    def test_short_scientific_matches_float_formatting(self):
+        # The integer implementation must be byte-identical to the previous
+        # float-based f"{ks:.1e}" for everything a float can represent.
+        for value in (10**9 + 1, 256**6, 12_345_678_901, 999_999_999_999, 10**300):
+            assert _short_scientific(value) == f"{value:.1e}"
+
+    def test_describe_scientific_format_unchanged(self):
+        line = parse_hcmask_line("?b?b?b?b?b?b")
+        assert "(~2.8e+14)" in describe(line)

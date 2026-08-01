@@ -114,6 +114,92 @@ def _unescape_field(field: str) -> str:
     return field.replace("\\,", ",")
 
 
+def _expand_charset(field: str, prior_expanded: list[str], position: int) -> str:
+    """Expand one custom charset definition into its literal character set.
+
+    hashcat does not treat a custom charset field as an opaque literal
+    string: it scans it for the same ``?X`` tokens the mask field supports.
+    ``?l``/``?u``/``?d``/``?h``/``?H``/``?s``/``?a``/``?b`` expand to their
+    builtin character sets, ``??`` is a literal ``?``, and ``?1``-``?4`` may
+    reference an *earlier* custom charset. Everything else is a literal
+    character. hashcat then deduplicates the resulting character set, so
+    ``aa`` and ``ab?l`` are 1- and 26-character charsets respectively.
+
+    Args:
+        field: The raw (comma-unescaped) custom charset field.
+        prior_expanded: Already-expanded charsets defined before this one,
+            in order, so ``?1``-``?4`` back-references can be resolved.
+        position: 1-based index of this charset (i.e. ``1`` for ``?1``),
+            used for error messages and for rejecting self/forward
+            references.
+
+    Returns:
+        The expanded, deduplicated character set as a string.
+
+    Raises:
+        MaskError: On an empty field, a dangling trailing ``?``, an unknown
+            ``?X`` token, or a reference to a custom charset that is not
+            defined yet.
+    """
+    if not field:
+        raise MaskError(f"custom charset ?{position} is empty")
+
+    chars: list[str] = []
+    i = 0
+    while i < len(field):
+        char = field[i]
+
+        if char == "?":
+            if i + 1 >= len(field):
+                raise MaskError(f"custom charset ?{position} has a dangling trailing '?'")
+
+            next_char = field[i + 1]
+
+            if next_char == "?":
+                # ?? is a literal ?
+                chars.append("?")
+            elif f"?{next_char}" in BUILTIN_CHARSETS:
+                chars.extend(BUILTIN_CHARSETS[f"?{next_char}"])
+            elif next_char in "1234":
+                ref = int(next_char)
+                if ref >= position:
+                    raise MaskError(
+                        f"custom charset ?{position} references ?{ref}, which is not defined yet"
+                    )
+                chars.extend(prior_expanded[ref - 1])
+            else:
+                raise MaskError(f"custom charset ?{position} has unknown token '?{next_char}'")
+
+            i += 2
+            continue
+
+        # Literal character
+        chars.append(char)
+        i += 1
+
+    # hashcat deduplicates the characters of a custom charset
+    return "".join(dict.fromkeys(chars))
+
+
+def expand_custom_charsets(custom: list[str]) -> list[str]:
+    """Expand every custom charset definition, resolving back-references.
+
+    Args:
+        custom: List of raw custom charset fields (0-4 items), in order.
+
+    Returns:
+        The expanded, deduplicated charsets in the same order.
+
+    Raises:
+        MaskError: If any field is empty or malformed. See
+            :func:`_expand_charset`.
+    """
+    expanded: list[str] = []
+    for position, field in enumerate(custom, start=1):
+        expanded.append(_expand_charset(field, expanded, position))
+    return expanded
+
+
 def validate_mask(mask: str, custom: list[str]) -> None:
     """Validate a mask string against a list of custom charsets.
 
@@ -124,14 +210,15 @@ def validate_mask(mask: str, custom: list[str]) -> None:
     Raises:
         MaskError: If the mask is invalid (dangling ``?``, unknown token,
             reference to non-existent custom charset, >4 custom charsets, etc.)
+            or if any custom charset definition is empty or malformed.
     """
     if len(custom) > 4:
         raise MaskError(f"at most 4 custom charsets allowed, got {len(custom)}")
 
-    # Reject empty custom charsets (cannot generate any candidates)
-    for idx, charset in enumerate(custom, start=1):
-        if not charset:
-            raise MaskError(f"custom charset ?{idx} is empty")
+    # Custom charsets are themselves subject to ?X token grammar; expanding
+    # them here rejects empty fields, dangling '?', unknown tokens, and
+    # references to charsets that are not defined yet.
+    expand_custom_charsets(custom)
 
     i = 0
     while i < len(mask):
@@ -177,7 +264,9 @@ def tokens(line: HcmaskLine) -> list[tuple[str, int]]:
 
     Tokens are either single literal characters or mask tokens like
     ``?d``, ``?1``, etc. Each token is paired with its charset size:
-    literals have size 1, tokens have their builtin or custom size.
+    literals have size 1, tokens have their builtin or custom size. Custom
+    charset sizes are the size of the *expanded* charset (see
+    :func:`expand_custom_charsets`), not the raw field length.
 
     Args:
         line: A parsed HcmaskLine.
@@ -188,6 +277,7 @@ def tokens(line: HcmaskLine) -> list[tuple[str, int]]:
     result = []
     i = 0
     mask = line.mask
+    expanded_custom = expand_custom_charsets(line.custom)
 
     while i < len(mask):
         char = mask[i]
@@ -216,12 +306,12 @@ def tokens(line: HcmaskLine) -> list[tuple[str, int]]:
             # Custom charset reference
             if next_char in "1234":
                 custom_index = int(next_char) - 1
-                if custom_index >= len(line.custom):
+                if custom_index >= len(expanded_custom):
                     raise MaskError(
-                        f"referenced ?{next_char} but only {len(line.custom)} "
+                        f"referenced ?{next_char} but only {len(expanded_custom)} "
                         f"custom charset(s) provided"
                     )
-                charset = line.custom[custom_index]
+                charset = expanded_custom[custom_index]
                 result.append((f"?{next_char}", len(charset)))
                 i += 2
                 continue
@@ -336,11 +426,38 @@ def describe(line: HcmaskLine) -> str:
 
     # Add keyspace: scientific notation if > 10^9, otherwise just the number
     if ks > 10**9:
-        description += f" → {ks_str} (~{ks:.1e}) candidates"
+        description += f" → {ks_str} (~{_short_scientific(ks)}) candidates"
     else:
         description += f" → {ks_str} candidates"
 
     return description
+
+
+def _short_scientific(value: int) -> str:
+    """Render a non-negative int in ``d.de+NN`` scientific notation.
+
+    Equivalent to ``f"{value:.1e}"`` but done with pure integer/string math
+    so it works for keyspaces beyond the range of a Python ``float``. A mask
+    may be up to 256 positions long, so e.g. ``?b`` * 200 has a keyspace of
+    ~10^481 — converting that to a float raises ``OverflowError``.
+
+    Args:
+        value: A non-negative integer.
+
+    Returns:
+        A string like ``2.8e+14``.
+    """
+    digits = str(value)
+    exponent = len(digits) - 1
+
+    # Round to two significant digits using integer math.
+    significant = int(digits[:3].ljust(3, "0"))
+    rounded = (significant + 5) // 10
+    if rounded >= 100:
+        rounded //= 10
+        exponent += 1
+
+    return f"{rounded // 10}.{rounded % 10}e+{exponent:02d}"
 
 
 def _describe_token(token: str) -> str:
