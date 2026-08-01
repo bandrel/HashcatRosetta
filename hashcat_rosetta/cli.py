@@ -682,6 +682,29 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 # Extract substring from memorized word
                 substring = memorized[n : n + m]
                 current = _cap(prev, current[:l_pos] + substring + current[l_pos:])
+
+                # hashcat's mangle_insert_multi (src/rp_cpu.c) mutates the
+                # memory buffer as a side effect of every X call: it shifts
+                # out the first `n` bytes, then splices in bytes from the
+                # *current* word (before this op) starting at position `m`.
+                # A second X with no intervening M therefore reads a
+                # different buffer than the first one did. This mutation
+                # operates on a buffer sized to the logical mem_len (len of
+                # `memorized`, which never changes here — X never updates
+                # it, only M does) — verified sufficient (no need to model
+                # hashcat's full 256-byte physical buffer) by constructing
+                # oracle cases that force writes past the logical mem_len
+                # and confirming against real hashcat 7.1.2 that only the
+                # first mem_len bytes of the result are ever observable.
+                mem_len = len(memorized)
+                shifted = memorized[n:mem_len]
+                new_mem = list(shifted) + list(memorized[len(shifted) :])
+                tail = prev[l_pos:]
+                write_end = min(m + len(tail), mem_len)
+                write_n = max(0, write_end - m)
+                new_mem[m : m + write_n] = list(tail[:write_n])
+                memorized = "".join(new_mem)
+
                 steps.append(
                     f"X{n_char}{m_char}{l_char}: Insert {m} chars from memorized word"
                     f" at pos {n} into pos {l_pos} → {prev} → {current}"

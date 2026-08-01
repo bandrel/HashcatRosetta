@@ -113,6 +113,25 @@ class TestNoOpOpcode:
     def test_a_does_not_interfere_with_neighbouring_opcodes(self):
         assert _final("ca", "abc") == "Abc"
 
+
+class TestChainedXMemoryMutation:
+    """X mutates the memory buffer as a side effect (src/rp_cpu.c's
+    mangle_insert_multi). All four cases verified against hashcat v7.1.2
+    via `hashcat --stdout -a0 -j '<rule>' <(echo '<baseword>')`.
+    """
+
+    def test_X011_alone_unchanged_from_task_7b_model(self):
+        assert _final("X011", "abcdefgh") == "a\x00bcdefgh"
+
+    def test_chained_X011_X011_reads_the_mutated_buffer(self):
+        assert _final("X011 X011", "abcdefgh") == "a\x00\x00bcdefgh"
+
+    def test_chained_X011_X021_reads_the_mutated_buffer(self):
+        assert _final("X011 X021", "abcdefgh") == "a\x00b\x00bcdefgh"
+
+    def test_chained_X334_X444_reads_the_mutated_buffer(self):
+        assert _final("X334 X444", "password") == "passord\x00\x00\x00\x00word"
+
     def test_a_still_emits_a_step(self):
         steps = explain_rule("a", "abc")
         assert steps is not None
