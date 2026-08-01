@@ -157,3 +157,23 @@ class TestMFormatAndXBounds:
     def test_X_rejects_when_extracted_length_is_zero(self):
         # hashcat: X201 on 'cat' (m=0) is rejected, independent of n/l_pos validity
         assert _final("X201", "cat") is None
+
+
+class TestMemoryOverflowRejection:
+    """hashcat's RULE_OP_MANGLE_APPEND_MEMORY / RULE_OP_MANGLE_PREPEND_MEMORY
+    (src/rp_cpu.c) reject the rule outright — not a silent no-op — when the
+    memory buffer is empty (mem_len < 1) or when appending/prepending would
+    reach the 256-byte RP_PASSWORD_SIZE cap.
+    """
+
+    def test_4_rejects_when_result_would_reach_256_bytes(self):
+        assert explain_rule("4", "a" * 130) is None
+
+    def test_6_rejects_when_result_would_reach_256_bytes(self):
+        assert explain_rule("6", "a" * 130) is None
+
+    def test_4_still_appends_when_within_bounds(self):
+        assert _final("M4", "abc") == "abcabc"
+
+    def test_6_still_prepends_when_within_bounds(self):
+        assert _final("cM6", "abc") == "AbcAbc"

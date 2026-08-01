@@ -714,16 +714,24 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 1
 
         elif char == "4":
+            # RULE_OP_MANGLE_APPEND_MEMORY (src/rp_cpu.c): hashcat rejects the
+            # rule outright when the memory buffer is empty (mem_len < 1) or
+            # when appending would reach/exceed RP_PASSWORD_SIZE (256 bytes).
+            if len(memorized) < 1 or len(current) + len(memorized) >= _RP_PASSWORD_SIZE:
+                return None
             prev = current
-            if len(current) + len(memorized) < 256:
-                current = current + memorized
+            current = current + memorized
             steps.append(f"4: Append memorized '{memorized}' → {prev} → {current}")
             i += 1
 
         elif char == "6":
+            # RULE_OP_MANGLE_PREPEND_MEMORY (src/rp_cpu.c): same two reject
+            # conditions as '4' above (empty memory buffer, or result would
+            # reach/exceed RP_PASSWORD_SIZE).
+            if len(memorized) < 1 or len(current) + len(memorized) >= _RP_PASSWORD_SIZE:
+                return None
             prev = current
-            if len(current) + len(memorized) < 256:
-                current = memorized + current
+            current = memorized + current
             steps.append(f"6: Prepend memorized '{memorized}' → {prev} → {current}")
             i += 1
 
