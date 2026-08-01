@@ -270,11 +270,14 @@ class TestDeriveStatus:
         assert rows["M"]["status"] == "UNVERIFIABLE"
 
     def test_untracked_when_known_opcode_not_implemented(self):
-        # An opcode in _ALL_KNOWN_OPCODES but not _DEFAULT_IMPLEMENTED shows as UNTRACKED.
-        # Use a real unimplemented opcode for this test (not 'a', which is now implemented).
-        # For simplicity, just verify that zero stats + not implemented = UNTRACKED.
-        # (This would require removing an opcode from _DEFAULT_IMPLEMENTED to test properly.)
-        pass  # Skip this test as 'a' is now implemented
+        # An opcode not in _DEFAULT_IMPLEMENTED shows as UNTRACKED.
+        # Since Task 7a made _DEFAULT_IMPLEMENTED == _ALL_KNOWN_OPCODES, use a
+        # synthetic opcode guaranteed not to be in _DEFAULT_IMPLEMENTED.
+        # This exercises derive_status's first priority (UNTRACKED check, line 242).
+        synthetic_op = "§"
+        stats = {synthetic_op: self._stat(synthetic_op)}
+        rows = sweep_opcodes.derive_status(stats, known_latent={})
+        assert rows[synthetic_op]["status"] == sweep_opcodes.STATUS_UNTRACKED
 
     def test_exit_code_zero_when_no_regression(self):
         rows = {
