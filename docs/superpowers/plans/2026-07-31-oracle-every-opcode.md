@@ -1178,6 +1178,124 @@ oracle for the first time."
 
 ---
 
+### Task 7d: `X` mutates the memory buffer as a side effect
+
+**Added mid-execution.** Task 7c's report flagged that chained `X` opcodes without an intervening `M` (e.g. `X334 X444` in one rule) mismatch real hashcat, confirmed pre-existing via `git stash` and surfaced by `tests/test_rule_matrix.py::test_hashcat_vs_explain` (6/6573 mismatches). The controller (me) traced the root cause to hashcat's actual C implementation and verified it against four reproducer cases. This is real, not speculative, but the fix needs care: what's verified below is a *simplified* model that happens to match every case tried so far, not a proven-general translation.
+
+**Root cause, read directly from hashcat source** (`src/rp_cpu.c`):
+
+```c
+static int mangle_insert_multi (char arr[RP_PASSWORD_SIZE], int arr_len, int arr_pos, char arr2[RP_PASSWORD_SIZE], int arr2_len, int arr2_pos, int arr2_cpy)
+{
+  if ((arr_len + arr2_cpy) > RP_PASSWORD_SIZE) return (RULE_RC_REJECT_ERROR);
+  if (arr_pos > arr_len) return (RULE_RC_REJECT_ERROR);
+  if (arr2_pos > arr2_len) return (RULE_RC_REJECT_ERROR);
+  if ((arr2_pos + arr2_cpy) > arr2_len) return (RULE_RC_REJECT_ERROR);
+  if (arr2_cpy < 1) return (RULE_RC_SYNTAX_ERROR);
+
+  memmove (arr2, arr2 + arr2_pos, arr2_len - arr2_pos);
+  memcpy  (arr2 + arr2_cpy, arr + arr_pos, arr_len - arr_pos);
+  memcpy  (arr + arr_pos, arr2, arr_len - arr_pos + arr2_cpy);
+
+  return (arr_len + arr2_cpy);
+}
+
+case RULE_OP_MANGLE_EXTRACT_MEMORY:
+  if (mem_len < 1) HCFREE_AND_RETURN (RULE_RC_REJECT_ERROR);
+  ...
+  if ((out_len = mangle_insert_multi (out, out_len, upos2, mem, mem_len, upos, ulen)) < 1) HCFREE_AND_RETURN (out_len);
+  break;
+```
+
+`arr` is `out` (the current word buffer), `arr2` is `mem` (the memory buffer). `X`'s call is `mangle_insert_multi(out, out_len, l_pos, mem, mem_len, n, m)`. **The function mutates `arr2` (the memory buffer) in place** via `memmove`/`memcpy`, using bytes copied from `arr` (the current word) — this is not documented anywhere, and every prior task in this plan (including Task 7b's zero-fill fix) assumed `memorized` is read-only after `M` sets it. It isn't: `X` rewrites it as a side effect, which is exactly why a second `X` with no intervening `M` reads different bytes than the first one did. Both `arr` and `arr2` are real, fixed-size `RP_PASSWORD_SIZE` (256-byte, `include/rp.h:12`) buffers in hashcat — `mem_len` and `out_len` are logical length registers into those buffers, not the buffers' actual allocated size.
+
+**What the controller already verified** (a direct Python translation of the three C lines above, operating on Python bytes/bytearrays sized to exactly `mem_len`/`out_len` rather than the full 256-byte buffer) matches all four known cases exactly:
+
+```
+X011 on 'abcdefgh' (mem zero-filled len 8)     -> current='a\x00bcdefgh'   (unchanged from Task 7b's model)
+X011 X011 on 'abcdefgh'                        -> current='a\x00\x00bcdefgh'
+X011 X021 on 'abcdefgh'                        -> current='a\x00b\x00bcdefgh'
+X334 X444 on 'password'                        -> current='passord\x00\x00\x00\x00word'
+```
+
+All four were confirmed against real hashcat `v7.1.2-386-g8000b3e60` via `hashcat --stdout -a0 -j '<rule>' <(echo '<baseword>')`.
+
+**Why this is not simply "apply the fix":** the controller's translation used bytearrays sized to exactly the *logical* length (`mem_len` / `out_len`), not the real 256-byte physical buffer. That happened to work for these four cases because the byte ranges involved never needed room beyond the logical length. hashcat's real buffers have 256 bytes of physical room regardless of logical length, so a case where `arr2_cpy` (m) plus the copied region would exceed the *logical* `mem_len` but still fit inside the real 256-byte buffer could behave differently from a naive same-length-bytearray translation. **This task's job is to determine whether that distinction ever matters in practice for this codebase's `_RP_PASSWORD_SIZE = 256` model** (which already exists, `cli.py:47`, for the length-cap logic) and implement accordingly — modeling `memorized` as a full 256-byte buffer (like hashcat's real `mem` array) rather than a same-length slice, if the oracle shows daylight between the two models.
+
+**Files:**
+- Modify: `hashcat_rosetta/cli.py` (the `M` and `X` branches, and likely the `memorized` initialization Task 7b touched)
+- Test: `tests/test_missing_opcodes.py`
+
+**Interfaces:**
+- Consumes: the CPU oracle from Tasks 1 and 2. `_RP_PASSWORD_SIZE = 256` (`cli.py:47`) already exists for the length-cap helper `_cap` — this task's `memorized` model should very likely be sized against this same constant, since it's the same physical buffer hashcat uses.
+- Produces: no new public symbols required, but `memorized`'s representation may change from "a string exactly as long as the logical memory length" to "a 256-byte buffer with a separate logical-length register" if the investigation in Step 0 shows that distinction matters. If it does, every existing memory-opcode branch (`M`, `X`, `4`, `6`, `Q`) needs updating consistently — do not leave some branches on the old model and others on the new one.
+
+- [ ] **Step 0: Determine whether the 256-byte-buffer distinction actually matters here**
+
+Before writing any fix, construct a handful of oracle test cases specifically designed to probe whether logical-length-sized buffers diverge from a full 256-byte model. A good starting point: rules with a large `m` (extract length) relative to a short baseword, chained across two or more `X` calls, where the "logical mem_len" runs out of room but 256 bytes wouldn't. For example, try `X0X0` -style cases where `arr2_cpy` (m) is deliberately large against a short baseword's `mem_len`, both alone and chained, and diff against `hashcat --stdout -a0 -j '<rule>' <(echo '<baseword>')`. Report what you find before proceeding — if a same-length-buffer model already matches hashcat in every case you can construct, that is sufficient and simpler than modeling the full 256 bytes; only reach for the full-buffer model if you can demonstrate a real divergence.
+
+- [ ] **Step 1: Write failing tests from the four already-verified reproducer cases**
+
+```python
+# append to tests/test_missing_opcodes.py
+class TestChainedXMemoryMutation:
+    """X mutates the memory buffer as a side effect (src/rp_cpu.c's
+    mangle_insert_multi). All four cases verified against hashcat v7.1.2
+    via `hashcat --stdout -a0 -j '<rule>' <(echo '<baseword>')`.
+    """
+
+    def test_X011_alone_unchanged_from_task_7b_model(self):
+        assert _final("X011", "abcdefgh") == "a\x00bcdefgh"
+
+    def test_chained_X011_X011_reads_the_mutated_buffer(self):
+        assert _final("X011 X011", "abcdefgh") == "a\x00\x00bcdefgh"
+
+    def test_chained_X011_X021_reads_the_mutated_buffer(self):
+        assert _final("X011 X021", "abcdefgh") == "a\x00b\x00bcdefgh"
+
+    def test_chained_X334_X444_reads_the_mutated_buffer(self):
+        assert _final("X334 X444", "password") == "passord\x00\x00\x00\x00word"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_missing_opcodes.py -v -k ChainedX`
+Expected: FAIL on the three chained cases (single `X011` alone should already pass, since Task 7b's model is correct for a lone `X`).
+
+- [ ] **Step 3: Implement, informed by Step 0's finding**
+
+Update the `X` branch so it mutates `memorized`, not just `current`, following the three-line C translation above (`memmove`-equivalent shift, then `memcpy`-equivalent splice from `current`'s tail, then the actual insert into `current`). Reuse `_RP_PASSWORD_SIZE` if Step 0 showed the physical-buffer distinction matters; otherwise a same-logical-length translation is sufficient. Whichever model you land on, apply it consistently to `M` (which resets `memorized` to `current` — confirm this still zeroes out any prior mutation correctly) and to `4`/`6`/`Q` (which read `memorized` but don't mutate it — confirm they still work against a `memorized` that may now change mid-rule from a prior `X`).
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/test_missing_opcodes.py -v`
+Expected: PASS, all classes.
+
+- [ ] **Step 5: Confirm against both the opcode sweep and the full rule-matrix integration test**
+
+Run: `uv run python scripts/sweep_opcodes.py --report /tmp/sweep-task7d.md`
+Expected: exit 0, `X` still shown as PASS (the sweep's single-opcode-per-rule design won't exercise chaining, but must not regress).
+
+Run: `uv run pytest tests/test_rule_matrix.py::TestGenerateRulesIntegration::test_hashcat_vs_explain -v`
+Expected: PASS (0/6573 mismatches, down from the pre-existing 6/6573). This is the test that originally surfaced the bug and is the actual acceptance gate for this task.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add hashcat_rosetta/cli.py tests/test_missing_opcodes.py
+git commit -m "fix: X mutates the memory buffer, not just the current word
+
+hashcat's mangle_insert_multi (src/rp_cpu.c) rewrites the memory buffer as
+a side effect of every X call, using bytes from the current word. A second
+X in the same rule with no intervening M therefore reads a different
+buffer than the first one did. Verified against hashcat 7.1.2 across four
+chained-X reproducer cases; found via test_rule_matrix.py's full-corpus
+integration sweep, not the single-opcode sweep, since it only manifests
+across multiple opcode applications in one rule."
+```
+
+---
+
 ### Task 8: Coverage gate, so this cannot regress
 
 **Files:**
