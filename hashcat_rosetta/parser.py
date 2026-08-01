@@ -37,13 +37,20 @@ class DebugLogParser:
     ``baseword:rule:candidate:wordlist`` where wordlist is the dict path or one
     of the sentinels ``<stdin>``/``<generic>``/``<none>``.
 
-    Colon-in-data limitation: hashcat does not escape colons, so basewords,
-    candidates, and Windows drive-letter wordlist paths (``C:\\...``) may contain
-    ``:``. This parser keeps the existing mode-4 assumption (baseword has no
-    colon; candidate may contain colons) and additionally assumes the wordlist
-    field (the LAST field) has no colon. That holds for Linux paths and the
-    sentinels; Windows drive-letter paths are a known, documented limitation,
-    mitigated by passing an explicit ``debug_mode`` override.
+    Colon-in-data: hashcat does not escape colons, but it does hex-encode any
+    baseword or candidate containing one, emitting ``$HEX[...]``. Rules are not
+    encoded and contain colons routinely -- ``:`` (no-op), ``$:``, ``c $:``.
+    Captured from hashcat 7.1.2 cracking md5("abc:") with the rule ``$:``::
+
+        abc:$::$HEX[6162633a]:words.txt
+
+    So the RULE is the field that may contain colons, and baseword, candidate
+    and wordlist may not. Fields are therefore taken from the outside in: the
+    baseword up to the first colon, the wordlist after the last, the candidate
+    after the last remaining one, and whatever spans the middle is the rule.
+
+    Windows drive-letter wordlist paths (``C:\\...``) do contain a colon and
+    remain a known limitation, mitigated by an explicit ``debug_mode`` override.
     """
 
     def __init__(self, debug_mode: int | None = None):
@@ -95,7 +102,9 @@ class DebugLogParser:
 
             # Detect format and mode from a sample of lines
             sample = [
-                line.strip() for line in all_lines if line.strip() and not line.startswith("#")
+                line.strip()
+                for line in all_lines
+                if line.strip() and not self._is_comment(line.strip())
             ]
             self._format = self._detect_format(sample)
             self._mode = self._resolve_mode(sample)
@@ -161,7 +170,17 @@ class DebugLogParser:
             colon_parts = line.split(":", 2)
 
             has_space_format = len(space_parts) >= 3
-            has_colon_format = len(colon_parts) == 3 and all(p for p in colon_parts)
+            # A no-op rule is itself a colon, so the rule field reads as empty
+            # and the remainder starts with the colon that belongs to it:
+            # "baseword:::candidate". Requiring a non-empty rule field would
+            # abstain on every line of a no-rule wordlist run, and a file where
+            # no line votes falls through to "space".
+            has_colon_format = (
+                len(colon_parts) == 3
+                and bool(colon_parts[0])
+                and bool(colon_parts[2])
+                and (bool(colon_parts[1]) or colon_parts[2].startswith(":"))
+            )
 
             if has_colon_format and not has_space_format:
                 # Only colon format works
@@ -256,7 +275,7 @@ class DebugLogParser:
         Returns:
             Dictionary with parsed components or None if line is invalid
         """
-        if not line or line.startswith("#"):
+        if not line or self._is_comment(line):
             return None
 
         fmt = self._format
@@ -274,6 +293,35 @@ class DebugLogParser:
                 return self._parse_colon_line(line)
             return self._parse_space_line(line)
 
+    @staticmethod
+    def _is_comment(line: str) -> bool:
+        """Return True for an annotation line, not a password beginning with '#'.
+
+        hashcat debug files have no comment syntax, so every '#' at the start
+        of a line is really the first character of a baseword. Treating all of
+        them as comments silently discarded every crack whose password starts
+        with '#'. Requiring whitespace after the '#' keeps hand-annotated files
+        working while letting "#Passw0rd:..." through as the data it is.
+        """
+        return line[:1] == "#" and (len(line) == 1 or line[1].isspace())
+
+    @staticmethod
+    def _split_rule_and_candidate(rest: str) -> tuple[str, str]:
+        """Split ``rule:candidate`` where the *rule* may contain colons.
+
+        Splitting left-to-right truncates every rule that contains a colon --
+        the no-op ``:``, ``$:`` (append a colon), ``c $:`` -- leaving a
+        fragment like ``$`` that hashcat rejects as a rule with no argument.
+
+        Splitting from the right instead is safe because the candidate cannot
+        contain a colon: hashcat hex-encodes any plaintext that does, emitting
+        ``$HEX[...]``. So the last colon is always the true separator.
+        """
+        rule, sep, candidate = rest.rpartition(":")
+        if not sep:
+            return rest, ""
+        return rule, candidate
+
     def _parse_colon_line(self, line: str) -> dict | None:
         """Parse a colon-separated debug line (mode 4 or mode 5)."""
         if ":" not in line:
@@ -282,17 +330,15 @@ class DebugLogParser:
         mode = self.debug_mode if self.debug_mode is not None else self._mode
 
         if mode == 5:
-            parts = line.split(":", 2)
-            if len(parts) != 3:
-                return None
-            baseword, rule, remainder = parts
-            candidate, sep, wordlist = remainder.rpartition(":")
-            if not sep:
-                # remainder had no colon: this line has only 3 fields and no
-                # wordlist. Under forced/detected mode 5 that is malformed --
-                # skip it rather than silently misassigning the candidate.
+            if line.count(":") < 3:
+                # Fewer than three separators means there is no wordlist field.
+                # Under forced/detected mode 5 that is malformed -- skip it
+                # rather than silently misassigning the candidate.
                 logger.warning("Skipping malformed mode-5 line (missing wordlist field): %r", line)
                 return None
+            baseword, sep, rest = line.partition(":")
+            rest, _, wordlist = rest.rpartition(":")
+            rule, candidate = self._split_rule_and_candidate(rest)
             if not baseword and not rule and not candidate and not wordlist:
                 return None
             return {
@@ -303,10 +349,10 @@ class DebugLogParser:
                 "matched": False,
             }
 
-        parts = line.split(":", 2)
-        if len(parts) != 3:
+        baseword, sep, rest = line.partition(":")
+        if not sep or ":" not in rest:
             return None
-        baseword, rule, candidate = parts
+        rule, candidate = self._split_rule_and_candidate(rest)
         if not baseword and not rule and not candidate:
             return None
         return {
@@ -356,7 +402,7 @@ class DebugLogParser:
         """
         # Detect format from the batch of lines
         stripped = [line.strip() for line in lines if line and line.strip()]
-        non_comment = [line for line in stripped if not line.startswith("#")]
+        non_comment = [line for line in stripped if not self._is_comment(line)]
         self._format = self._detect_format(non_comment)
         self._mode = self._resolve_mode(non_comment)
 
