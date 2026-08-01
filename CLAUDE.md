@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-HashcatRosetta analyzes hashcat debug mode 4 and mode 5 output files to identify efficient password cracking rules and baseword frequency patterns. It parses both space-separated (modern) and colon-separated (older) hashcat debug formats. Mode 5 adds a trailing `wordlist` field (`baseword:rule:candidate:wordlist`) enabling per-wordlist attribution; the mode is auto-detected by field count but can be forced via `--debug-mode`.
+HashcatRosetta analyzes hashcat debug mode 4 and mode 5 output files to identify efficient password cracking rules and baseword frequency patterns. It parses both colon-separated (standard) and space-separated (older, legacy) hashcat debug formats. Mode 5 adds a trailing `wordlist` field (`baseword:rule:candidate:wordlist`) enabling per-wordlist attribution; the mode is auto-detected by field count but can be forced via `--debug-mode`.
 
 ## Commands
 
@@ -47,8 +47,10 @@ The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `Debu
 
 ## Opcode Semantics and Oracle Routing
 
-Every opcode `parser.py` recognizes is simulated in `explain_rule()` and oracle-verified
-(`hashcat_rosetta/_verify.py`, `scripts/sweep_opcodes.py`). Two engines serve as oracles and
+Every opcode `explain_rule()` simulates is oracle-verified (`hashcat_rosetta/_verify.py`,
+`scripts/sweep_opcodes.py`). `parser.py` additionally recognizes a handful of legacy
+hashcat-only opcodes (`m w W 5 7 9`) that modern hashcat itself rejects as syntax errors;
+these are intentionally not simulated. Two engines serve as oracles and
 are routed per opcode, never interchanged: the GPU/OpenCL engine (`hashcat --stdout -r`) for
 everything valid in a `-r` rule file, and the CPU engine (`hashcat --stdout -j`,
 `src/rp_cpu.c`) for the thirteen opcodes hashcat refuses to compile into a `-r` file in any
