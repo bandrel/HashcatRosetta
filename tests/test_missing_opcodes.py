@@ -117,3 +117,20 @@ class TestNoOpOpcode:
         steps = explain_rule("a", "abc")
         assert steps is not None
         assert any(s.startswith("a:") for s in steps)
+
+
+class TestMFormatAndXBounds:
+    """Both confirmed against hashcat v7.1.2 during Task 2's review."""
+
+    def test_bare_M_final_candidate_is_the_word_not_the_description(self):
+        assert _final("M", "abc") == "abc"
+
+    def test_M_followed_by_another_opcode_still_works(self):
+        assert _final("Mc", "abc") == "Abc"
+
+    def test_X_rejects_when_insert_position_exceeds_current_length(self):
+        # hashcat: X013 on 'a' (memorized == 'a' pre-Task-7b) -> empty output
+        assert _final("X013", "a") is None
+
+    def test_X_still_succeeds_within_bounds(self):
+        assert _final("MX012", "abc") == "abac"

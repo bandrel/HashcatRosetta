@@ -655,7 +655,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         elif char == "M":
             # Memorize current word for later use with X opcode
             memorized = current
-            steps.append(f"M: Memorize current word '{current}'")
+            steps.append(f"M: Memorize current word '{current}' → {current} → {current}")
             i += 1
 
         elif char == "X" and i + 3 < len(rule_str):
@@ -668,11 +668,17 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 n = _hashcat_pos(n_char)
                 m = _hashcat_pos(m_char)
                 l_pos = _hashcat_pos(l_char)
+                if not (
+                    m > 0
+                    and n < len(memorized)
+                    and n + m <= len(memorized)
+                    and l_pos <= len(current)
+                ):
+                    return None
                 prev = current
                 # Extract substring from memorized word
-                if n < len(memorized) and n + m <= len(memorized) and l_pos <= len(current):
-                    substring = memorized[n : n + m]
-                    current = _cap(prev, current[:l_pos] + substring + current[l_pos:])
+                substring = memorized[n : n + m]
+                current = _cap(prev, current[:l_pos] + substring + current[l_pos:])
                 steps.append(
                     f"X{n_char}{m_char}{l_char}: Insert {m} chars from memorized word"
                     f" at pos {n} into pos {l_pos} → {prev} → {current}"
