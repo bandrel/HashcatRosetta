@@ -134,3 +134,7 @@ class TestMFormatAndXBounds:
 
     def test_X_still_succeeds_within_bounds(self):
         assert _final("MX012", "abc") == "abac"
+
+    def test_X_rejects_when_extracted_length_is_zero(self):
+        # hashcat: X201 on 'cat' (m=0) is rejected, independent of n/l_pos validity
+        assert _final("X201", "cat") is None

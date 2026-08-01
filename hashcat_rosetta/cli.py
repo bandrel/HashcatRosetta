@@ -668,6 +668,9 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 n = _hashcat_pos(n_char)
                 m = _hashcat_pos(m_char)
                 l_pos = _hashcat_pos(l_char)
+                # hashcat rejects X rules with m == 0 (empty extracted substring) outright,
+                # independent of n/l_pos validity — verified against hashcat 7.1.2:
+                # X201 on 'cat' (m=0) is rejected; X210 on 'cat' (m=1) succeeds.
                 if not (
                     m > 0
                     and n < len(memorized)
