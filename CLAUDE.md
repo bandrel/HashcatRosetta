@@ -69,7 +69,7 @@ mode: `M X ! < > % ( ) = 4 6 Q a`.
 - Dependencies: click, openai
 - Dev dependencies: pytest, pytest-cov, ruff, mypy, pre-commit (in `[dependency-groups] dev`; installed by default with `uv sync`)
 - Test paths configured to `tests/` directory
-- Tests marked with `@pytest.mark.integration` require the hashcat binary
+- Tests marked with `@pytest.mark.integration` require an external resource not present in CI (the hashcat binary, `generate-rules.bin`, or a machine-local corpus file such as `~/projects/hashcat/rules/BARRAGE.rule`)
 
 ## CLI Entry Points
 

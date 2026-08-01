@@ -12,6 +12,23 @@ for exact timing.
 
 ### Fixed
 
+- **`--explain` no longer crashes on rule files containing high-byte opcode
+  arguments.** Rule files are byte-oriented, not text, and hashcat rules
+  legitimately carry high-byte arguments (33,262 lines in `BARRAGE.rule`
+  alone). Reading them as UTF-8 raised `UnicodeDecodeError`; they are now read
+  byte-faithfully as latin-1.
+- **`--analyze-rules` and `--explain` no longer silently drop leading/trailing
+  whitespace opcode arguments or miscount indented comments.** A rule whose
+  argument is a literal space (e.g. `$ `) had that space stripped before
+  tokenizing, silently dropping the argument, and an indented `#` comment
+  wasn't recognized as a comment. Skip/blank/comment detection now happens on
+  a stripped copy of the line while the un-stripped line is still what gets
+  tokenized and explained.
+- **Debug-log parsing preserves leading/trailing whitespace in fields.**
+  `baseword`, `candidate`, and `wordlist` fields that legitimately start or
+  end with whitespace (e.g. a password candidate beginning with a space) were
+  previously corrupted by an over-eager `.strip()`; both `parse_debug_file`
+  and the in-memory `parse_debug_lines` now strip only the line terminator.
 - **`<` and `>` length filters were inverted.** hashcat's `>N` rejects plains
   shorter than N and `<N` rejects longer; both the descriptions and the
   simulation had it backwards, so `--explain` reported "filter passed" for

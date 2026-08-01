@@ -231,6 +231,68 @@ class TestExplainFlag:
         assert result.exit_code == 0
         assert "Unknown rule" in result.output
 
+    def test_explain_high_byte_rule_file_overwrite(self, runner, high_byte_rule_file):
+        """A raw 0xBA byte in the rule file must not raise UnicodeDecodeError."""
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        assert "o1\\xba: Overwrite pos 1" in result.output
+
+    def test_explain_high_byte_rule_file_preserves_trailing_space(
+        self, runner, high_byte_rule_file
+    ):
+        """`$ ` (append a literal space) must not be collapsed to `$` by strip()."""
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        assert "Append ' '" in result.output
+        # The transformed candidate must retain the trailing space: default
+        # baseword "password" becomes "password " (with a trailing space), not
+        # "password" (which is what a lost/stripped space argument would produce).
+        assert "→ password \n" in result.output
+
+    def test_explain_high_byte_rule_file_escapes_output_bytes(self, runner, high_byte_rule_file):
+        """Output must be escaped ASCII (b"\\xba"), never a raw/UTF-8-encoded high byte."""
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        stdout_bytes = result.stdout_bytes
+        assert b"o1\\xba" in stdout_bytes
+        assert b"\xc2\xba" not in stdout_bytes
+
+    def test_explain_high_byte_rule_file_skips_comment_and_blank(self, runner, high_byte_rule_file):
+        result = runner.invoke(main, ["--explain", high_byte_rule_file])
+        assert result.exit_code == 0
+        assert "# comment" not in result.output
+        assert "Line 4" not in result.output
+        assert "Line 5" not in result.output
+        assert "Line 6: c" in result.output
+        assert "Capitalize" in result.output
+
+    def test_explain_skips_indented_comment_and_blank_but_keeps_space_arg(
+        self, runner, indented_comment_rule_file
+    ):
+        """An indented "#" comment and a whitespace-only line must be skipped,
+        while a real rule's trailing-space argument must still survive.
+
+        The skip decision has to be made on the *stripped* line -- otherwise
+        "  # note" doesn't start with "#" (it starts with a space) and gets
+        explained as a bogus rule, and "   " is treated as a real (blank)
+        rule line instead of being skipped. But the line actually handed to
+        explain_rule/echoed must stay un-stripped, or "$ " loses its
+        trailing-space argument -- which is the inverse mistake this test
+        also catches: if the fix regresses to using the stripped line for
+        explain_rule, the transformed candidate loses its trailing space.
+        """
+        result = runner.invoke(main, ["--explain", indented_comment_rule_file])
+        assert result.exit_code == 0
+        assert "# note" not in result.output
+        assert "Line 1" not in result.output
+        assert "Line 2" not in result.output
+        assert "Line 3: $ " in result.output
+        assert "Append ' '" in result.output
+        # The transformed candidate must retain the trailing space.
+        assert "→ password \n" in result.output
+        assert "Line 4: c" in result.output
+        assert "Capitalize" in result.output
+
 
 class TestExplainOptionalValue:
     """--explain takes an optional value: bare with a FILE, or a rule string."""

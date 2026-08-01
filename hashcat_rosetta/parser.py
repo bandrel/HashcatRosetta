@@ -89,19 +89,32 @@ class DebugLogParser:
         entries: list = []
         line_num = 0
         try:
+            # NOTE: intentionally utf-8 + errors="ignore", not latin-1. Debug-log
+            # baseword/candidate fields commonly come from real UTF-8 wordlists, and
+            # this file's JSON/CSV export path is UTF-8, so byte-faithful (latin-1)
+            # reading here would corrupt genuine multi-byte text on export (e.g.
+            # "pässwörd" -> "pÃ¤sswÃ¶rd"). This does mean non-UTF-8 bytes in a debug
+            # log (e.g. a high byte inside a rule field) are silently dropped -- a
+            # known limitation. Fixing it requires byte-faithful export encoding
+            # too, which is a separate design decision; don't "fix" this in
+            # isolation without also revisiting export encoding.
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                 # Read all lines for format detection
                 all_lines = f.readlines()
 
-            # Detect format and mode from a sample of lines
+            # Detect format and mode from a sample of lines. Strip only the line
+            # terminator here: bytes elsewhere in the line (including leading or
+            # trailing spaces that are part of a real field) must survive intact.
             sample = [
-                line.strip() for line in all_lines if line.strip() and not line.startswith("#")
+                line.rstrip("\r\n")
+                for line in all_lines
+                if line.strip() and not line.lstrip().startswith("#")
             ]
             self._format = self._detect_format(sample)
             self._mode = self._resolve_mode(sample)
 
             for line_num, line in enumerate(all_lines, 1):
-                parsed = self._parse_line(line.strip())
+                parsed = self._parse_line(line.rstrip("\r\n"))
                 if parsed:
                     parsed["line_number"] = line_num
                     entries.append(parsed)
@@ -354,15 +367,21 @@ class DebugLogParser:
         Returns:
             List of parsed entries
         """
-        # Detect format from the batch of lines
-        stripped = [line.strip() for line in lines if line and line.strip()]
-        non_comment = [line for line in stripped if not line.startswith("#")]
-        self._format = self._detect_format(non_comment)
-        self._mode = self._resolve_mode(non_comment)
+        # Detect format and mode from a sample of lines. Decide skip/blank on
+        # the stripped line, but keep the un-stripped (terminator-only-
+        # stripped) content: leading/trailing whitespace can be part of a
+        # real field (baseword, candidate, or wordlist).
+        sample = [
+            line.rstrip("\r\n")
+            for line in lines
+            if line and line.strip() and not line.lstrip().startswith("#")
+        ]
+        self._format = self._detect_format(sample)
+        self._mode = self._resolve_mode(sample)
 
         entries: list = []
         for line_num, line in enumerate(lines, 1):
-            parsed = self._parse_line(line.strip())
+            parsed = self._parse_line(line.rstrip("\r\n"))
             if parsed:
                 parsed["line_number"] = line_num
                 entries.append(parsed)
