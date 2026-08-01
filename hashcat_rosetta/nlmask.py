@@ -200,41 +200,65 @@ def _parse_response_json(content: str | None) -> tuple[dict[str, Any] | None, st
 
     Returns:
         A tuple of ``(parsed, error)``. Exactly one of the two is ``None``:
-        ``parsed`` is the decoded object on success, or ``error`` is a
+        ``parsed`` is the decoded object on success (guaranteed to be a
+        ``dict``; a top-level JSON value that isn't an object, e.g. a bare
+        array or string, is treated as a parse failure), or ``error`` is a
         human-readable message on failure.
     """
     if content is None:
         return None, "model response had no content"
+
+    decoded: Any = None
+    decode_error: str | None = None
     try:
-        return json.loads(content), None
+        decoded = json.loads(content)
     except json.JSONDecodeError:
-        pass
-    try:
-        return json.loads(_strip_json_fence(content)), None
-    except json.JSONDecodeError as exc:
-        return None, f"could not parse model response as JSON: {exc}"
+        try:
+            decoded = json.loads(_strip_json_fence(content))
+        except json.JSONDecodeError as exc:
+            decode_error = f"could not parse model response as JSON: {exc}"
+
+    if decode_error is not None:
+        return None, decode_error
+
+    if not isinstance(decoded, dict):
+        return None, (
+            f"model response was valid JSON but not a JSON object (got {type(decoded).__name__})"
+        )
+
+    return decoded, None
 
 
 def _validate_items(
-    items: list[dict[str, Any]],
+    items: list[Any],
 ) -> tuple[list[MaskSuggestion], list[tuple[dict[str, Any], str]]]:
     """Validate a list of raw suggestion dicts against hcmask syntax.
 
     Args:
         items: Raw ``{"mask": ..., "custom_charsets": [...], "why": ...}``
-            dicts as decoded from the model's JSON response.
+            dicts as decoded from the model's JSON response. Items may be
+            malformed (e.g. not objects at all) since this is untrusted
+            model output.
 
     Returns:
         A tuple ``(suggestions, failures)`` where ``suggestions`` holds one
         :class:`MaskSuggestion` per item that validated successfully, and
         ``failures`` holds ``(item, error_message)`` pairs for every item
         that failed to validate. All items are checked, not just the first
-        failure.
+        failure. An item that isn't a JSON object is recorded as a failure
+        (wrapped in a placeholder dict) rather than raising.
     """
     suggestions: list[MaskSuggestion] = []
     failures: list[tuple[dict[str, Any], str]] = []
 
-    for item in items:
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            placeholder = {"mask": "", "custom_charsets": [], "why": ""}
+            failures.append(
+                (placeholder, f"item {index} is not an object (got {type(item).__name__})")
+            )
+            continue
+
         mask_field = item.get("mask", "")
         custom_charsets = item.get("custom_charsets", [])
         why = item.get("why", "")
@@ -353,7 +377,10 @@ def generate_masks(
         failures = [({"mask": ""}, parse_error or "invalid JSON")]
     else:
         items = parsed.get("masks", [])
-        suggestions, failures = _validate_items(items)
+        if not items:
+            failures = [({"mask": ""}, "response contained an empty 'masks' array")]
+        else:
+            suggestions, failures = _validate_items(items)
 
     if not failures:
         return suggestions
@@ -384,6 +411,12 @@ def generate_masks(
         )
 
     retry_items = retry_parsed.get("masks", [])
+
+    if not retry_items:
+        raise MaskGenerationError(
+            f"model returned no mask suggestions for this description: {description!r}"
+        )
+
     retry_suggestions, retry_failures = _validate_items(retry_items)
 
     if retry_failures:
