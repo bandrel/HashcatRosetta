@@ -6,6 +6,8 @@ import pytest
 from click.testing import CliRunner
 
 from hashcat_rosetta.cli import _escape_bytes, explain_rule, main
+from hashcat_rosetta.mask import parse_hcmask_line
+from hashcat_rosetta.nlmask import MaskGenerationError, MaskSuggestion
 
 
 # Shared fixtures
@@ -530,3 +532,51 @@ class TestExplainCliByteRendering:
         # The raw U+0099 code point (which would UTF-8-encode to c2 99) must not
         # appear in the user-facing output.
         assert "\x99" not in result.output
+
+
+# --- --mask natural-language generation ---
+
+
+class TestMaskGeneration:
+    """Covers the --mask branch wired to nlmask.generate_masks."""
+
+    def _suggestion(self, mask="Summer?d?d?d?d?d?d", why="a season plus a six digit year/PIN"):
+        line = parse_hcmask_line(mask)
+        return MaskSuggestion(mask=mask, custom_charsets=[], why=why, line=line)
+
+    def test_mask_prints_line_and_keyspace(self, runner, monkeypatch):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.cli.generate_masks", lambda *a, **k: [suggestion])
+        result = runner.invoke(main, ["--mask", "Summer followed by six digits"])
+        assert result.exit_code == 0
+        assert "Summer?d?d?d?d?d?d" in result.output
+        assert "1,000,000" in result.output
+
+    def test_mask_does_not_require_file(self, runner, monkeypatch):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.cli.generate_masks", lambda *a, **k: [suggestion])
+        result = runner.invoke(main, ["--mask", "Summer followed by six digits"])
+        assert result.exit_code == 0
+        assert "FILE is required" not in result.output
+
+    def test_mask_out_writes_file(self, runner, monkeypatch, tmp_path):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.cli.generate_masks", lambda *a, **k: [suggestion])
+        out_path = tmp_path / "out.hcmask"
+        result = runner.invoke(
+            main, ["--mask", "Summer followed by six digits", "-o", str(out_path)]
+        )
+        assert result.exit_code == 0
+        assert str(out_path) in result.output
+        contents = out_path.read_text()
+        assert "Summer?d?d?d?d?d?d" in contents
+        assert contents.startswith("#")
+
+    def test_mask_generation_error_exits_nonzero(self, runner, monkeypatch):
+        def _raise(*args, **kwargs):
+            raise MaskGenerationError("could not reach Ollama at http://localhost:11434/v1")
+
+        monkeypatch.setattr("hashcat_rosetta.cli.generate_masks", _raise)
+        result = runner.invoke(main, ["--mask", "Summer followed by six digits"])
+        assert result.exit_code == 1
+        assert "could not reach Ollama" in result.output

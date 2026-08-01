@@ -9,6 +9,8 @@ import click
 
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
+from .mask import describe, format_hcmask_line, keyspace
+from .nlmask import MaskGenerationError, generate_masks
 from .parser import decode_hex_escapes
 
 _BANNER = r"""
@@ -773,6 +775,29 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         "(baseword:rule:candidate:wordlist with wordlist attribution)."
     ),
 )
+@click.option(
+    "--mask",
+    type=str,
+    help="Generate an hcmask from an English description via a local Ollama server",
+)
+@click.option(
+    "-o",
+    "--mask-out",
+    type=click.Path(),
+    help="Write generated mask(s) to a .hcmask file (used with --mask)",
+)
+@click.option(
+    "--model",
+    type=str,
+    default=lambda: os.environ.get("OLLAMA_MODEL"),
+    help="Override the model name used for --mask (default: OLLAMA_MODEL env var)",
+)
+@click.option(
+    "--ollama-host",
+    type=str,
+    default=None,
+    help="Override the Ollama host/URL used for --mask (default: OLLAMA_HOST env var)",
+)
 @click.pass_context
 def main(
     ctx,
@@ -790,6 +815,10 @@ def main(
     detail,
     analyze_rules,
     debug_mode,
+    mask,
+    mask_out,
+    model,
+    ollama_host,
 ):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
 
@@ -815,10 +844,40 @@ def main(
 
     Analyze rule file opcodes:
         hashcat-rosetta rules.txt --analyze-rules
+
+    Generate masks:
+        hashcat-rosetta --mask "The word 'Summer' followed by six digits."
+        hashcat-rosetta --mask "a season and a year" -o seasons.hcmask
     """
 
     # Show the banner (to stderr so it never pollutes piped/exported stdout)
     click.echo(_BANNER, err=True)
+
+    # Handle natural-language mask generation
+    if mask:
+        try:
+            suggestions = generate_masks(mask, model=model, host=ollama_host)
+        except MaskGenerationError as e:
+            click.echo(f"[!] {e}", err=True)
+            sys.exit(1)
+
+        click.echo(f"\nMask Suggestions for: '{mask}'")
+        click.echo("=" * 70)
+        for i, suggestion in enumerate(suggestions, 1):
+            line_str = format_hcmask_line(suggestion.custom_charsets, suggestion.mask)
+            click.echo(f"\n{i}. {line_str}")
+            click.echo(f"   {describe(suggestion.line)}")
+            click.echo(f"   Keyspace: {keyspace(suggestion.line):,} candidates")
+            click.echo(f"   Why: {suggestion.why}")
+        click.echo()
+
+        if mask_out:
+            with open(mask_out, "w", encoding="utf-8") as f:
+                f.write(f"# {mask}\n")
+                for suggestion in suggestions:
+                    f.write(format_hcmask_line(suggestion.custom_charsets, suggestion.mask) + "\n")
+            click.echo(f"Done: Mask(s) written to: {mask_out}")
+        return
 
     # Handle rule explanation
     if explain:
