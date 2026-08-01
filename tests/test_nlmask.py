@@ -332,6 +332,43 @@ class TestGenerateMasksConnectionError:
         assert "http://nowhere:9999/v1" in str(exc_info.value)
 
 
+class TestRealClientTimeout:
+    """The OpenAI SDK's defaults (600s read timeout x up to 3 attempts) let a
+    saturated/hung server block an interactive CLI call for 30 minutes. When
+    no test double is injected, the real client must be built with a much
+    tighter bound so a dead server fails fast instead of hanging.
+    """
+
+    def test_real_client_constructed_with_bounded_timeout_and_no_sdk_retries(self, monkeypatch):
+        captured = {}
+
+        class _FakeOpenAI:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                self.chat = SimpleNamespace(completions=FakeCompletions([VALID_JSON]))
+
+        monkeypatch.setattr("hashcat_rosetta.nlmask.OpenAI", _FakeOpenAI)
+
+        try:
+            generate_masks("something", host="http://nowhere:9999")
+        except Exception:
+            pass  # the fake client's canned response isn't the point of this test
+
+        assert captured, "OpenAI(...) was never constructed"
+        assert captured.get("max_retries") == 0
+        timeout = captured.get("timeout")
+        assert timeout is not None, "no explicit timeout passed to OpenAI(...)"
+        # httpx.Timeout or a plain float/int are both acceptable; either way
+        # every leg must be well under the old 600s default.
+        if isinstance(timeout, (int, float)):
+            assert timeout <= 60
+        else:
+            for leg in ("connect", "read", "write", "pool"):
+                value = getattr(timeout, leg, None)
+                if value is not None:
+                    assert value <= 60, f"{leg} timeout {value}s is not tightly bounded"
+
+
 class TestModuleConstants:
     def test_mask_schema_shape(self):
         assert MASK_SCHEMA["type"] == "object"
@@ -470,3 +507,30 @@ class TestImportIsolation:
             # getattr(), not attribute syntax: a literal bad attribute is a
             # static error mypy rightly flags on a module with __all__.
             getattr(hashcat_rosetta, "definitely_not_a_real_export")
+
+
+class TestCategoryDescriptionsAgainstLiveOllama:
+    """A description naming a category ("mushroom varieties") rather than a
+    literal word must expand into concrete member words crossed with the
+    requested pattern(s), not a bare pattern with no basewords. Requires a
+    reachable local Ollama; skipped otherwise, matching the hashcat-binary
+    integration convention elsewhere in this suite.
+    """
+
+    @pytest.mark.integration
+    def test_category_description_yields_literal_basewords(self):
+        try:
+            suggestions = generate_masks(
+                "Basewords should be based on mushroom varieties followed by "
+                "one of the following patters. [symbol+digit,digit+symbol]"
+            )
+        except MaskGenerationError as exc:
+            pytest.skip(f"Ollama not reachable: {exc}")
+
+        assert len(suggestions) >= 2
+        for suggestion in suggestions:
+            literal_prefix = suggestion.mask.split("?")[0]
+            assert literal_prefix, (
+                f"expected a literal baseword prefix in {suggestion.mask!r}, "
+                "got a pattern with no basewords"
+            )

@@ -141,6 +141,13 @@ as-is, e.g. "Summer" in "Summer?d?d?d?d?d?d" is a literal prefix.
   description describes multiple variants (e.g. "summer or winter", "either
   4 or 6 digits"), return multiple objects in the `masks` array, one per
   variant.
+- If the description names a CATEGORY of words rather than a single literal
+  word (e.g. "mushroom varieties", "months of the year", "NFL team names"),
+  enumerate several concrete real-world members of that category yourself
+  from general knowledge (5-10 is a good default) and emit one mask object
+  per (member word x requested pattern) combination, using the member word
+  as a literal prefix/suffix. Never emit a pattern-only mask with no literal
+  basewords when the description asks for basewords from a category.
 - The `why` field must be exactly ONE short clause with no step-by-step
   reasoning or "thinking out loud". Do not explain your reasoning process,
   just state the rationale in a few words.
@@ -407,7 +414,17 @@ def generate_masks(
     resolved_model = model if model is not None else os.environ.get("OLLAMA_MODEL", _DEFAULT_MODEL)
 
     active_client: Any = (
-        client if client is not None else OpenAI(base_url=base_url, api_key="ollama")
+        client
+        if client is not None
+        else OpenAI(
+            base_url=base_url,
+            api_key="ollama",
+            # The SDK's defaults (600s read timeout x up to 3 attempts) let a
+            # hung/saturated server block this interactive CLI call for 30
+            # minutes. Fail fast instead: one attempt, generous but bounded.
+            timeout=60.0,
+            max_retries=0,
+        )
     )
 
     response_format = {
