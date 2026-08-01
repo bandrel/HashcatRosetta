@@ -94,3 +94,21 @@ class TestMemoryOpcodes:
         silently-skipped opcode for one that legitimately did nothing."""
         steps = explain_rule("MQ4", "abc")
         assert steps is None or any(s.startswith("4:") for s in steps)
+
+
+class TestNoOpOpcode:
+    """hashcat declares RULE_OP_MANGLE_TOGGLECASE_REC for `a` but the body is
+    a `/* todo */ break;` stub, so it changes nothing. Verified: `-j 'a'` on
+    abc gives abc, and `-j 'ca'` gives Abc.
+    """
+
+    def test_a_changes_nothing(self):
+        assert _final("a", "abc") == "abc"
+
+    def test_a_does_not_interfere_with_neighbouring_opcodes(self):
+        assert _final("ca", "abc") == "Abc"
+
+    def test_a_still_emits_a_step(self):
+        steps = explain_rule("a", "abc")
+        assert steps is not None
+        assert any(s.startswith("a:") for s in steps)

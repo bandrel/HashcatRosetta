@@ -169,6 +169,7 @@ _DEFAULT_IMPLEMENTED: set[str] = {
     "4",
     "6",
     "Q",
+    "a",
 }
 
 

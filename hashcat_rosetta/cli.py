@@ -640,11 +640,12 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 1
 
         elif char == "a":
-            # Append memorized word (RULE_OP_MANGLE_TOGGLECASE_REC in hashcat source,
-            # but treated here as append-memorized semantics matching CPU-mode behavior)
-            prev = current
-            current = _cap(prev, current + memorized)
-            steps.append(f"a: Append memorized '{memorized}' → {prev} → {current}")
+            # RULE_OP_MANGLE_TOGGLECASE_REC. hashcat declares the opcode but
+            # its implementation body is `/* todo */ break;`, so it is a no-op
+            # upstream. Verified against 7.1.2: `-j 'a'` on abc gives abc.
+            # This previously appended the memory buffer, which nothing in
+            # hashcat does.
+            steps.append(f"a: No-op (unimplemented in hashcat) → {current} → {current}")
             i += 1
 
         elif char == "M":
