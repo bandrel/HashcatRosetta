@@ -41,7 +41,10 @@ def test_select_engine_routes_by_opcode():
 def test_filter_opcodes_are_now_compared_not_skipped():
     r = verify_rule(">4", "abcdefgh")
     assert r.status != "skipped_hashcat_unsupported"
-    assert r.hashcat == "abcdefgh"
+    assert r.status == "match", (
+        "our simulator should agree with hashcat that len(word)=8 >= N=4 "
+        "means '>4' keeps 'abcdefgh' unchanged"
+    )
 
 
 def test_3nx_still_uses_the_gpu_oracle():
