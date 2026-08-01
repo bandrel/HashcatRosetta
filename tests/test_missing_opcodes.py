@@ -113,6 +113,11 @@ class TestNoOpOpcode:
     def test_a_does_not_interfere_with_neighbouring_opcodes(self):
         assert _final("ca", "abc") == "Abc"
 
+    def test_a_still_emits_a_step(self):
+        steps = explain_rule("a", "abc")
+        assert steps is not None
+        assert any(s.startswith("a:") for s in steps)
+
 
 class TestChainedXMemoryMutation:
     """X mutates the memory buffer as a side effect (src/rp_cpu.c's
@@ -131,11 +136,6 @@ class TestChainedXMemoryMutation:
 
     def test_chained_X334_X444_reads_the_mutated_buffer(self):
         assert _final("X334 X444", "password") == "passord\x00\x00\x00\x00word"
-
-    def test_a_still_emits_a_step(self):
-        steps = explain_rule("a", "abc")
-        assert steps is not None
-        assert any(s.startswith("a:") for s in steps)
 
 
 class TestMFormatAndXBounds:
