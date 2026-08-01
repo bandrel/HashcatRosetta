@@ -211,7 +211,23 @@ export = analyzer.export_to_dict()
 
 The analyzer automatically detects and supports both hashcat debug output formats:
 
-### Space-separated format (modern hashcat)
+### Colon-separated format (hashcat's native format)
+
+```
+baseword:rule:candidate
+COMPUTER:} } } } t:retupmoc
+EXAMPLE:sa@ se3 so0:3x@mpl3
+admin:$1 $5 c ^@:@Admin15
+```
+
+Each line contains three **colon-separated** fields:
+- **baseword**: The original dictionary word
+- **rule**: The hashcat rule applied
+- **candidate**: The resulting password candidate after applying the rule
+
+hashcat has always emitted this format (`src/debugfile.c` writes `orig`, `:`, `rule`, `:`, `mod`).
+
+### Space-separated format (legacy)
 
 ```
 baseword rule candidate
@@ -221,21 +237,7 @@ admin l admin
 letmein [ etmein
 ```
 
-Each line contains three **space-separated** fields:
-- **baseword**: The original dictionary word
-- **rule**: The hashcat rule applied
-- **candidate**: The resulting password candidate after applying the rule
-
-### Colon-separated format (older hashcat versions)
-
-```
-baseword:rule:candidate
-COMPUTER:} } } } t:retupmoc
-EXAMPLE:sa@ se3 so0:3x@mpl3
-admin:$1 $5 c ^@:@Admin15
-```
-
-Each line contains three **colon-separated** fields with the same meaning as above.
+Each line contains three **space-separated** fields with the same meaning as above. This is an older, legacy format that this parser also accepts.
 
 **Note**: The analyzer automatically detects which format your file uses. No manual configuration needed!
 

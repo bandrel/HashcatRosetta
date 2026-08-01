@@ -425,8 +425,8 @@ class RuleParser:
 
         Supports the full hashcat rule opcode set:
         - No-arg ops: : l u c C t d f r { } [ ] k K q E M m S w W h H 4 5 7 9 a
-        - 1-arg ops (opcode + 1 char): T D p y Y e z Z ^ $ @ ! > < ' + - . , % L R ( )
-        - 2-arg ops (opcode + 2 chars): s o i 3 * x = v O B
+        - 1-arg ops (opcode + 1 char): T D p y Y e z Z ^ $ @ ! > < ' + - . , L R ( )
+        - 2-arg ops (opcode + 2 chars): s o i 3 * x = v O B %
         - 3-arg ops (opcode + 3 chars): X
 
         Arity notes (verified against the hashcat rule engine):
@@ -438,9 +438,9 @@ class RuleParser:
         # No-argument operations (single character, no parameters)
         no_arg_ops = set(":lucCtdfr{}[]kKqEMmSwWhH4579a")
         # 1-argument operations (opcode + 1 parameter character)
-        one_arg_ops = set("TDpyYezZ^$@!><'+-.,%LR()")
+        one_arg_ops = set("TDpyYezZ^$@!><'+-.,LR()")
         # 2-argument operations (opcode + 2 parameter characters)
-        two_arg_ops = set("soi3x*=vOB")
+        two_arg_ops = set("soi3x*=vOB%")
         # 3-argument operations (opcode + 3 parameter characters)
         three_arg_ops = set("X")
 

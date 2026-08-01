@@ -47,6 +47,20 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 
 The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, `DebugAnalyzer`, plus mask-generation types (`HcmaskLine`, `MaskError`, `parse_hcmask_line`, `keyspace`, `describe`, `format_hcmask_line`, `generate_masks`, `MaskGenerationError`, `MaskSuggestion`) from `__init__.py`.
 
+## Opcode Semantics and Oracle Routing
+
+Every opcode `parser.py` recognizes is simulated in `explain_rule()` and oracle-verified
+(`hashcat_rosetta/_verify.py`, `scripts/sweep_opcodes.py`). Two engines serve as oracles and
+are routed per opcode, never interchanged: the GPU/OpenCL engine (`hashcat --stdout -r`) for
+everything valid in a `-r` rule file, and the CPU engine (`hashcat --stdout -j`,
+`src/rp_cpu.c`) for the thirteen opcodes hashcat refuses to compile into a `-r` file in any
+mode: `M X ! < > % ( ) = 4 6 Q a`.
+
+- **`a` is a no-op.** hashcat declares it as `RULE_OP_MANGLE_TOGGLECASE_REC`, but the upstream
+  implementation is an explicit `/* todo */ break;` stub, so it never mutates the word. This
+  is oracle-comparable via `-j`, and the correct expected value is "unchanged" — not the
+  memory-append behavior a stale reading of the opcode name might suggest.
+
 ## Key Conventions
 
 - Build system: hatchling
