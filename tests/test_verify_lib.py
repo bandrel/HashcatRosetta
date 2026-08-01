@@ -112,11 +112,13 @@ class TestHashcatUnsupportedOpcodes:
         assert result.status != "skipped_hashcat_unsupported", f"got {result}"
 
     def test_unknown_opcode_is_unsupported(self) -> None:
-        """Digits like 4/5/6/7 (JtR-only opcodes) emitted by hashcat-utils
-        generate-rules but rejected by hashcat itself."""
+        """Digits like 5/7 (JtR-only opcodes) emitted by hashcat-utils
+        generate-rules but rejected by hashcat itself. (4/6 are now real
+        memory opcodes — see TestMemoryOpcodes — so they no longer serve as
+        an example of an unknown opcode.)"""
         from hashcat_rosetta._verify import verify_rule
 
-        result = verify_rule("4", "password")
+        result = verify_rule("5", "password")
         assert result.status == "skipped_hashcat_unsupported", f"got {result}"
 
     def test_truncated_two_arg_opcode_is_unsupported(self) -> None:

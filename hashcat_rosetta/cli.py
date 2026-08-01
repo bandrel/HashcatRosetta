@@ -676,6 +676,28 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             except (ValueError, IndexError):
                 i += 1
 
+        elif char == "4":
+            prev = current
+            if len(current) + len(memorized) < 256:
+                current = current + memorized
+            steps.append(f"4: Append memorized '{memorized}' → {prev} → {current}")
+            i += 1
+
+        elif char == "6":
+            prev = current
+            if len(current) + len(memorized) < 256:
+                current = memorized + current
+            steps.append(f"6: Prepend memorized '{memorized}' → {prev} → {current}")
+            i += 1
+
+        elif char == "Q":
+            if current == memorized:
+                return None
+            steps.append(
+                f"Q: Differs from memorized '{memorized}' (filter passed) → {current} → {current}"
+            )
+            i += 1
+
         elif char == "=" and i + 2 < len(rule_str):
             # Reject unless character at position N is X
             pos_char = rule_str[i + 1]

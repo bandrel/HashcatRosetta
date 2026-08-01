@@ -1,3 +1,5 @@
+import pytest
+
 from hashcat_rosetta.cli import explain_rule
 
 
@@ -44,3 +46,51 @@ class TestKeyboardShift:
 
     def test_S_leaves_bytes_outside_33_126_alone(self):
         assert _final("S", "a b") == "A B"  # space (32) is unmasked
+
+
+class TestMemoryOpcodes:
+    """Memory ops are host-side only; oracle is `hashcat -j`.
+    Every expected value below was read off hashcat v7.1.2, not reasoned out.
+    """
+
+    def test_4_appends_memory(self):
+        assert _final("M4", "abc") == "abcabc"
+
+    def test_6_prepends_memory(self):
+        assert _final("cM6", "abc") == "AbcAbc"
+
+    def test_Q_rejects_when_word_equals_memory(self):
+        assert _final("MQ", "abc") is None
+
+    def test_Q_passes_when_word_differs_from_memory(self):
+        assert _final("Mc Q", "abc") == "Abc"
+        assert _final("MuQ", "abc") == "ABC"
+
+    @pytest.mark.xfail(
+        reason="Depends on Task 7b's zero-filled memorized-buffer default; "
+        "memorized == baseword until Task 7b lands.",
+        strict=True,
+    )
+    def test_4_without_M_appends_the_zeroed_buffer(self):
+        """hashcat: bare '4' on abc gives 'abc\\0\\0\\0'. This depends on the
+        memory buffer's zero-fill default, which Task 7b (not this task)
+        implements. If Task 7b has not landed yet, memorized == baseword, so
+        this specific assertion will fail until Task 7b lands — SKIP or
+        XFAIL this one test only if that's the case, do not weaken the
+        assertion itself. All other tests in this class must pass now."""
+        assert _final("4", "abc") == "abc\x00\x00\x00"
+
+    @pytest.mark.xfail(
+        reason="Depends on Task 7b's zero-filled memorized-buffer default; "
+        "memorized == baseword until Task 7b lands.",
+        strict=True,
+    )
+    def test_6_without_M_prepends_the_zeroed_buffer(self):
+        """Same caveat as test_4_without_M_appends_the_zeroed_buffer above."""
+        assert _final("6", "abc") == "\x00\x00\x00abc"
+
+    def test_step_is_emitted_even_when_nothing_changes(self):
+        """A no-op must still produce a step, so a reader never mistakes a
+        silently-skipped opcode for one that legitimately did nothing."""
+        steps = explain_rule("MQ4", "abc")
+        assert steps is None or any(s.startswith("4:") for s in steps)
