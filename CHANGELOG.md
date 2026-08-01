@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases predating this file are summarized from their git history; see the tags
 for exact timing.
 
+## [Unreleased]
+
+### Fixed
+
+- **`<` and `>` length filters were inverted.** hashcat's `>N` rejects plains
+  shorter than N and `<N` rejects longer; both the descriptions and the
+  simulation had it backwards, so `--explain` reported "filter passed" for
+  candidates hashcat drops and refused to explain rules hashcat runs.
+- **`%` is `%NX`, not `%X`.** The wrong arity made every `%` rule unexplainable
+  and mis-tokenized every opcode following a `%`, which corrupted
+  `--analyze-rules` statistics for any rule file containing one.
+- **`a` is a no-op.** hashcat declares `RULE_OP_MANGLE_TOGGLECASE_REC` but its
+  body is a `/* todo */ break;` stub. We were appending the memory buffer,
+  which no hashcat version does.
+- **The memory buffer is zero-filled, not seeded with the plain.** hashcat
+  fills it with `len(plain)` NUL bytes, so a memory op with no preceding `M`
+  reads NULs. `X` had been wrong since 0.4.0 for exactly that case: bare
+  `X012` on `abc` is `ab\0c`, and we produced `abac`.
+
+### Added
+
+- **A second oracle: the host-side rule engine via `hashcat -j`.** Filter and
+  memory opcodes (`! < > % ( ) = M X 4 6 Q`) are invalid in `-r` rule files in
+  every mode, so they had never been compared against hashcat at all. They are
+  now oracled against the engine that actually implements them. The two engines
+  are routed per opcode and never interchanged, because they disagree on `3NX`.
+- **`S`, `h`, `H`, `4`, `6`, and `Q` are implemented** (#37), closing the last
+  simulator gaps. `S` is an XOR against hashcat's `cshift_lookup` mask, not a
+  case toggle.
+- **The sweep now fails on any opcode with no oracle coverage,** so a
+  simulated-but-unverified opcode cannot ship again without a cited excuse.
+
 ## [0.4.0] - 2026-07-29
 
 The headline is accuracy. A full byte-for-byte comparison against hashcat 7.1.2
