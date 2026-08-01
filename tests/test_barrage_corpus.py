@@ -80,7 +80,20 @@ EXPECTED_NON_UTF8_LINES = 33262
 # If this count changes, either the corpus changed or explain_rule's
 # handling of trailing-space arguments regressed - investigate, don't just
 # update it.
-EXPECTED_SPACE_ARG_VULNERABLE_LINES = 79
+#
+# 79 -> 69 (2026-08-01, merge of feat/oracle-every-opcode): unrelated to the
+# byte-safe rstrip/strip fix under test here. That branch added no-arg
+# opcodes 4/6/h/H/S. A handful of truncated two-arg opcodes in this corpus
+# (e.g. "i4 " -> fully-stripped "i4") used to degrade to None on both
+# variants' *argument* character alike; now the orphaned argument char
+# ('4','6','h','H') is itself a recognized no-arg opcode, so the
+# fully-stripped variant no longer degrades to None for those specific
+# combinations, and they drop out of this vulnerability count. This is the
+# same "leftover truncated-opcode argument reinterpreted as an opcode"
+# behavior already accepted as by-design in
+# TestExplainRuleEdgeCases.test_incomplete_substitute (tests/test_cli.py) --
+# not a corpus change or a regression in trailing-whitespace handling.
+EXPECTED_SPACE_ARG_VULNERABLE_LINES = 69
 
 
 @pytest.mark.integration
