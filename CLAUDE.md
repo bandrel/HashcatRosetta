@@ -45,7 +45,7 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 - **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--wordlists`, `--export`, `--explain`, `--analyze-rules`, `--mask`) plus `--debug-mode {auto,4,5}` to force/auto-detect the debug format (debug-file analysis only, not `--analyze-rules`). `--wordlists` shows top wordlists (mode 5 only; honors `--top`, and `--detail` adds per-wordlist unique basewords/candidates/rules). The `--mask` flag generates masks via `nlmask.generate_masks()`, with `-o`/`--mask-out` writing to a file, and `--model`/`--ollama-host` configuring the LLM endpoint. Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `hashcat-rosetta` in pyproject.toml.
 - **`scripts/sweep_opcodes.py`** - Systematic per-opcode correctness sweep. Generates ~230 rules covering every opcode in `_DEFAULT_IMPLEMENTED` against a canonical arg grid, runs them via `_verify.verify_corpus`, and emits a per-opcode matrix to `reports/opcode-sweep.md`. CI job `opcode-sweep` runs this on every PR; mismatches outside `KNOWN_LATENT` fail the build.
 
-The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, and `DebugAnalyzer` from `__init__.py`.
+The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, `DebugAnalyzer`, plus mask-generation types (`HcmaskLine`, `MaskError`, `parse_hcmask_line`, `keyspace`, `describe`, `format_hcmask_line`, `generate_masks`, `MaskGenerationError`, `MaskSuggestion`) from `__init__.py`.
 
 ## Key Conventions
 
