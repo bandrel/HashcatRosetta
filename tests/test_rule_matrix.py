@@ -850,18 +850,18 @@ class TestFilterRejection:
         assert explain_rule("!z", "password") is not None
 
     def test_lt_rejects_when_word_too_short(self) -> None:
-        # <5 means reject if length < 5; "cat" is len 3, so reject.
-        assert explain_rule("<5", "cat") is None
+        # <5 means reject if length > 5; "password" is len 8, so reject.
+        assert explain_rule("<5", "password") is None
 
     def test_lt_passes_when_word_long_enough(self) -> None:
-        assert explain_rule("<5", "password") is not None
+        assert explain_rule("<5", "cat") is not None
 
     def test_gt_rejects_when_word_too_long(self) -> None:
-        # >5 means reject if length > 5; "password" is len 8, so reject.
-        assert explain_rule(">5", "password") is None
+        # >5 means reject if length < 5; "cat" is len 3, so reject.
+        assert explain_rule(">5", "cat") is None
 
     def test_gt_passes_when_word_short_enough(self) -> None:
-        assert explain_rule(">5", "cat") is not None
+        assert explain_rule(">5", "password") is not None
 
     def test_percent_rejects_when_char_absent(self) -> None:
         # %a means reject unless contains 'a'; "test" has no 'a' so reject.

@@ -328,22 +328,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             i += 2
 
         elif char == ">" and i + 1 < len(rule_str):
-            # Reject if word length > N
-            n_char = rule_str[i + 1]
-            try:
-                n = _hashcat_pos(n_char)
-            except ValueError:
-                i += 1
-                continue
-            if len(current) > n:
-                return None
-            steps.append(
-                f">{n_char}: Length {len(current)} <= {n} (filter passed) → {current} → {current}"
-            )
-            i += 2
-
-        elif char == "<" and i + 1 < len(rule_str):
-            # Reject if word length < N
+            # hashcat: reject if word length is LESS than N (inclusive keep at N)
             n_char = rule_str[i + 1]
             try:
                 n = _hashcat_pos(n_char)
@@ -353,7 +338,22 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             if len(current) < n:
                 return None
             steps.append(
-                f"<{n_char}: Length {len(current)} >= {n} (filter passed) → {current} → {current}"
+                f">{n_char}: Length {len(current)} >= {n} (filter passed) → {current} → {current}"
+            )
+            i += 2
+
+        elif char == "<" and i + 1 < len(rule_str):
+            # hashcat: reject if word length is GREATER than N (inclusive keep at N)
+            n_char = rule_str[i + 1]
+            try:
+                n = _hashcat_pos(n_char)
+            except ValueError:
+                i += 1
+                continue
+            if len(current) > n:
+                return None
+            steps.append(
+                f"<{n_char}: Length {len(current)} <= {n} (filter passed) → {current} → {current}"
             )
             i += 2
 
