@@ -255,7 +255,11 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
 
     # Parse and apply rules sequentially
     current = baseword
-    memorized = baseword  # Default memorized word is the original input
+    # hashcat zero-fills the memory buffer to the plain's length rather than
+    # seeding it with the plain, so a memory op used without a preceding `M`
+    # reads NUL bytes. Verified against 7.1.2: bare `4` on "abcdef" yields
+    # "abcdef" + six NULs, and bare `X012` on "abc" yields "ab\0c".
+    memorized = "\x00" * len(baseword)
     steps = []
     i = 0
 

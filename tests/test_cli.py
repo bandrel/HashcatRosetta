@@ -225,7 +225,7 @@ class TestExplainFlag:
         assert "Rule File Explanation" in result.output
 
     def test_explain_unknown_rule(self, runner):
-        result = runner.invoke(main, ["--explain", "Q"])
+        result = runner.invoke(main, ["--explain", "W"])
         assert result.exit_code == 0
         assert "Unknown rule" in result.output
 
@@ -304,7 +304,7 @@ class TestExplainRuleEdgeCases:
 
     def test_unknown_opcodes_only(self):
         """A string of characters not in rule_map and not parameterized."""
-        result = explain_rule("QQQ")
+        result = explain_rule("WWW")
         assert result is None
 
     def test_incomplete_append(self):
