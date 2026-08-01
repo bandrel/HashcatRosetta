@@ -100,6 +100,116 @@ def _ascii_swapcase(s: str) -> str:
     return "".join(out)
 
 
+# hashcat's cshift_lookup, transcribed from OpenCL/inc_rp_common.cl:42.
+# It is an XOR mask, not a substitution map: S(c) = chr(ord(c) ^ mask[ord(c)]).
+# The upstream table is 256 bytes but zero outside 33..126, so only that
+# window is stored here; index 0 corresponds to codepoint 33.
+_CSHIFT_MASK_33_126: tuple[int, ...] = (
+    16,
+    5,
+    16,
+    16,
+    16,
+    17,
+    5,
+    17,
+    25,
+    18,
+    22,
+    16,
+    114,
+    16,
+    16,
+    25,
+    16,
+    114,
+    16,
+    16,
+    16,
+    104,
+    17,
+    18,
+    17,
+    1,
+    1,
+    16,
+    22,
+    16,
+    16,
+    114,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    104,
+    114,
+    30,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    30,
+)
+
+
+def _shift_char(ch: str) -> str:
+    """Apply hashcat's `S` keyboard-shift to one character."""
+    code = ord(ch)
+    if 33 <= code <= 126:
+        return chr(code ^ _CSHIFT_MASK_33_126[code - 33])
+    return ch
+
+
 def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
     if not rule_str:
@@ -718,6 +828,12 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             prev = current
             current = _cap(prev, current.encode("latin-1", errors="replace").hex().upper())
             steps.append(f"H: Hex encode uppercase → {prev} → {current}")
+            i += 1
+
+        elif char == "S":
+            prev = current
+            current = "".join(_shift_char(ch) for ch in current)
+            steps.append(f"S: Keyboard shift → {prev} → {current}")
             i += 1
 
         elif char in rule_map:

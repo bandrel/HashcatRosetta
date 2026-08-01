@@ -23,3 +23,24 @@ class TestHexEncoding:
         """hashcat no-ops a growing op when the result would reach 256."""
         long_word = "a" * 200
         assert _final("h", long_word) == long_word
+
+
+class TestKeyboardShift:
+    def test_S_shifts_letters_like_case_toggle(self):
+        assert _final("S", "password") == "PASSWORD"
+
+    def test_S_also_shifts_non_alpha(self):
+        """This is what makes S different from t. Verified on v7.1.2."""
+        assert _final("S", "pass1;[a") == "PASS!:{A"
+
+    def test_S_covers_all_printable_ascii(self):
+        printable = "".join(chr(c) for c in range(33, 127))
+        expected = (
+            "1'3457\"908=<_>?)!@#$%^&*(;:,+./2"
+            "abcdefghijklmnopqrstuvwxyz{|}6-~"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]`"
+        )
+        assert _final("S", printable) == expected
+
+    def test_S_leaves_bytes_outside_33_126_alone(self):
+        assert _final("S", "a b") == "A B"  # space (32) is unmasked
