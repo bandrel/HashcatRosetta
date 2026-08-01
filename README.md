@@ -141,7 +141,6 @@ Mask Suggestions for: 'The word 'Summer' followed by six digits.'
 
 1. Summer?d?d?d?d?d?d
    literal "Summer", then 6 × digit → 1,000,000 candidates
-   Keyspace: 1,000,000 candidates
    Why: matches the literal word followed by a 6-digit number
 ```
 
