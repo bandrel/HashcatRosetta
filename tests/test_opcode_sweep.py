@@ -176,20 +176,23 @@ class TestAggregateByOpcode:
         assert stats["v"]["first_failing_example"] is not None
         assert stats["v"]["first_failing_example"]["rule"] == "v23"
 
-    def test_unsupported_rules_counted_as_unverifiable(self):
-        # M and X always return skipped_hashcat_unsupported. Aggregation must
-        # surface that as a distinct counter so the status derivation can flag
-        # them UNVERIFIABLE rather than reporting Tested=0 silently.
+    def test_opcode_identity_no_longer_forces_unverifiable(self):
+        # Previously M/X were hardcoded into an "always unverifiable" bucket
+        # by opcode identity alone, regardless of what the round actually
+        # reported. Task 2 routes them through the CPU oracle instead, so a
+        # rule with no matching skip record is counted as tested/matched like
+        # any other opcode, and the unverifiable counter stays 0.
         from hashcat_rosetta._verify import CorpusReport
 
         report = CorpusReport()
         report.rounds = [
-            self._synth_round("password", tested=0, matched=0, hc_unsupported=1),
+            self._synth_round("password", tested=0, matched=0, hc_unsupported=0),
         ]
         rules = ["M"]
         stats = sweep_opcodes.aggregate_by_opcode(report, rules)
-        assert stats["M"]["tested"] == 0
-        assert stats["M"]["unverifiable"] == 1
+        assert stats["M"]["unverifiable"] == 0
+        assert stats["M"]["tested"] == 1
+        assert stats["M"]["matched"] == 1
 
     def test_skipped_rules_not_counted_as_matched(self):
         # Rules that the verify harness skipped (hashcat exec failure, OOB

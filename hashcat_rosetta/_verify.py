@@ -83,18 +83,28 @@ _ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,%LR()e")
 _ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMa")
 _ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | _ZERO_ARG_OPCODES
 
-# Opcodes that hashcat's --stdout pipeline refuses to compile (rule rejected
-# with exit 255 "No valid rules left"). Verified empirically against 6.2.6 and
-# 7.1.2.
-#   M, X: CPU-only rule operations not in OpenCL/Metal kernels.
-#   !, <, >, %, (, ), =: filter/reject opcodes. --stdout only emits *modified*
-#     candidates; pure-filter rules (those whose only effect is to accept or
-#     reject the unchanged baseword) produce no --stdout output at all, even
-#     when the filter logically passes. Filters exist for the hashing flow,
-#     not the candidate-emission flow.
-# Rules whose leading opcode is in this set are skipped by the harness because
-# hashcat cannot serve as an oracle for them.
-_HASHCAT_STDOUT_UNSUPPORTED: set[str] = set("MX!<>%()=")
+# Opcodes hashcat refuses to compile into a `-r` rule file, in every mode
+# (verified: `hashcat -m 0 -a 0 -r <(echo '>4 $1')` returns "No valid rules
+# left" in a real attack, not only under --stdout).
+#   M, X, 4, 6, Q: memory operations, host-side only.
+#   !, <, >, %, (, ), =: filter/reject operations, host-side only.
+#   a: RULE_OP_MANGLE_TOGGLECASE_REC, a `/* todo */ break;` stub upstream.
+#      Host-side only and a genuine no-op there, so "unchanged" is the
+#      expected value rather than something unverifiable.
+# These are reachable through `-j`/`-k`, so the CPU engine is their oracle.
+# It is also their only semantics: there is no GPU implementation to differ
+# from. Everything else is oracled on GPU, which is what rule files run.
+_CPU_ONLY_OPCODES: set[str] = set("MX!<>%()=46Qa")
+
+
+def _select_engine(rule: str) -> str:
+    """Return "cpu" if any opcode in `rule` is host-side only, else "gpu".
+
+    One CPU-only opcode taints the whole rule, because hashcat rejects the
+    entire rule file rather than the individual operation.
+    """
+    return "cpu" if any(op in _CPU_ONLY_OPCODES for op in _extract_opcodes(rule)) else "gpu"
+
 
 # Default implemented-opcodes set for the harness. Mirrors
 # scripts/verify_rules.py:IMPLEMENTED_OPCODES; the script wraps this module
@@ -470,12 +480,9 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
         )
 
     extracted_opcodes = _extract_opcodes(decoded)
-    unsupported = any(
-        op in _HASHCAT_STDOUT_UNSUPPORTED or op not in _ALL_KNOWN_OPCODES
-        for op in extracted_opcodes
-    )
+    unknown_opcode = any(op not in _ALL_KNOWN_OPCODES for op in extracted_opcodes)
     if (
-        unsupported
+        unknown_opcode
         or _has_truncated_opcode(decoded)
         or _has_oob_position(decoded, baseword)
         or _has_invalid_position_arg(decoded)
@@ -493,7 +500,8 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
     # rejection to keep parity with hashcat's filtering semantics.
     ours_rejected = explanation is None or len(explanation) == 0 or our_final == ""
 
-    hashcat_out, hashcat_failed = _hashcat_output(rule, baseword)
+    engine = _select_engine(rule)
+    hashcat_out, hashcat_failed = _hashcat_output(rule, baseword, engine=engine)
     if hashcat_failed:
         return VerifyResult(status="skipped_hashcat", rule=rule, baseword=baseword)
 

@@ -29,7 +29,6 @@ from hashcat_rosetta._verify import (
     CorpusReport,
     _ALL_KNOWN_OPCODES,
     _DEFAULT_IMPLEMENTED,
-    _HASHCAT_STDOUT_UNSUPPORTED,
     _ONE_ARG_OPCODES,
     _THREE_ARG_OPCODES,
     _TWO_ARG_OPCODES,
@@ -191,12 +190,14 @@ def aggregate_by_opcode(
                     "hashcat": mm.get("hashcat"),
                 }
         # Matched + unverifiable: walk the rule list and classify by opcode.
-        # A rule whose leading opcode is in _HASHCAT_STDOUT_UNSUPPORTED counts
-        # toward `unverifiable`. Otherwise, a rule counts as matched only if
-        # the verify harness didn't classify it as mismatched OR skipped — we
-        # need the explicit skipped-rule sets because skipped_hashcat /
-        # skipped_nonascii / skipped_hashcat_unsupported (e.g. OOB position)
-        # would otherwise be silently counted as matches.
+        # Every opcode is now routed to whichever engine (GPU `-r` or CPU
+        # `-j`) actually implements it (see `_select_engine` in _verify.py),
+        # so nothing is unconditionally unverifiable anymore. A rule counts
+        # as matched only if the verify harness didn't classify it as
+        # mismatched OR skipped — we need the explicit skipped-rule sets
+        # because skipped_hashcat / skipped_nonascii /
+        # skipped_hashcat_unsupported (e.g. OOB position) would otherwise be
+        # silently counted as matches.
         mismatched_rules_this_round = {mm["rule"] for mm in round_result["mismatches"]}
         skipped_strings = round_result.get("skipped_rule_strings", {})
         skipped_rules_this_round = (
@@ -207,9 +208,7 @@ def aggregate_by_opcode(
         for rule, op in rule_to_opcode.items():
             if op not in stats:
                 continue
-            if op in _HASHCAT_STDOUT_UNSUPPORTED:
-                stats[op]["unverifiable"] += 1
-            elif rule in mismatched_rules_this_round or rule in skipped_rules_this_round:
+            if rule in mismatched_rules_this_round or rule in skipped_rules_this_round:
                 continue
             else:
                 stats[op]["tested"] += 1
