@@ -156,31 +156,30 @@ class TestExtractFinal:
     def test_preserves_trailing_whitespace(self) -> None:
         from hashcat_rosetta._verify import _extract_final
 
-        steps = ["^L: Prepend 'L' \u2192 pass  \u2192 Lpass "]
-        assert _extract_final(steps) == "Lpass "
+        assert _extract_final("^L", "pass ") == "Lpass "
 
     def test_preserves_leading_whitespace(self) -> None:
         from hashcat_rosetta._verify import _extract_final
 
-        steps = ["u: Uppercase \u2192  pass \u2192  PASS"]
-        assert _extract_final(steps) == " PASS"
+        assert _extract_final("u", " pass") == " PASS"
 
     def test_empty_final(self) -> None:
         from hashcat_rosetta._verify import _extract_final
 
-        steps = ["'0: Truncate at pos 0 \u2192 admin \u2192 "]
-        assert _extract_final(steps) == ""
+        assert _extract_final("'0", "admin") == ""
 
-    def test_no_arrow_returns_line_as_is(self) -> None:
+    def test_no_arrow_step_returns_final_word(self) -> None:
+        """A rule ending in M produces a step with no ' -> ' arrow; the final
+        word must still be the word itself, not the step sentence."""
         from hashcat_rosetta._verify import _extract_final
 
-        assert _extract_final(["already final"]) == "already final"
+        assert _extract_final("M", "test") == "test"
 
-    def test_empty_list_or_none(self) -> None:
+    def test_empty_or_rejected_rule(self) -> None:
         from hashcat_rosetta._verify import _extract_final
 
-        assert _extract_final([]) == ""
-        assert _extract_final(None) == ""
+        assert _extract_final("", "password") == ""
+        assert _extract_final("!s", "password") == ""
 
 
 class TestEmptyFinalRejectionParity:

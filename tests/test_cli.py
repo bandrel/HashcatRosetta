@@ -232,6 +232,43 @@ class TestExplainFlag:
         assert "Unknown rule" in result.output
 
 
+class TestExplainOptionalValue:
+    """--explain takes an optional value: bare with a FILE, or a rule string."""
+
+    def test_bare_explain_before_another_flag_is_the_sentinel(self, runner, debug_file):
+        """`--explain --rules` must not swallow --rules as the explain value."""
+        result = runner.invoke(main, [debug_file, "--explain", "--rules"])
+        assert result.exit_code == 0
+        assert "Top 10 Rules" in result.output
+
+    def test_bare_explain_at_end_of_argv(self, runner, debug_file):
+        result = runner.invoke(main, [debug_file, "--rules", "--explain"])
+        assert result.exit_code == 0
+        assert "Top 10 Rules" in result.output
+
+    def test_explain_with_value_still_explains_one_rule(self, runner):
+        result = runner.invoke(main, ["--explain", "c$1", "--baseword", "admin"])
+        assert result.exit_code == 0
+        assert "Rule Explanation" in result.output
+        assert "Admin1" in result.output
+
+    def test_bare_explain_without_file_errors(self, runner):
+        result = runner.invoke(main, ["--explain"])
+        assert result.exit_code != 0
+        assert "--explain needs a rule" in result.output
+
+    def test_bare_explain_with_analyze_rules_errors(self, runner, rule_file):
+        result = runner.invoke(main, [rule_file, "--analyze-rules", "--explain"])
+        assert result.exit_code != 0
+        assert "--analyze-rules" in result.output
+
+    def test_baseword_with_bare_explain_warns(self, runner, debug_file):
+        """--baseword is meaningless in log mode; say so instead of ignoring it."""
+        result = runner.invoke(main, [debug_file, "--rules", "--explain", "--baseword", "admin"])
+        assert result.exit_code == 0
+        assert "--baseword is ignored" in result.output
+
+
 # --- --analyze-rules flag ---
 
 
@@ -298,6 +335,45 @@ class TestExportSerialization:
 
 
 # --- explain_rule() edge cases ---
+
+
+class TestSimulateRule:
+    """_simulate_rule returns both the steps and the true final word."""
+
+    def test_steps_match_explain_rule(self):
+        from hashcat_rosetta.cli import _simulate_rule
+
+        for rule in ("c", "u$1", "sa@", "^!d", "i74", "31s$1"):
+            simulated = _simulate_rule(rule, "password")
+            assert simulated is not None, rule
+            steps, _final = simulated
+            assert steps == explain_rule(rule, "password"), rule
+
+    def test_final_word_is_the_transformed_word(self):
+        from hashcat_rosetta.cli import _simulate_rule
+
+        simulated = _simulate_rule("c$1", "admin")
+        assert simulated is not None
+        _steps, final = simulated
+        assert final == "Admin1"
+
+    def test_final_word_correct_when_last_step_has_no_arrow(self):
+        """A trailing M step prints no ' -> ' arrow; the final word is still the word.
+
+        The old string-parsing recovery returned the whole step sentence here.
+        """
+        from hashcat_rosetta.cli import _simulate_rule
+
+        simulated = _simulate_rule("c$1M", "admin")
+        assert simulated is not None
+        _steps, final = simulated
+        assert final == "Admin1"
+
+    def test_returns_none_where_explain_rule_returns_none(self):
+        from hashcat_rosetta.cli import _simulate_rule
+
+        assert _simulate_rule("") is None
+        assert _simulate_rule("!s", "password") is None  # filter rejects
 
 
 class TestExplainRuleEdgeCases:

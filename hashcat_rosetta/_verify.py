@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from hashcat_rosetta.cli import explain_rule
+from hashcat_rosetta.cli import _simulate_rule, explain_rule
 from hashcat_rosetta.parser import RuleParser, decode_hex_escapes
 
 VerifyStatus = Literal[
@@ -424,18 +424,15 @@ def _hashcat_output(rule: str, baseword: str) -> tuple[str | None, bool]:
     return out, False
 
 
-def _extract_final(explanation: list[str] | None) -> str:
-    if not explanation:
-        return ""
-    last = explanation[-1]
-    # explain_rule formats each step as "<op>: <desc> → <prev> → <current>".
-    # rsplit on the exact " → " separator (with surrounding spaces) extracts
-    # <current> verbatim, including any leading/trailing whitespace that's
-    # part of the candidate itself. .strip() here used to mask whitespace
-    # bugs by silently trimming the baseword's own padding.
-    if " \u2192 " in last:
-        return last.rsplit(" \u2192 ", 1)[-1]
-    return last
+def _extract_final(rule: str, baseword: str) -> str:
+    """Return the word the simulator produces, or "" if it produced nothing.
+
+    Reads the final word straight out of the simulation. The previous version
+    string-parsed the last step on " -> ", which returned the step sentence
+    itself for steps that carry no arrow (a rule ending in M, for example).
+    """
+    simulated = _simulate_rule(rule, baseword)
+    return simulated[1] if simulated else ""
 
 
 def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -> VerifyResult:
@@ -485,7 +482,7 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
         )
 
     explanation = explain_rule(rule, baseword)
-    our_final = _extract_final(explanation)
+    our_final = _extract_final(rule, baseword)
     # An empty result is functionally a rejection: hashcat's --stdout pipeline
     # filters empty candidates and exits 255, so treat our empty output as a
     # rejection to keep parity with hashcat's filtering semantics.
