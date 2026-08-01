@@ -68,50 +68,57 @@ class TestVerifyRuleIntegration:
 
 
 class TestHashcatUnsupportedOpcodes:
-    """Rules using M or X are silently rejected by hashcat --stdout in 6.2.6+;
-    treat them as unverifiable rather than mismatches."""
+    """CPU-only opcodes (filters, M, X) are routed to the `-j` CPU oracle
+    (Task 2) instead of being skipped, since `-r` (GPU) refuses to compile
+    them at all. Genuinely unknown/malformed rules and out-of-bounds
+    positions are still skipped."""
 
-    def test_filter_opcode_is_unsupported(self) -> None:
-        """Pure-filter rules (e.g. `!a`) cannot be verified via hashcat
-        --stdout: hashcat refuses to compile a filter-only rule ("No valid
-        rules left", exit 255) whether or not the filter would pass, so it
-        emits no candidate to compare against. The harness classifies these as
-        unverifiable rather than issuing a hashcat call."""
+    def test_filter_opcode_is_verified_via_cpu_oracle(self) -> None:
+        """Pure-filter rules (e.g. `!a`) can't be compiled by hashcat's `-r`
+        (GPU) rule engine at all ("No valid rules left", exit 255), but `-j`
+        (CPU) compiles and runs them. Task 2 routes filter opcodes to the CPU
+        oracle instead of skipping them, so this is a real comparison now."""
         from hashcat_rosetta._verify import verify_rule
 
         result = verify_rule("!a", "password")
-        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+        assert result.status != "skipped_hashcat_unsupported", f"got {result}"
 
-    def test_M_alone_is_unsupported(self) -> None:
+    def test_M_alone_is_verified_via_cpu_oracle(self) -> None:
+        """M is CPU-only and now routed to the -j oracle instead of being
+        skipped. (It currently mismatches — the `explain_rule` step string
+        for M isn't in the "<desc> -> <prev> -> <current>" shape _extract_final
+        expects — but that bug is out of scope for this task.)"""
         from hashcat_rosetta._verify import verify_rule
 
         result = verify_rule("M", "password")
-        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+        assert result.status != "skipped_hashcat_unsupported", f"got {result}"
 
-    def test_X_alone_is_unsupported(self) -> None:
+    def test_X_alone_is_verified_via_cpu_oracle(self) -> None:
         from hashcat_rosetta._verify import verify_rule
 
         result = verify_rule("X005", "password")
-        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+        assert result.status != "skipped_hashcat_unsupported", f"got {result}"
 
-    def test_chained_rule_with_X_is_unsupported(self) -> None:
+    def test_chained_rule_with_X_is_verified_via_cpu_oracle(self) -> None:
         from hashcat_rosetta._verify import verify_rule
 
         result = verify_rule("u X005", "password")
-        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+        assert result.status != "skipped_hashcat_unsupported", f"got {result}"
 
-    def test_chained_rule_with_M_is_unsupported(self) -> None:
+    def test_chained_rule_with_M_is_verified_via_cpu_oracle(self) -> None:
         from hashcat_rosetta._verify import verify_rule
 
         result = verify_rule("M u", "password")
-        assert result.status == "skipped_hashcat_unsupported", f"got {result}"
+        assert result.status != "skipped_hashcat_unsupported", f"got {result}"
 
     def test_unknown_opcode_is_unsupported(self) -> None:
-        """Digits like 4/5/6/7 (JtR-only opcodes) emitted by hashcat-utils
-        generate-rules but rejected by hashcat itself."""
+        """Digits like 5/7 (JtR-only opcodes) emitted by hashcat-utils
+        generate-rules but rejected by hashcat itself. (4/6 are now real
+        memory opcodes — see TestMemoryOpcodes — so they no longer serve as
+        an example of an unknown opcode.)"""
         from hashcat_rosetta._verify import verify_rule
 
-        result = verify_rule("4", "password")
+        result = verify_rule("5", "password")
         assert result.status == "skipped_hashcat_unsupported", f"got {result}"
 
     def test_truncated_two_arg_opcode_is_unsupported(self) -> None:
@@ -195,7 +202,7 @@ class TestEmptyFinalRejectionParity:
         from hashcat_rosetta._verify import verify_rule
 
         # Stub hashcat to "reject" (exit-255 path returns "")
-        monkeypatch.setattr(verify_mod, "_hashcat_output", lambda r, b: ("", False))
+        monkeypatch.setattr(verify_mod, "_hashcat_output", lambda r, b, engine="gpu": ("", False))
 
         # Rule "'0" truncates baseword to length 0 -> our_final is "".
         # Both sides reject -> match (parity with hashcat filter).

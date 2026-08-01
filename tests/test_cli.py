@@ -227,7 +227,7 @@ class TestExplainFlag:
         assert "Rule File Explanation" in result.output
 
     def test_explain_unknown_rule(self, runner):
-        result = runner.invoke(main, ["--explain", "Q"])
+        result = runner.invoke(main, ["--explain", "W"])
         assert result.exit_code == 0
         assert "Unknown rule" in result.output
 
@@ -306,7 +306,7 @@ class TestExplainRuleEdgeCases:
 
     def test_unknown_opcodes_only(self):
         """A string of characters not in rule_map and not parameterized."""
-        result = explain_rule("QQQ")
+        result = explain_rule("WWW")
         assert result is None
 
     def test_incomplete_append(self):
@@ -347,8 +347,11 @@ class TestExplainRuleEdgeCases:
         assert result is None
 
     def test_mixed_known_and_unknown(self):
-        """Known ops produce steps, unknown chars are skipped."""
-        result = explain_rule("cQ")
+        """Known ops produce steps, unknown chars are skipped. (Q is now a
+        real memory opcode — see TestMemoryOpcodes in test_missing_opcodes.py
+        — so it no longer serves as an example of an unknown opcode; use a
+        digit that hashcat still doesn't implement instead.)"""
+        result = explain_rule("c5")
         assert result is not None
         assert len(result) == 1
         assert "Capitalize" in result[0]

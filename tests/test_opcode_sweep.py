@@ -176,20 +176,23 @@ class TestAggregateByOpcode:
         assert stats["v"]["first_failing_example"] is not None
         assert stats["v"]["first_failing_example"]["rule"] == "v23"
 
-    def test_unsupported_rules_counted_as_unverifiable(self):
-        # M and X always return skipped_hashcat_unsupported. Aggregation must
-        # surface that as a distinct counter so the status derivation can flag
-        # them UNVERIFIABLE rather than reporting Tested=0 silently.
+    def test_opcode_identity_no_longer_forces_unverifiable(self):
+        # Previously M/X were hardcoded into an "always unverifiable" bucket
+        # by opcode identity alone, regardless of what the round actually
+        # reported. Task 2 routes them through the CPU oracle instead, so a
+        # rule with no matching skip record is counted as tested/matched like
+        # any other opcode, and the unverifiable counter stays 0.
         from hashcat_rosetta._verify import CorpusReport
 
         report = CorpusReport()
         report.rounds = [
-            self._synth_round("password", tested=0, matched=0, hc_unsupported=1),
+            self._synth_round("password", tested=0, matched=0, hc_unsupported=0),
         ]
         rules = ["M"]
         stats = sweep_opcodes.aggregate_by_opcode(report, rules)
-        assert stats["M"]["tested"] == 0
-        assert stats["M"]["unverifiable"] == 1
+        assert stats["M"]["unverifiable"] == 0
+        assert stats["M"]["tested"] == 1
+        assert stats["M"]["matched"] == 1
 
     def test_skipped_rules_not_counted_as_matched(self):
         # Rules that the verify harness skipped (hashcat exec failure, OOB
@@ -267,17 +270,21 @@ class TestDeriveStatus:
         assert rows["M"]["status"] == "UNVERIFIABLE"
 
     def test_untracked_when_known_opcode_not_implemented(self):
-        # 'a' is in _ALL_KNOWN_OPCODES but not _DEFAULT_IMPLEMENTED.
-        stats = {"a": self._stat("a")}  # all zeros
+        # An opcode not in _DEFAULT_IMPLEMENTED shows as UNTRACKED.
+        # Since Task 7a made _DEFAULT_IMPLEMENTED == _ALL_KNOWN_OPCODES, use a
+        # synthetic opcode guaranteed not to be in _DEFAULT_IMPLEMENTED.
+        # This exercises derive_status's first priority (UNTRACKED check, line 242).
+        synthetic_op = "§"
+        stats = {synthetic_op: self._stat(synthetic_op)}
         rows = sweep_opcodes.derive_status(stats, known_latent={})
-        assert rows["a"]["status"] == "UNTRACKED"
+        assert rows[synthetic_op]["status"] == sweep_opcodes.STATUS_UNTRACKED
 
     def test_exit_code_zero_when_no_regression(self):
         rows = {
             "c": {**self._stat("c", tested=24, matched=24), "status": "PASS"},
             "v": {**self._stat("v", mismatches=1), "status": "LATENT"},
             "M": {**self._stat("M", unverifiable=24), "status": "UNVERIFIABLE"},
-            "a": {**self._stat("a"), "status": "UNTRACKED"},
+            "a": {**self._stat("a", tested=24, matched=24), "status": "PASS"},
         }
         assert sweep_opcodes.compute_exit_code(rows) == 0
 

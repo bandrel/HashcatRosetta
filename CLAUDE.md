@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-HashcatRosetta analyzes hashcat debug mode 4 and mode 5 output files to identify efficient password cracking rules and baseword frequency patterns. It parses both space-separated (modern) and colon-separated (older) hashcat debug formats. Mode 5 adds a trailing `wordlist` field (`baseword:rule:candidate:wordlist`) enabling per-wordlist attribution; the mode is auto-detected by field count but can be forced via `--debug-mode`.
+HashcatRosetta analyzes hashcat debug mode 4 and mode 5 output files to identify efficient password cracking rules and baseword frequency patterns. It parses both colon-separated (standard) and space-separated (older, legacy) hashcat debug formats. Mode 5 adds a trailing `wordlist` field (`baseword:rule:candidate:wordlist`) enabling per-wordlist attribution; the mode is auto-detected by field count but can be forced via `--debug-mode`.
 
 ## Commands
 
@@ -46,6 +46,22 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 - **`scripts/sweep_opcodes.py`** - Systematic per-opcode correctness sweep. Generates ~230 rules covering every opcode in `_DEFAULT_IMPLEMENTED` against a canonical arg grid, runs them via `_verify.verify_corpus`, and emits a per-opcode matrix to `reports/opcode-sweep.md`. CI job `opcode-sweep` runs this on every PR; mismatches outside `KNOWN_LATENT` fail the build.
 
 The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, `DebugAnalyzer`, plus mask-generation types (`HcmaskLine`, `MaskError`, `parse_hcmask_line`, `keyspace`, `describe`, `format_hcmask_line`, `generate_masks`, `MaskGenerationError`, `MaskSuggestion`) from `__init__.py`.
+
+## Opcode Semantics and Oracle Routing
+
+Every opcode `explain_rule()` simulates is oracle-verified (`hashcat_rosetta/_verify.py`,
+`scripts/sweep_opcodes.py`). `parser.py` additionally recognizes a handful of legacy
+hashcat-only opcodes (`m w W 5 7 9`) that modern hashcat itself rejects as syntax errors;
+these are intentionally not simulated. Two engines serve as oracles and
+are routed per opcode, never interchanged: the GPU/OpenCL engine (`hashcat --stdout -r`) for
+everything valid in a `-r` rule file, and the CPU engine (`hashcat --stdout -j`,
+`src/rp_cpu.c`) for the thirteen opcodes hashcat refuses to compile into a `-r` file in any
+mode: `M X ! < > % ( ) = 4 6 Q a`.
+
+- **`a` is a no-op.** hashcat declares it as `RULE_OP_MANGLE_TOGGLECASE_REC`, but the upstream
+  implementation is an explicit `/* todo */ break;` stub, so it never mutates the word. This
+  is oracle-comparable via `-j`, and the correct expected value is "unchanged" — not the
+  memory-append behavior a stale reading of the opcode name might suggest.
 
 ## Key Conventions
 

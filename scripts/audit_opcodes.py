@@ -25,12 +25,15 @@ from typing import Any
 # Update these whenever parser.py changes; that is the point: the test catches
 # the change and forces an explicit update here and in the reference JSON.
 # ---------------------------------------------------------------------------
-PARSER_NO_ARG_OPS: set[str] = set(":lucCtdfr{}[]kKqEMmSwWhH34579")
-PARSER_ONE_ARG_OPS: set[str] = set("TDpyYezZ^$@!><'+-.,%LRa()")
-PARSER_TWO_ARG_OPS: set[str] = set("soix*X=vOB")
+PARSER_NO_ARG_OPS: set[str] = set(":lucCtdfr{}[]kKqEMmSwWhH4579a6Q")
+PARSER_ONE_ARG_OPS: set[str] = set("TDpyYezZ^$@!><'+-.,LR()")
+PARSER_TWO_ARG_OPS: set[str] = set("soi3x*=vOB%")
+PARSER_THREE_ARG_OPS: set[str] = set("X")
 
 # Derived: all opcodes known to the parser
-PARSER_ALL_OPS: set[str] = PARSER_NO_ARG_OPS | PARSER_ONE_ARG_OPS | PARSER_TWO_ARG_OPS
+PARSER_ALL_OPS: set[str] = (
+    PARSER_NO_ARG_OPS | PARSER_ONE_ARG_OPS | PARSER_TWO_ARG_OPS | PARSER_THREE_ARG_OPS
+)
 
 
 def arity_from_parser(char: str) -> int | None:
@@ -41,6 +44,8 @@ def arity_from_parser(char: str) -> int | None:
         return 1
     if char in PARSER_TWO_ARG_OPS:
         return 2
+    if char in PARSER_THREE_ARG_OPS:
+        return 3
     return None
 
 
@@ -192,12 +197,7 @@ def run_audit(reference_path: Path, report_path: Path) -> list[str]:
         "",
         "Known expected discrepancies (pre-existing bugs to fix, not regressions):",
         "",
-        "- `X` is in `two_arg_ops` in parser.py but is actually 3-arg (XNML format).",
-        "- `3` is in `no_arg_ops` in parser.py but is actually 2-arg (3NX format).",
-        "- `a` is in `one_arg_ops` in parser.py but is actually 0-arg (no-op stub in hashcat).",
         "- `B` is documented (RULE_OP_MANGLE_CHR_ADD) but not yet simulated in explain_rule().",
-        "- `6` is 0-arg but not in any parser arity set.",
-        "- `Q` is 0-arg but not in any parser arity set.",
         "",
     ]
 

@@ -850,25 +850,25 @@ class TestFilterRejection:
         assert explain_rule("!z", "password") is not None
 
     def test_lt_rejects_when_word_too_short(self) -> None:
-        # <5 means reject if length < 5; "cat" is len 3, so reject.
-        assert explain_rule("<5", "cat") is None
+        # <5 means reject if length > 5; "password" is len 8, so reject.
+        assert explain_rule("<5", "password") is None
 
     def test_lt_passes_when_word_long_enough(self) -> None:
-        assert explain_rule("<5", "password") is not None
+        assert explain_rule("<5", "cat") is not None
 
     def test_gt_rejects_when_word_too_long(self) -> None:
-        # >5 means reject if length > 5; "password" is len 8, so reject.
-        assert explain_rule(">5", "password") is None
+        # >5 means reject if length < 5; "cat" is len 3, so reject.
+        assert explain_rule(">5", "cat") is None
 
     def test_gt_passes_when_word_short_enough(self) -> None:
-        assert explain_rule(">5", "cat") is not None
+        assert explain_rule(">5", "password") is not None
 
     def test_percent_rejects_when_char_absent(self) -> None:
-        # %a means reject unless contains 'a'; "test" has no 'a' so reject.
-        assert explain_rule("%a", "test") is None
+        # %1a means reject unless contains 'a' at least once; "test" has no 'a' so reject.
+        assert explain_rule("%1a", "test") is None
 
     def test_percent_passes_when_char_present(self) -> None:
-        assert explain_rule("%a", "admin") is not None
+        assert explain_rule("%1a", "admin") is not None
 
     def test_equals_rejects_when_char_at_pos_differs(self) -> None:
         # =0a means reject unless char at pos 0 is 'a'; "password" pos 0 is 'p'
@@ -1076,26 +1076,3 @@ class TestOpcodeE:
         result = explain_rule("e_", "test_word")
         assert result is not None
         assert len(result) >= 1
-
-
-class TestOpcodeA:
-    def test_a_appends_memorized(self) -> None:
-        # u M a -> uppercase, memorize ("PASSWORD"), append memory
-        # final = "PASSWORD" + "PASSWORD" = "PASSWORDPASSWORD"
-        result = explain_rule("uMa", "password")
-        assert result is not None
-        assert "PASSWORDPASSWORD" in result[-1]
-
-    def test_a_without_M_uses_original(self) -> None:
-        # No M: memory = original baseword. After 'u', current="PASSWORD"; 'a' appends original.
-        # Hashcat behavior: memory is initialized to the original word, so 'ua' -> "PASSWORD" + "password"
-        result = explain_rule("ua", "password")
-        assert result is not None
-        assert "PASSWORDpassword" in result[-1]
-
-    def test_a_mid_rule(self) -> None:
-        # M=memorize "test"; l lowercases (no-op); $! appends '!'; a appends "test"
-        result = explain_rule("M$!a", "test")
-        assert result is not None
-        # current after M="test", after $! ="test!", after a -> "test!" + "test" = "test!test"
-        assert "test!test" in result[-1]
