@@ -35,6 +35,11 @@ for exact timing.
   buffer, not just the current word, so chained `X` opcodes with no
   intervening `M` now read a different (correct) buffer than before and can
   produce different output than the earlier, buffer-inert implementation.
+- **`4` and `6` now reject when the memory buffer is empty or appending would
+  overflow the 256-byte cap.** hashcat rejects the entire rule when appending
+  or prepending the memorized word would overflow the 256-byte buffer or when
+  the memory buffer is empty, not silently leaving the word unchanged as
+  before.
 
 ### Added
 
