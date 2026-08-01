@@ -136,8 +136,13 @@ hashcat-rosetta --mask "The word 'Summer' followed by six digits."
 
 Output:
 ```
-Mask: Summer?d?d?d?d?d?d
-Keyspace: 1,000,000
+Mask Suggestions for: 'The word 'Summer' followed by six digits.'
+======================================================================
+
+1. Summer?d?d?d?d?d?d
+   literal "Summer", then 6 × digit → 1,000,000 candidates
+   Keyspace: 1,000,000 candidates
+   Why: matches the literal word followed by a 6-digit number
 ```
 
 Save the generated mask to a file:
@@ -164,8 +169,10 @@ OLLAMA_HOST=http://192.168.1.100:11434 OLLAMA_MODEL=llama2:70b \
 hashcat-rosetta --mask "your description" --ollama-host http://custom.host:11434 --model llama2
 ```
 
-**Security note:** All mask descriptions and generations remain local to your machine.
-There are no cloud API calls — everything runs through your local Ollama instance.
+**Security note:** Mask descriptions are sent only to the Ollama endpoint you configure
+(`localhost` by default, or wherever `--ollama-host`/`OLLAMA_HOST` points) — never to a
+cloud provider. The OpenAI SDK is used purely as an HTTP client against that endpoint;
+no data or API key is ever transmitted to `api.openai.com`.
 
 ### Using the Python API
 
