@@ -9,7 +9,13 @@ import click
 
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
+from .mask import describe, format_hcmask_line
 from .parser import decode_hex_escapes
+
+# NOTE: hashcat_rosetta.nlmask is deliberately NOT imported here. It pulls in
+# the ``openai`` SDK, which costs ~450ms of import time that every non-LLM
+# invocation (--explain, debug-file analysis, ...) would otherwise pay. It is
+# imported lazily inside the ``--mask`` branch of main().
 
 _BANNER = r"""
  _   _           _               _   ____                _   _
@@ -773,6 +779,29 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         "(baseword:rule:candidate:wordlist with wordlist attribution)."
     ),
 )
+@click.option(
+    "--mask",
+    type=str,
+    help="Generate an hcmask from an English description via a local Ollama server",
+)
+@click.option(
+    "-o",
+    "--mask-out",
+    type=click.Path(),
+    help="Write generated mask(s) to a .hcmask file (used with --mask)",
+)
+@click.option(
+    "--model",
+    type=str,
+    default=lambda: os.environ.get("OLLAMA_MODEL"),
+    help="Override the model name used for --mask (default: OLLAMA_MODEL env var)",
+)
+@click.option(
+    "--ollama-host",
+    type=str,
+    default=None,
+    help="Override the Ollama host/URL used for --mask (default: OLLAMA_HOST env var)",
+)
 @click.pass_context
 def main(
     ctx,
@@ -790,6 +819,10 @@ def main(
     detail,
     analyze_rules,
     debug_mode,
+    mask,
+    mask_out,
+    model,
+    ollama_host,
 ):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
 
@@ -815,10 +848,66 @@ def main(
 
     Analyze rule file opcodes:
         hashcat-rosetta rules.txt --analyze-rules
+
+    Generate masks:
+        hashcat-rosetta --mask "The word 'Summer' followed by six digits."
+        hashcat-rosetta --mask "a season and a year" -o seasons.hcmask
     """
 
     # Show the banner (to stderr so it never pollutes piped/exported stdout)
     click.echo(_BANNER, err=True)
+
+    # Handle natural-language mask generation
+    if mask:
+        # Lazy import: keeps the openai SDK out of the import path of every
+        # other command. See the note at the top of this module.
+        from . import nlmask
+
+        try:
+            suggestions = nlmask.generate_masks(mask, model=model, host=ollama_host)
+        except nlmask.MaskGenerationError as e:
+            click.echo(f"[!] {e}", err=True)
+            sys.exit(1)
+
+        click.echo(f"\nMask Suggestions for: '{mask}'")
+        click.echo("=" * 70)
+        for i, suggestion in enumerate(suggestions, 1):
+            line_str = format_hcmask_line(suggestion.custom_charsets, suggestion.mask)
+            click.echo(f"\n{i}. {line_str}")
+            # describe() already ends with "→ N candidates", so the keyspace
+            # is not printed a second time on its own line.
+            click.echo(f"   {describe(suggestion.line)}")
+            click.echo(f"   Why: {suggestion.why}")
+        click.echo()
+
+        if mask_out:
+            # The description is written as a header comment; collapse any
+            # newlines so it cannot inject extra lines into the file.
+            header = " ".join(mask.splitlines())
+            lines = [
+                format_hcmask_line(suggestion.custom_charsets, suggestion.mask)
+                for suggestion in suggestions
+            ]
+            try:
+                with open(mask_out, "w", encoding="utf-8") as f:
+                    f.write(f"# {header}\n")
+                    for line_str in lines:
+                        # hashcat skips any line starting with '#' as a
+                        # comment; '\#' is its accepted escape for a literal
+                        # leading '#'.
+                        if line_str.startswith("#"):
+                            click.echo(
+                                f"[!] mask '{line_str}' starts with '#'; written as "
+                                f"'\\{line_str}' so hashcat does not treat it as a comment",
+                                err=True,
+                            )
+                            line_str = "\\" + line_str
+                        f.write(line_str + "\n")
+            except OSError as e:
+                click.echo(f"[!] could not write {mask_out}: {e}", err=True)
+                sys.exit(1)
+            click.echo(f"Done: Mask(s) written to: {mask_out}")
+        return
 
     # Handle rule explanation
     if explain:

@@ -16,6 +16,7 @@ authors = [
 
 dependencies = [
     "click>=8.0.0",
+    "openai>=2.52.0",
 ]
 
 [dependency-groups]

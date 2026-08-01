@@ -6,6 +6,8 @@ import pytest
 from click.testing import CliRunner
 
 from hashcat_rosetta.cli import _escape_bytes, explain_rule, main
+from hashcat_rosetta.mask import parse_hcmask_line
+from hashcat_rosetta.nlmask import MaskGenerationError, MaskSuggestion
 
 
 # Shared fixtures
@@ -530,3 +532,125 @@ class TestExplainCliByteRendering:
         # The raw U+0099 code point (which would UTF-8-encode to c2 99) must not
         # appear in the user-facing output.
         assert "\x99" not in result.output
+
+
+# --- --mask natural-language generation ---
+
+
+class TestMaskGeneration:
+    """Covers the --mask branch wired to nlmask.generate_masks."""
+
+    def _suggestion(self, mask="Summer?d?d?d?d?d?d", why="a season plus a six digit year/PIN"):
+        line = parse_hcmask_line(mask)
+        return MaskSuggestion(mask=mask, custom_charsets=[], why=why, line=line)
+
+    def test_mask_prints_line_and_keyspace(self, runner, monkeypatch):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])
+        result = runner.invoke(main, ["--mask", "Summer followed by six digits"])
+        assert result.exit_code == 0
+        assert "Summer?d?d?d?d?d?d" in result.output
+        assert "1,000,000" in result.output
+
+    def test_mask_does_not_require_file(self, runner, monkeypatch):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])
+        result = runner.invoke(main, ["--mask", "Summer followed by six digits"])
+        assert result.exit_code == 0
+        assert "FILE is required" not in result.output
+
+    def test_mask_out_writes_file(self, runner, monkeypatch, tmp_path):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])
+        out_path = tmp_path / "out.hcmask"
+        result = runner.invoke(
+            main, ["--mask", "Summer followed by six digits", "-o", str(out_path)]
+        )
+        assert result.exit_code == 0
+        assert str(out_path) in result.output
+        contents = out_path.read_text()
+        assert "Summer?d?d?d?d?d?d" in contents
+        assert contents.startswith("#")
+
+    def test_mask_generation_error_exits_nonzero(self, runner, monkeypatch):
+        def _raise(*args, **kwargs):
+            raise MaskGenerationError("could not reach Ollama at http://localhost:11434/v1")
+
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", _raise)
+        result = runner.invoke(main, ["--mask", "Summer followed by six digits"])
+        assert result.exit_code == 1
+        assert "could not reach Ollama" in result.output
+
+    def test_keyspace_is_not_printed_twice(self, runner, monkeypatch):
+        # describe() already ends with "→ N candidates"; there must not be a
+        # second, redundant "Keyspace: N candidates" line.
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])
+        result = runner.invoke(main, ["--mask", "Summer followed by six digits"])
+        assert result.exit_code == 0
+        assert result.output.count("1,000,000") == 1
+        assert "Keyspace:" not in result.output
+
+    def test_model_and_host_flags_reach_generate_masks(self, runner, monkeypatch):
+        # A lambda accepting *a/**k would not catch a kwarg-wiring bug, so
+        # record the actual call and assert on it.
+        calls = []
+
+        def _record(description, **kwargs):
+            calls.append((description, kwargs))
+            return [self._suggestion()]
+
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", _record)
+        result = runner.invoke(
+            main,
+            [
+                "--mask",
+                "Summer followed by six digits",
+                "--model",
+                "somemodel",
+                "--ollama-host",
+                "http://somehost:1234",
+            ],
+        )
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        description, kwargs = calls[0]
+        assert description == "Summer followed by six digits"
+        assert kwargs["model"] == "somemodel"
+        assert kwargs["host"] == "http://somehost:1234"
+
+    def test_mask_out_unwritable_path_exits_cleanly(self, runner, monkeypatch, tmp_path):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])
+        # A path whose parent directory does not exist.
+        out_path = tmp_path / "no-such-dir" / "out.hcmask"
+        result = runner.invoke(
+            main, ["--mask", "Summer followed by six digits", "-o", str(out_path)]
+        )
+        assert result.exit_code == 1
+        assert "[!] could not write" in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    def test_mask_out_header_collapses_newlines(self, runner, monkeypatch, tmp_path):
+        suggestion = self._suggestion()
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])
+        out_path = tmp_path / "out.hcmask"
+        result = runner.invoke(main, ["--mask", "line one\nline two", "-o", str(out_path)])
+        assert result.exit_code == 0
+        lines = out_path.read_text().splitlines()
+        # Exactly one comment line, then one mask line.
+        assert lines[0] == "# line one line two"
+        assert lines[1] == "Summer?d?d?d?d?d?d"
+        assert len(lines) == 2
+
+    def test_mask_out_escapes_leading_hash(self, runner, monkeypatch, tmp_path):
+        # hashcat treats a line starting with '#' as a comment and would
+        # silently skip the mask; '\#' is its escape for a literal '#'.
+        suggestion = self._suggestion(mask="#?d?d?d?d")
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])
+        out_path = tmp_path / "out.hcmask"
+        result = runner.invoke(main, ["--mask", "a hash then four digits", "-o", str(out_path)])
+        assert result.exit_code == 0
+        lines = out_path.read_text().splitlines()
+        assert lines[1] == "\\#?d?d?d?d"
+        assert "starts with '#'" in result.output

@@ -124,6 +124,53 @@ hashcat-rosetta --explain "c$1" --baseword admin
 hashcat-rosetta --explain "u$!" --baseword myword
 ```
 
+### Generating Masks with Natural Language
+
+Generate hashcat masks from English descriptions using a local LLM:
+
+```bash
+hashcat-rosetta --mask "The word 'Summer' followed by six digits."
+```
+
+Output:
+```
+Mask Suggestions for: 'The word 'Summer' followed by six digits.'
+======================================================================
+
+1. Summer?d?d?d?d?d?d
+   literal "Summer", then 6 × digit → 1,000,000 candidates
+   Why: matches the literal word followed by a 6-digit number
+```
+
+Save the generated mask to a file:
+```bash
+hashcat-rosetta --mask "The word 'Summer' followed by six digits." -o masks.hcmask
+```
+
+Generate masks from other descriptions:
+```bash
+hashcat-rosetta --mask "a capitalized season, two digits, and a special char"
+hashcat-rosetta --mask "year 2020-2025 followed by exclamation or question mark"
+```
+
+The mask generation feature uses a local Ollama server running an OpenAI-compatible chat
+endpoint. By default, it connects to `http://localhost:11434` and uses the model
+`qwen3.6:35b-a3b`. These can be configured via environment variables or CLI flags:
+
+```bash
+# Using environment variables
+OLLAMA_HOST=http://192.168.1.100:11434 OLLAMA_MODEL=llama2:70b \
+  hashcat-rosetta --mask "your description here"
+
+# Using CLI flags (override environment variables)
+hashcat-rosetta --mask "your description" --ollama-host http://custom.host:11434 --model llama2
+```
+
+**Security note:** Mask descriptions are sent only to the Ollama endpoint you configure
+(`localhost` by default, or wherever `--ollama-host`/`OLLAMA_HOST` points) — never to a
+cloud provider. The OpenAI SDK is used purely as an HTTP client against that endpoint;
+no data or API key is ever transmitted to `api.openai.com`.
+
 ### Using the Python API
 
 ```python
