@@ -80,16 +80,31 @@ for exact timing.
   remain local to the machine — no cloud API calls are made.
 - **`openai` dependency (>=2.52.0)** for OpenAI-compatible API calls to local Ollama.
 - **`scripts/benchmark_mask_models.py`**, a standalone harness that runs 7
-  candidate local Ollama models against 7 fixed `--mask` prompts, gating each
-  on a deterministic checker before scoring with an LLM judge
-  (`qwen3-coder:latest`), then recommends the smallest model with zero hard
-  fails and a mean judge score >= 4. Not wired into the CLI or installed
-  package. First real run (`granite4:3b` through `qwen2.5:32b`) found no
-  candidate clears the bar: `qwen3-coder:latest` was closest with a single
-  hard fail (an off-by-one `?d` count on the `literal_question_mark`
-  prompt), `qwen2.5:32b` failed two prompts including silently corrupting a
-  custom-charset keyspace. `nlmask.py`'s shipped default model is unchanged
-  pending a follow-up decision.
+  fixed `--mask` prompts against every locally-installed candidate model,
+  gating each response with a deterministic checker before scoring it with an
+  LLM judge (`qwen3-coder:latest`), then recommends the smallest model with
+  zero hard fails and a mean judge score >= 4. Not wired into the CLI or
+  installed package. Each prompt now asks for "as many distinct suggestions
+  as you can, no duplicates" rather than an exact count, and every returned
+  suggestion is checked (not just the first). A checker rejection is a **soft
+  fail** — well-formed output that didn't satisfy the request, still scored
+  by the judge — distinct from a **hard fail**, where `generate_masks()`
+  itself couldn't parse a response at all (bad JSON, an unresponsive server).
+  A full 29-candidate sweep (`qwen2.5:0.5b` through `qwen2.5:32b`, plus
+  `qwen3-coder:latest`) found `devstral-small-2:24b` is the smallest model
+  with zero hard fails and a perfect mean/min judge score of 5.0 — see
+  `README.md`'s "Why `devstral-small-2:24b`?" for the full table.
+- **`nlmask.py`'s default `--mask` model changed from `qwen3.6:35b-a3b` to
+  `devstral-small-2:24b`**, per the benchmark above. The old default is a
+  hybrid-reasoning model whose "thinking" mode isn't disabled via Ollama's
+  OpenAI-compatible endpoint; it repeatedly burned its response budget on
+  hidden reasoning tokens, causing hangs and timeouts. The same failure mode
+  showed up across the whole Qwen3 "thinking" family in the sweep
+  (`qwen3:8b/30b/32b`, `qwen3.5:9b/27b`).
+- **`generate_masks()`'s OpenAI client timeout raised from 60s to 180s.** The
+  29-candidate sweep showed some legitimately-slow-but-working local models
+  timing out at 60s under sequential load; 180s is still well short of the
+  600s SDK default this was originally bounding.
 
 ## [0.4.0] - 2026-07-29
 

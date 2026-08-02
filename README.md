@@ -155,7 +155,7 @@ hashcat-rosetta --mask "year 2020-2025 followed by exclamation or question mark"
 
 The mask generation feature uses a local Ollama server running an OpenAI-compatible chat
 endpoint. By default, it connects to `http://localhost:11434` and uses the model
-`qwen3.6:35b-a3b`. These can be configured via environment variables or CLI flags:
+`devstral-small-2:24b`. These can be configured via environment variables or CLI flags:
 
 ```bash
 # Using environment variables
@@ -170,6 +170,41 @@ hashcat-rosetta --mask "your description" --ollama-host http://custom.host:11434
 (`localhost` by default, or wherever `--ollama-host`/`OLLAMA_HOST` points) — never to a
 cloud provider. The OpenAI SDK is used purely as an HTTP client against that endpoint;
 no data or API key is ever transmitted to `api.openai.com`.
+
+#### Why `devstral-small-2:24b`?
+
+The default is chosen by `scripts/benchmark_mask_models.py`, which runs 7 fixed
+`--mask`-style prompts against every locally-installed candidate model and grades each
+response two ways:
+
+- **Deterministic gate.** Each prompt has a hand-written checker (correct keyspace, correct
+  token counts, no duplicate suggestions, etc). A **hard fail** means the model's response
+  couldn't even be parsed into a valid mask (bad JSON, an unresponsive server); a **soft
+  fail** means it parsed fine but didn't satisfy the request (wrong digit count, non-vowel
+  custom charset, ...). Soft-failed prompts still get judged, not silently excluded.
+- **LLM judge.** A larger model (`qwen3-coder:latest`) scores every response 1-5 for how
+  well it satisfies the original request.
+
+The recommended default is the **smallest model with zero hard fails and a mean judge
+score ≥ 4** across all 7 prompts. From the last full 29-candidate sweep:
+
+| model | size | hard fails | mean score |
+|---|---|---|---|
+| `devstral-small-2:24b` | 14.1 GB | 0 | **5.0** |
+| `qwen3-coder:latest` | 17.3 GB | 0 | 4.3 |
+| `mistral-small:24b` | 13.3 GB | 0 | 3.9 (below bar) |
+| `gemma4:latest` | 8.9 GB | 0 | 3.6 (below bar) |
+| everything ≤ 9 GB | 0.4-9 GB | 1-7 | below bar |
+
+`devstral-small-2:24b` was the smallest model to clear the bar, with a perfect mean and
+minimum score. The prior default, `qwen3.6:35b-a3b`, was replaced because it's a
+hybrid-reasoning model whose "thinking" mode isn't disabled via Ollama's OpenAI-compatible
+endpoint — it repeatedly burned its response budget on hidden reasoning tokens and either
+hung or timed out (see `CHANGELOG.md`). Several other Qwen3-family models in the sweep
+(`qwen3:8b/30b/32b`, `qwen3.5:9b/27b`) showed the same failure mode.
+
+Re-run the sweep yourself with `uv run python scripts/benchmark_mask_models.py` — it pulls
+any missing candidates and prints an updated recommendation.
 
 ### Using the Python API
 

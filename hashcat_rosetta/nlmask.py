@@ -27,7 +27,14 @@ from .mask import HcmaskLine, MaskError, format_hcmask_line, parse_hcmask_line
 
 # Default model used when neither the ``model`` argument nor the
 # ``OLLAMA_MODEL`` environment variable is set.
-_DEFAULT_MODEL = "qwen3.6:35b-a3b"
+#
+# Chosen from scripts/benchmark_mask_models.py's 29-candidate sweep: the
+# smallest model with zero hard fails (no infra/parse errors) and a mean
+# judge score >= 4 across the 7 fixed prompts. The prior default,
+# qwen3.6:35b-a3b, is a hybrid-reasoning model whose hidden thinking mode
+# isn't disabled via Ollama's OpenAI-compatible endpoint, which repeatedly
+# caused multi-minute hangs and timeouts (see CHANGELOG).
+_DEFAULT_MODEL = "devstral-small-2:24b"
 
 # Default Ollama base URL when neither ``host`` nor ``OLLAMA_HOST`` is set.
 _DEFAULT_BASE_URL = "http://localhost:11434/v1"
@@ -423,7 +430,7 @@ def generate_masks(
             # The SDK's defaults (600s read timeout x up to 3 attempts) let a
             # hung/saturated server block this interactive CLI call for 30
             # minutes. Fail fast instead: one attempt, generous but bounded.
-            timeout=60.0,
+            timeout=180.0,
             max_retries=0,
         )
     )

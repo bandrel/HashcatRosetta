@@ -73,11 +73,22 @@ class TestSummerDigitsChecker:
         assert result is not None
         assert "keyspace" in result
 
-    def test_multiple_suggestions_fails(self):
+    def test_one_invalid_suggestion_among_valid_ones_fails(self):
         suggestions = [_suggestion("Summer?d?d?d?d?d?d"), _suggestion("Winter?d?d?d?d?d?d")]
         result = benchmark_mask_models.PROMPTS[0].check(suggestions)
         assert result is not None
-        assert "1 suggestion" in result
+        assert "Summer" in result
+
+    def test_multiple_distinct_valid_suggestions_pass(self):
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d"), _suggestion("SUMMER?d?d?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[0].check(suggestions)
+        assert result is None
+
+    def test_duplicate_suggestions_fail(self):
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d"), _suggestion("Summer?d?d?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[0].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
 
 
 class TestMushroomCategoriesChecker:
@@ -101,6 +112,12 @@ class TestMushroomCategoriesChecker:
         result = benchmark_mask_models.PROMPTS[1].check(suggestions)
         assert result is not None
         assert ">= 2" in result
+
+    def test_duplicate_suggestions_fail(self):
+        suggestions = [_suggestion("Morel?s?d"), _suggestion("Morel?s?d")]
+        result = benchmark_mask_models.PROMPTS[1].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
 
 
 class TestSeasonDigitsSpecialChecker:
@@ -127,15 +144,33 @@ class TestSeasonDigitsSpecialChecker:
 
 
 class TestFourOrSixDigitsChecker:
-    def test_exactly_two_suggestions_pass(self):
+    def test_both_lengths_pass(self):
         suggestions = [_suggestion("?d?d?d?d"), _suggestion("?d?d?d?d?d?d")]
         result = benchmark_mask_models.PROMPTS[3].check(suggestions)
         assert result is None
 
-    def test_one_suggestion_fails(self):
+    def test_one_suggestion_passes(self):
         suggestions = [_suggestion("?d?d?d?d")]
         result = benchmark_mask_models.PROMPTS[3].check(suggestions)
+        assert result is None
+
+    def test_wrong_digit_count_fails(self):
+        suggestions = [_suggestion("?d?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[3].check(suggestions)
         assert result is not None
+        assert "4 or 6" in result
+
+    def test_non_digit_token_fails(self):
+        suggestions = [_suggestion("?d?d?d?l")]
+        result = benchmark_mask_models.PROMPTS[3].check(suggestions)
+        assert result is not None
+        assert "only digit tokens" in result
+
+    def test_duplicate_suggestions_fail(self):
+        suggestions = [_suggestion("?d?d?d?d"), _suggestion("?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[3].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
 
 
 class TestVowelCustomCharsetChecker:
@@ -372,20 +407,26 @@ class TestRunPromptForModel:
         assert "simulated failure" in result.hard_fail_reason
         assert result.judge_score is None
 
-    def test_hard_fail_when_check_fails(self, monkeypatch):
+    def test_soft_fail_when_check_fails(self, monkeypatch):
         # generate_masks succeeds, but returns output the checker rejects.
+        # This is well-formed-but-wrong content, not an infra failure, so it's
+        # a soft fail — the judge still runs and scores it.
         monkeypatch.setattr(
             benchmark_mask_models,
             "generate_masks",
             lambda description, **kwargs: [_suggestion("?d?d?d?d?d")],  # wrong count
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "judge_score", lambda prompt, suggestions, **kwargs: 2
         )
 
         result = benchmark_mask_models.run_prompt_for_model(
             "some-model", benchmark_mask_models.PROMPTS[0]
         )
 
-        assert result.hard_fail_reason is not None
-        assert result.judge_score is None
+        assert result.hard_fail_reason is None
+        assert result.soft_fail_reason is not None
+        assert result.judge_score == 2
 
     def test_passes_and_gets_judge_score(self, monkeypatch):
         monkeypatch.setattr(

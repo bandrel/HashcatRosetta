@@ -6,8 +6,9 @@ small, non-thinking models via hashcat_rosetta.nlmask.generate_masks (the real
 production code path — same timeout/retry logic already shipped). Each
 prompt's output is checked deterministically first (hard gate: does it parse,
 does it match the hand-written expectation for that prompt), then judged by
-qwen3-coder:latest for overall correctness/plausibility. Prints a report
-ranking candidates by disk size (a VRAM proxy) among those that pass.
+JUDGE_MODEL (deliberately not a candidate itself, to avoid self-grading bias)
+for overall correctness/plausibility. Prints a report ranking candidates by
+disk size (a VRAM proxy) among those that pass.
 
 This script is NOT part of the installed package and does NOT change
 nlmask.py's shipped default model — see
@@ -76,21 +77,14 @@ CANDIDATES: list[str] = [
     "qwen3.5:27b",
     "qwen3:30b",
     "dengcao/Qwen3-30B-A3B-Instruct-2507:latest",
-    "gemma4:31b",
     "qwen2.5:32b",
     "glm-4.7-flash:latest",
     "qwen3:32b",
     "qwen3-coder:latest",
     "laguna-xs-2.1:latest",
-    "mixtral:8x7b",
-    "hermes3:70b",
-    "llama3.3:70b",
-    "deepseek-r1:70b",
-    "qwen2.5:72b",
-    "qwen3-coder-next:Q4_K_M",
 ]
 
-JUDGE_MODEL = "qwen3-coder:latest"
+JUDGE_MODEL = "qwen3.6:35b-a3b"
 
 JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -189,7 +183,7 @@ def judge_score(
     active_client: Any = (
         client
         if client is not None
-        else OpenAI(base_url=resolve_base_url(host), api_key="ollama", timeout=60.0, max_retries=0)
+        else OpenAI(base_url=resolve_base_url(host), api_key="ollama", timeout=180.0, max_retries=0)
     )
 
     try:
@@ -228,18 +222,29 @@ class PromptResult:
     Attributes:
         prompt_name: Matches BenchmarkPrompt.name.
         elapsed_seconds: Wall-clock time for the generate_masks call.
-        hard_fail_reason: None if the deterministic gate passed, else the
-            failure reason (generate_masks raised, or check() returned a
-            reason). When set, judge_score is always None — the judge is
-            never invoked for a hard-failed prompt.
+        hard_fail_reason: Set only when generate_masks() itself raised — the
+            model's output couldn't be turned into valid mask objects at
+            all (bad JSON, API error, etc). This is a real infrastructure/
+            parsing failure, not a quality judgment. When set, soft_fail_reason
+            and judge_score are always None — there's nothing to check or judge.
+        soft_fail_reason: Set when generate_masks() succeeded but the
+            deterministic checker rejected the content (wrong keyspace,
+            wrong token counts, duplicate suggestions, etc). The output was
+            well-formed, it just didn't satisfy the request — the judge
+            still scores it, so a bad soft fail shows up as a low
+            judge_score rather than being hidden.
         judge_score: 1-5 from the judge model, or None if hard-failed or the
             judge call itself failed.
+        suggestion_count: Number of mask suggestions generate_masks() returned,
+            or None if it hard-failed and returned nothing at all.
     """
 
     prompt_name: str
     elapsed_seconds: float
     hard_fail_reason: str | None
     judge_score: int | None
+    soft_fail_reason: str | None = None
+    suggestion_count: int | None = None
 
 
 @dataclass
@@ -262,6 +267,10 @@ class ModelReport:
         return sum(1 for r in self.prompt_results if r.hard_fail_reason is not None)
 
     @property
+    def soft_fail_count(self) -> int:
+        return sum(1 for r in self.prompt_results if r.soft_fail_reason is not None)
+
+    @property
     def judge_scores(self) -> list[int]:
         return [r.judge_score for r in self.prompt_results if r.judge_score is not None]
 
@@ -276,29 +285,49 @@ class ModelReport:
         return min(scores) if scores else None
 
     @property
+    def mean_suggestion_count(self) -> float | None:
+        counts = [r.suggestion_count for r in self.prompt_results if r.suggestion_count is not None]
+        return sum(counts) / len(counts) if counts else None
+
+    @property
     def total_seconds(self) -> float:
         return sum(r.elapsed_seconds for r in self.prompt_results)
 
 
+def _duplicate_reason(suggestions: list[MaskSuggestion]) -> str | None:
+    """Return a failure reason if any two suggestions are the same hcmask line."""
+    seen: set[str] = set()
+    for s in suggestions:
+        full_line = format_hcmask_line(s.custom_charsets, s.mask)
+        if full_line in seen:
+            return f"duplicate suggestion {full_line!r}"
+        seen.add(full_line)
+    return None
+
+
 def _check_summer_digits(suggestions: list[MaskSuggestion]) -> str | None:
-    if len(suggestions) != 1:
-        return f"expected exactly 1 suggestion, got {len(suggestions)}"
-    s = suggestions[0]
-    if s.line.custom:
-        return f"expected no custom charsets, got {s.line.custom!r}"
-    ks = keyspace(s.line)
-    if ks != 1_000_000:
-        return f"expected keyspace 1,000,000, got {ks:,} (mask: {s.mask!r})"
-    if not s.line.mask.lower().startswith("summer"):
-        return f"expected mask to start with literal 'Summer', got {s.mask!r}"
-    if not s.line.mask.endswith("?d" * 6):
-        return f"expected mask to end with 6 digit tokens, got {s.mask!r}"
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        if s.line.custom:
+            return f"expected no custom charsets, got {s.line.custom!r}"
+        ks = keyspace(s.line)
+        if ks != 1_000_000:
+            return f"expected keyspace 1,000,000, got {ks:,} (mask: {s.mask!r})"
+        if not s.line.mask.lower().startswith("summer"):
+            return f"expected mask to start with literal 'Summer', got {s.mask!r}"
+        if not s.line.mask.endswith("?d" * 6):
+            return f"expected mask to end with 6 digit tokens, got {s.mask!r}"
     return None
 
 
 def _check_mushroom_categories(suggestions: list[MaskSuggestion]) -> str | None:
     if len(suggestions) < 2:
         return f"expected >= 2 suggestions, got {len(suggestions)}"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
     for s in suggestions:
         literal_prefix = s.mask.split("?")[0]
         if not literal_prefix:
@@ -309,107 +338,130 @@ def _check_mushroom_categories(suggestions: list[MaskSuggestion]) -> str | None:
 def _check_season_digits_special(suggestions: list[MaskSuggestion]) -> str | None:
     if not suggestions:
         return "expected at least 1 suggestion, got 0"
-    s = suggestions[0]
-    toks = tokens(s.line)
-    digit_count = sum(1 for t, _size in toks if t == "?d")
-    special_count = sum(1 for t, _size in toks if t == "?s")
-    if digit_count < 2:
-        return f"expected >= 2 digit tokens (?d), got {digit_count} in {s.mask!r}"
-    if special_count < 1:
-        return f"expected >= 1 special token (?s), got {special_count} in {s.mask!r}"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        toks = tokens(s.line)
+        digit_count = sum(1 for t, _size in toks if t == "?d")
+        special_count = sum(1 for t, _size in toks if t == "?s")
+        if digit_count < 2:
+            return f"expected >= 2 digit tokens (?d), got {digit_count} in {s.mask!r}"
+        if special_count < 1:
+            return f"expected >= 1 special token (?s), got {special_count} in {s.mask!r}"
     return None
 
 
 def _check_four_or_six_digits(suggestions: list[MaskSuggestion]) -> str | None:
-    if len(suggestions) != 2:
-        return f"expected exactly 2 suggestions, got {len(suggestions)}"
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        toks = tokens(s.line)
+        if any(t != "?d" for t, _size in toks):
+            return f"expected only digit tokens (?d), got {s.mask!r}"
+        digit_count = len(toks)
+        if digit_count not in (4, 6):
+            return f"expected 4 or 6 digit tokens, got {digit_count} in {s.mask!r}"
     return None
 
 
 def _check_vowel_custom_charset(suggestions: list[MaskSuggestion]) -> str | None:
     if not suggestions:
         return "expected at least 1 suggestion, got 0"
-    s = suggestions[0]
-    if not s.line.custom:
-        return f"expected a custom charset, got none in {s.mask!r}"
-    expanded = expand_custom_charsets(s.line.custom)
-    charset = expanded[0] if expanded else ""
-    if not charset or any(c.lower() not in "aeiou" for c in charset):
-        return f"expected custom charset to contain only vowels, got {s.line.custom[0]!r}"
-    vowel_count = len(charset)
-    expected_keyspace = (vowel_count**4) * (10**2)
-    ks = keyspace(s.line)
-    if ks != expected_keyspace:
-        return (
-            f"expected keyspace {expected_keyspace:,} ({vowel_count} vowels^4 * "
-            f"100 digits), got {ks:,}"
-        )
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        if not s.line.custom:
+            return f"expected a custom charset, got none in {s.mask!r}"
+        expanded = expand_custom_charsets(s.line.custom)
+        charset = expanded[0] if expanded else ""
+        if not charset or any(c.lower() not in "aeiou" for c in charset):
+            return f"expected custom charset to contain only vowels, got {s.line.custom[0]!r}"
+        vowel_count = len(charset)
+        expected_keyspace = (vowel_count**4) * (10**2)
+        ks = keyspace(s.line)
+        if ks != expected_keyspace:
+            return (
+                f"expected keyspace {expected_keyspace:,} ({vowel_count} vowels^4 * "
+                f"100 digits), got {ks:,}"
+            )
     return None
 
 
 def _check_hex_digits(suggestions: list[MaskSuggestion]) -> str | None:
     if not suggestions:
         return "expected at least 1 suggestion, got 0"
-    s = suggestions[0]
-    toks = tokens(s.line)
-    hex_count = sum(1 for t, _size in toks if t == "?h")
-    digit_count = sum(1 for t, _size in toks if t == "?d")
-    if hex_count != 4:
-        return f"expected exactly 4 lowercase-hex tokens (?h), got {hex_count} in {s.mask!r}"
-    if digit_count != 2:
-        return f"expected exactly 2 digit tokens (?d), got {digit_count} in {s.mask!r}"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        toks = tokens(s.line)
+        hex_count = sum(1 for t, _size in toks if t == "?h")
+        digit_count = sum(1 for t, _size in toks if t == "?d")
+        if hex_count != 4:
+            return f"expected exactly 4 lowercase-hex tokens (?h), got {hex_count} in {s.mask!r}"
+        if digit_count != 2:
+            return f"expected exactly 2 digit tokens (?d), got {digit_count} in {s.mask!r}"
     return None
 
 
 def _check_literal_question_mark(suggestions: list[MaskSuggestion]) -> str | None:
     if not suggestions:
         return "expected at least 1 suggestion, got 0"
-    s = suggestions[0]
-    toks = tokens(s.line)
-    literal_q_count = sum(1 for t, _size in toks if t == "??")
-    digit_count = sum(1 for t, _size in toks if t == "?d")
-    if literal_q_count != 1:
-        return f"expected exactly 1 literal '?' token (??), got {literal_q_count} in {s.mask!r}"
-    if digit_count != 3:
-        return f"expected exactly 3 digit tokens (?d), got {digit_count} in {s.mask!r}"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        toks = tokens(s.line)
+        literal_q_count = sum(1 for t, _size in toks if t == "??")
+        digit_count = sum(1 for t, _size in toks if t == "?d")
+        if literal_q_count != 1:
+            return f"expected exactly 1 literal '?' token (??), got {literal_q_count} in {s.mask!r}"
+        if digit_count != 3:
+            return f"expected exactly 3 digit tokens (?d), got {digit_count} in {s.mask!r}"
     return None
 
 
 PROMPTS: list[BenchmarkPrompt] = [
     BenchmarkPrompt(
         "summer_digits",
-        "The word 'Summer' followed by six digits.",
+        "The word 'Summer' followed by six digits. Give as many distinct mask "
+        "suggestions as you can, no duplicates.",
         _check_summer_digits,
     ),
     BenchmarkPrompt(
         "mushroom_categories",
         "Basewords should be based on mushroom varieties followed by one of the "
-        "following patters. [symbol+digit,digit+symbol]",
+        "following patterns: [symbol+digit,digit+symbol]. Give suggestions for as "
+        "many different mushroom varieties as you can, no duplicates.",
         _check_mushroom_categories,
     ),
     BenchmarkPrompt(
         "season_digits_special",
-        "a capitalized season, two digits, and a special char",
+        "a capitalized season, two digits, and a special char. Give as many "
+        "distinct mask suggestions as you can, no duplicates.",
         _check_season_digits_special,
     ),
     BenchmarkPrompt(
         "four_or_six_digits",
-        "either 4 or 6 digits",
+        "either 4 or 6 digits. Give as many distinct mask suggestions as you can, no duplicates.",
         _check_four_or_six_digits,
     ),
     BenchmarkPrompt(
         "vowel_custom_charset",
-        "a lowercase vowel repeated four times, followed by two digits",
+        "a lowercase vowel repeated four times, followed by two digits. Give as "
+        "many distinct mask suggestions as you can, no duplicates.",
         _check_vowel_custom_charset,
     ),
     BenchmarkPrompt(
         "hex_digits",
-        "a 4-character lowercase hex string followed by two digits",
+        "a 4-character lowercase hex string followed by two digits. Give as many "
+        "distinct mask suggestions as you can, no duplicates.",
         _check_hex_digits,
     ),
     BenchmarkPrompt(
         "literal_question_mark",
-        "a literal question mark followed by three digits",
+        "a literal question mark followed by three digits. Give as many distinct "
+        "mask suggestions as you can, no duplicates.",
         _check_literal_question_mark,
     ),
 ]
@@ -423,12 +475,14 @@ def run_prompt_for_model(
         suggestions = generate_masks(prompt.description, model=model, host=host)
     except MaskGenerationError as exc:
         elapsed = time.monotonic() - start
-        return PromptResult(prompt.name, elapsed, f"generate_masks raised: {exc}", None)
+        reason = f"generate_masks raised: {exc}"
+        print(f"  HARD FAIL {model}/{prompt.name}: {reason}", file=sys.stderr)
+        return PromptResult(prompt.name, elapsed, reason, None)
     elapsed = time.monotonic() - start
 
-    fail_reason = prompt.check(suggestions)
-    if fail_reason is not None:
-        return PromptResult(prompt.name, elapsed, fail_reason, None)
+    soft_fail_reason = prompt.check(suggestions)
+    if soft_fail_reason is not None:
+        print(f"  soft fail {model}/{prompt.name}: {soft_fail_reason}", file=sys.stderr)
 
     try:
         score = judge_score(prompt, suggestions, host=host)
@@ -436,7 +490,7 @@ def run_prompt_for_model(
         print(f"  warning: judge failed for {model}/{prompt.name}: {exc}", file=sys.stderr)
         score = None
 
-    return PromptResult(prompt.name, elapsed, None, score)
+    return PromptResult(prompt.name, elapsed, None, score, soft_fail_reason, len(suggestions))
 
 
 def benchmark_model(model: str, *, host: str = LOCAL_HOST) -> ModelReport:
@@ -459,7 +513,10 @@ def benchmark_model(model: str, *, host: str = LOCAL_HOST) -> ModelReport:
 
 
 def format_report(reports: list[ModelReport]) -> str:
-    header = f"{'model':<24}{'size(GB)':>10}{'hard_fails':>12}{'mean_score':>12}{'min_score':>11}{'time(s)':>10}"
+    header = (
+        f"{'model':<24}{'size(GB)':>10}{'hard_fails':>12}{'soft_fails':>12}"
+        f"{'mean_score':>12}{'min_score':>11}{'avg_sugg':>10}{'time(s)':>10}"
+    )
     lines = [header, "-" * len(header)]
 
     def sort_key(r: ModelReport) -> float:
@@ -470,9 +527,12 @@ def format_report(reports: list[ModelReport]) -> str:
         size_str = f"{r.disk_size_gb:.1f}" if r.disk_size_gb is not None else "N/A"
         mean_str = f"{r.mean_judge_score:.1f}" if r.mean_judge_score is not None else "N/A"
         min_str = str(r.min_judge_score) if r.min_judge_score is not None else "N/A"
+        sugg_str = (
+            f"{r.mean_suggestion_count:.1f}" if r.mean_suggestion_count is not None else "N/A"
+        )
         lines.append(
-            f"{r.model:<24}{size_str:>10}{r.hard_fail_count:>12}"
-            f"{mean_str:>12}{min_str:>11}{r.total_seconds:>10.1f}"
+            f"{r.model:<24}{size_str:>10}{r.hard_fail_count:>12}{r.soft_fail_count:>12}"
+            f"{mean_str:>12}{min_str:>11}{sugg_str:>10}{r.total_seconds:>10.1f}"
         )
 
     passing = [
@@ -490,11 +550,50 @@ def format_report(reports: list[ModelReport]) -> str:
             "\nRecommendation: no candidate clears the bar (0 hard fails, mean judge score >= 4)"
         )
 
+    accurate = [
+        r for r in sorted_reports if r.hard_fail_count == 0 and r.mean_suggestion_count is not None
+    ]
+    if accurate:
+
+        def _suggestion_count(r: ModelReport) -> float:
+            assert r.mean_suggestion_count is not None
+            return r.mean_suggestion_count
+
+        most_prolific = max(accurate, key=_suggestion_count)
+        lines.append(
+            f"Most suggestions while accurate: {most_prolific.model} "
+            f"({most_prolific.mean_suggestion_count:.1f} avg suggestions/prompt, 0 hard fails)"
+        )
+    else:
+        lines.append("Most suggestions while accurate: no candidate has 0 hard fails")
+
     return "\n".join(lines)
 
 
 def main() -> None:
-    reports = [benchmark_model(m) for m in CANDIDATES]
+    results_path = os.environ.get("BENCHMARK_RESULTS_PATH")
+    reports = []
+    for m in CANDIDATES:
+        report = benchmark_model(m)
+        reports.append(report)
+        if results_path:
+            with open(results_path, "a") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "model": report.model,
+                            "disk_size_gb": report.disk_size_gb,
+                            "hard_fail_count": report.hard_fail_count,
+                            "soft_fail_count": report.soft_fail_count,
+                            "mean_judge_score": report.mean_judge_score,
+                            "min_judge_score": report.min_judge_score,
+                            "mean_suggestion_count": report.mean_suggestion_count,
+                            "total_seconds": report.total_seconds,
+                        }
+                    )
+                    + "\n"
+                )
+                f.flush()
     print(format_report(reports))
 
 

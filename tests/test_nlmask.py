@@ -361,12 +361,12 @@ class TestRealClientTimeout:
         # httpx.Timeout or a plain float/int are both acceptable; either way
         # every leg must be well under the old 600s default.
         if isinstance(timeout, (int, float)):
-            assert timeout <= 60
+            assert timeout <= 180
         else:
             for leg in ("connect", "read", "write", "pool"):
                 value = getattr(timeout, leg, None)
                 if value is not None:
-                    assert value <= 60, f"{leg} timeout {value}s is not tightly bounded"
+                    assert value <= 180, f"{leg} timeout {value}s is not tightly bounded"
 
 
 class TestModuleConstants:
