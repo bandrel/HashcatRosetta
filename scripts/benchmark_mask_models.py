@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+import time
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -39,7 +41,12 @@ from hashcat_rosetta.mask import (
     keyspace,
     tokens,
 )
-from hashcat_rosetta.nlmask import MaskSuggestion, resolve_base_url
+from hashcat_rosetta.nlmask import (
+    MaskGenerationError,
+    MaskSuggestion,
+    generate_masks,
+    resolve_base_url,
+)
 
 LOCAL_HOST = "http://localhost:11434"
 
@@ -367,3 +374,84 @@ PROMPTS: list[BenchmarkPrompt] = [
         _check_literal_question_mark,
     ),
 ]
+
+
+def run_prompt_for_model(
+    model: str, prompt: BenchmarkPrompt, *, host: str | None = None
+) -> PromptResult:
+    start = time.monotonic()
+    try:
+        suggestions = generate_masks(prompt.description, model=model, host=host)
+    except MaskGenerationError as exc:
+        elapsed = time.monotonic() - start
+        return PromptResult(prompt.name, elapsed, f"generate_masks raised: {exc}", None)
+    elapsed = time.monotonic() - start
+
+    fail_reason = prompt.check(suggestions)
+    if fail_reason is not None:
+        return PromptResult(prompt.name, elapsed, fail_reason, None)
+
+    try:
+        score = judge_score(prompt, suggestions, host=host)
+    except JudgeError as exc:
+        print(f"  warning: judge failed for {model}/{prompt.name}: {exc}", file=sys.stderr)
+        score = None
+
+    return PromptResult(prompt.name, elapsed, None, score)
+
+
+def benchmark_model(model: str) -> ModelReport:
+    pulled = ensure_model_pulled(model)
+    models = list_local_models()
+
+    if not pulled or model not in models:
+        results = [PromptResult(p.name, 0.0, "model could not be pulled", None) for p in PROMPTS]
+        return ModelReport(model, None, results)
+
+    disk_size_gb = models[model] / (1024**3)
+    results = [run_prompt_for_model(model, p) for p in PROMPTS]
+    return ModelReport(model, disk_size_gb, results)
+
+
+def format_report(reports: list[ModelReport]) -> str:
+    header = f"{'model':<24}{'size(GB)':>10}{'hard_fails':>12}{'mean_score':>12}{'min_score':>11}{'time(s)':>10}"
+    lines = [header, "-" * len(header)]
+
+    def sort_key(r: ModelReport) -> float:
+        return r.disk_size_gb if r.disk_size_gb is not None else float("inf")
+
+    sorted_reports = sorted(reports, key=sort_key)
+    for r in sorted_reports:
+        size_str = f"{r.disk_size_gb:.1f}" if r.disk_size_gb is not None else "N/A"
+        mean_str = f"{r.mean_judge_score:.1f}" if r.mean_judge_score is not None else "N/A"
+        min_str = str(r.min_judge_score) if r.min_judge_score is not None else "N/A"
+        lines.append(
+            f"{r.model:<24}{size_str:>10}{r.hard_fail_count:>12}"
+            f"{mean_str:>12}{min_str:>11}{r.total_seconds:>10.1f}"
+        )
+
+    passing = [
+        r
+        for r in sorted_reports
+        if r.hard_fail_count == 0 and r.mean_judge_score is not None and r.mean_judge_score >= 4
+    ]
+    if passing:
+        best = passing[0]
+        lines.append(
+            f"\nRecommendation: {best.model} (smallest, {best.disk_size_gb:.1f} GB, clears the bar)"
+        )
+    else:
+        lines.append(
+            "\nRecommendation: no candidate clears the bar (0 hard fails, mean judge score >= 4)"
+        )
+
+    return "\n".join(lines)
+
+
+def main() -> None:
+    reports = [benchmark_model(m) for m in CANDIDATES]
+    print(format_report(reports))
+
+
+if __name__ == "__main__":
+    main()

@@ -353,3 +353,161 @@ class TestJudgeScore:
         user_message = completions.calls[0]["messages"][-1]["content"]
         assert "Summer?d?d?d?d?d?d" in user_message
         assert benchmark_mask_models.PROMPTS[0].description in user_message
+
+
+class TestRunPromptForModel:
+    def test_hard_fail_when_generate_masks_raises(self, monkeypatch):
+        def raising_generate_masks(description, **kwargs):
+            raise benchmark_mask_models.MaskGenerationError("simulated failure")
+
+        monkeypatch.setattr(benchmark_mask_models, "generate_masks", raising_generate_masks)
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is not None
+        assert "simulated failure" in result.hard_fail_reason
+        assert result.judge_score is None
+
+    def test_hard_fail_when_check_fails(self, monkeypatch):
+        # generate_masks succeeds, but returns output the checker rejects.
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("?d?d?d?d?d")],  # wrong count
+        )
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is not None
+        assert result.judge_score is None
+
+    def test_passes_and_gets_judge_score(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "judge_score", lambda prompt, suggestions, **kwargs: 5
+        )
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is None
+        assert result.judge_score == 5
+
+    def test_judge_failure_does_not_crash(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+
+        def raising_judge(prompt, suggestions, **kwargs):
+            raise benchmark_mask_models.JudgeError("judge is down")
+
+        monkeypatch.setattr(benchmark_mask_models, "judge_score", raising_judge)
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is None
+        assert result.judge_score is None
+
+
+class TestBenchmarkModel:
+    def test_unpullable_model_hard_fails_every_prompt(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: False
+        )
+
+        report = benchmark_mask_models.benchmark_model("nonexistent:model")
+
+        assert report.disk_size_gb is None
+        assert report.hard_fail_count == len(benchmark_mask_models.PROMPTS)
+
+    def test_present_model_runs_all_prompts(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {"some-model": 3 * 1024**3},
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "run_prompt_for_model",
+            lambda model, prompt, **kwargs: benchmark_mask_models.PromptResult(
+                prompt.name, 1.0, None, 5
+            ),
+        )
+
+        report = benchmark_mask_models.benchmark_model("some-model")
+
+        assert report.disk_size_gb == 3.0
+        assert len(report.prompt_results) == len(benchmark_mask_models.PROMPTS)
+        assert report.hard_fail_count == 0
+
+
+class TestFormatReport:
+    def test_recommends_smallest_passing_model(self):
+        reports = [
+            benchmark_mask_models.ModelReport(
+                "big-good-model",
+                20.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, None, 5)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+            benchmark_mask_models.ModelReport(
+                "small-good-model",
+                3.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, None, 4)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+            benchmark_mask_models.ModelReport(
+                "small-bad-model",
+                2.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, "hard fail", None)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+        ]
+
+        report_text = benchmark_mask_models.format_report(reports)
+
+        assert "small-good-model" in report_text
+        assert "Recommendation: small-good-model" in report_text
+
+    def test_no_candidate_clears_the_bar(self):
+        reports = [
+            benchmark_mask_models.ModelReport(
+                "bad-model",
+                2.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, "hard fail", None)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            )
+        ]
+
+        report_text = benchmark_mask_models.format_report(reports)
+
+        assert "no candidate clears the bar" in report_text
