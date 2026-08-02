@@ -377,7 +377,7 @@ PROMPTS: list[BenchmarkPrompt] = [
 
 
 def run_prompt_for_model(
-    model: str, prompt: BenchmarkPrompt, *, host: str | None = None
+    model: str, prompt: BenchmarkPrompt, *, host: str = LOCAL_HOST
 ) -> PromptResult:
     start = time.monotonic()
     try:
@@ -401,15 +401,21 @@ def run_prompt_for_model(
 
 
 def benchmark_model(model: str) -> ModelReport:
-    pulled = ensure_model_pulled(model)
-    models = list_local_models()
+    print(f"Benchmarking {model}...", file=sys.stderr)
+
+    try:
+        pulled = ensure_model_pulled(model)
+        models = list_local_models()
+    except Exception as exc:  # noqa: BLE001 - infra failures must not crash the sweep
+        results = [PromptResult(p.name, 0.0, f"infrastructure error: {exc}", None) for p in PROMPTS]
+        return ModelReport(model, None, results)
 
     if not pulled or model not in models:
         results = [PromptResult(p.name, 0.0, "model could not be pulled", None) for p in PROMPTS]
         return ModelReport(model, None, results)
 
     disk_size_gb = models[model] / (1024**3)
-    results = [run_prompt_for_model(model, p) for p in PROMPTS]
+    results = [run_prompt_for_model(model, p, host=LOCAL_HOST) for p in PROMPTS]
     return ModelReport(model, disk_size_gb, results)
 
 
