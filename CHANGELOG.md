@@ -43,6 +43,20 @@ for exact timing.
   fills it with `len(plain)` NUL bytes, so a memory op with no preceding `M`
   reads NULs. `X` had been wrong since 0.4.0 for exactly that case: bare
   `X012` on `abc` is `ab\0c`, and we produced `abac`.
+- **`X` now rejects out-of-bounds inserts and `m == 0` instead of silently
+  no-opping.** hashcat rejects the whole rule (not a no-op) when the
+  extracted length is zero or the insert position exceeds the current word,
+  independent of the other arguments' validity.
+- **`X` now mutates the shared memory buffer as a side effect, matching
+  hashcat's `mangle_insert_multi`.** Every `X` call shifts and splices the
+  buffer, not just the current word, so chained `X` opcodes with no
+  intervening `M` now read a different (correct) buffer than before and can
+  produce different output than the earlier, buffer-inert implementation.
+- **`4` and `6` now reject when the memory buffer is empty or appending would
+  overflow the 256-byte cap.** hashcat rejects the entire rule when appending
+  or prepending the memorized word would overflow the 256-byte buffer or when
+  the memory buffer is empty, not silently leaving the word unchanged as
+  before.
 
 ### Added
 

@@ -1,6 +1,6 @@
 {
   "source": "hashcat source (OpenCL/inc_rp_common.h, src/rp_cpu.c) + hashcat wiki, corrected 2026-02-19",
-  "content_hash": "a9e6363891f389f57e7a61e0ef678499b3eb34ddc27d4f72f8cbd5af9eb56fab",
+  "content_hash": "ef8cd90a11d61758412c0be419efc744219fc6efe127f13b59dfe54aa67259bb",
   "opcodes": [
     {
       "char": ":",
@@ -397,10 +397,10 @@
     {
       "char": "%",
       "arity": 2,
-      "description": "Reject unless word contains character X at least N times (%NX)",
+      "description": "Reject unless character X appears at least N times",
       "implemented_in_explain_rule": true,
       "status": "implemented",
-      "notes": "hashcat opcode is 2-arg (%NX): reject unless the word contains X at least N times."
+      "notes": "RULE_OP_REJECT_CONTAIN; opcode is 2-arg (%NX)"
     },
     {
       "char": "L",

@@ -452,10 +452,10 @@ class RuleParser:
         - '3' is 3NX (2-arg): toggle case of the char after the Nth separator X.
           '31s'/'30a' are accepted by hashcat; bare '3'/'31' are rejected.
         - 'X' is XNMI (3-arg): insert M chars of memory at pos N into pos I.
-        - 'a' is a 0-arg legacy op (rejected by hashcat v7+), not 1-arg.
+        - 'a' is a 0-arg op (unimplemented no-op in hashcat), not 1-arg.
         """
         # No-argument operations (single character, no parameters)
-        no_arg_ops = set(":lucCtdfr{}[]kKqEMmSwWhH4579a")
+        no_arg_ops = set(":lucCtdfr{}[]kKqEMmSwWhH4579a6Q")
         # 1-argument operations (opcode + 1 parameter character)
         one_arg_ops = set("TDpyYezZ^$@!><'+-.,LR()")
         # 2-argument operations (opcode + 2 parameter characters)

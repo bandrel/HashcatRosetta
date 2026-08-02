@@ -42,7 +42,7 @@ def opcodes(reference: dict[str, Any]) -> list[dict[str, Any]]:
 # Hardcoded parser arity sets — mirrors _tokenize_rule() in parser.py.
 # If parser.py changes, update this block AND the reference JSON.
 # ---------------------------------------------------------------------------
-PARSER_NO_ARG_OPS: set[str] = set(":lucCtdfr{}[]kKqEMmSwWhH4579a")
+PARSER_NO_ARG_OPS: set[str] = set(":lucCtdfr{}[]kKqEMmSwWhH4579a6Q")
 PARSER_ONE_ARG_OPS: set[str] = set("TDpyYezZ^$@!><'+-.,LR()")
 PARSER_TWO_ARG_OPS: set[str] = set("soi3x*=vOB%")
 PARSER_THREE_ARG_OPS: set[str] = set("X")
@@ -93,12 +93,12 @@ class TestContentHash:
 
 # ---------------------------------------------------------------------------
 # Test 2: Every reference opcode appears in exactly one parser arity set
-#          (or is a known absent opcode — 6, Q — which are documented as
-#          unimplemented and not yet added to parser.py)
 # ---------------------------------------------------------------------------
 # Opcodes that are documented in the reference but intentionally absent from
 # parser.py (they are not tokenised because parser.py doesn't know them).
-KNOWN_ABSENT_FROM_PARSER: set[str] = {"6", "Q"}
+# Currently empty: parser.py now recognizes every opcode in the reference
+# (6 and Q were added to no_arg_ops). Kept as a mechanism for future gaps.
+KNOWN_ABSENT_FROM_PARSER: set[str] = set()
 
 # Known arity bugs: parser.py assigns the wrong arity for these opcodes.
 # When any of these bugs is fixed, the corresponding test will XPASS → FAIL
