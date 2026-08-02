@@ -11,6 +11,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from hashcat_rosetta.mask import parse_hcmask_line
 from hashcat_rosetta.nlmask import MaskSuggestion
@@ -277,3 +278,78 @@ class TestEnsureModelPulled:
         )
 
         assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is False
+
+
+def _judge_response(content: str) -> SimpleNamespace:
+    message = SimpleNamespace(content=content)
+    choice = SimpleNamespace(message=message)
+    return SimpleNamespace(choices=[choice])
+
+
+class _FakeJudgeCompletions:
+    def __init__(self, responses: list[str]):
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        content = self._responses.pop(0)
+        return _judge_response(content)
+
+
+class _FakeJudgeClient:
+    def __init__(self, completions):
+        self.chat = SimpleNamespace(completions=completions)
+
+
+class TestJudgeScore:
+    def test_valid_score_returned(self):
+        completions = _FakeJudgeCompletions([json.dumps({"score": 4, "reason": "close enough"})])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        score = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+        )
+
+        assert score == 4
+        assert len(completions.calls) == 1
+
+    def test_out_of_range_score_raises_judge_error(self):
+        completions = _FakeJudgeCompletions([json.dumps({"score": 9, "reason": "nonsense"})])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_malformed_json_raises_judge_error(self):
+        completions = _FakeJudgeCompletions(["not json at all"])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_prompt_and_suggestions_included_in_request(self):
+        completions = _FakeJudgeCompletions([json.dumps({"score": 5, "reason": "good"})])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+        )
+
+        user_message = completions.calls[0]["messages"][-1]["content"]
+        assert "Summer?d?d?d?d?d?d" in user_message
+        assert benchmark_mask_models.PROMPTS[0].description in user_message

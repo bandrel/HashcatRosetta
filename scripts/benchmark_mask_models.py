@@ -28,10 +28,18 @@ import json
 import subprocess
 import urllib.request
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
-from hashcat_rosetta.mask import expand_custom_charsets, keyspace, tokens
-from hashcat_rosetta.nlmask import MaskSuggestion
+from openai import OpenAI
+
+from hashcat_rosetta.mask import (
+    describe,
+    expand_custom_charsets,
+    format_hcmask_line,
+    keyspace,
+    tokens,
+)
+from hashcat_rosetta.nlmask import MaskSuggestion, resolve_base_url
 
 LOCAL_HOST = "http://localhost:11434"
 
@@ -46,6 +54,31 @@ CANDIDATES: list[str] = [
 ]
 
 JUDGE_MODEL = "qwen3-coder:latest"
+
+JUDGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "score": {
+            "type": "integer",
+            "description": "1 (does not satisfy the request) to 5 (fully and precisely satisfies it)",
+        },
+        "reason": {"type": "string", "description": "one short clause"},
+    },
+    "required": ["score", "reason"],
+    "additionalProperties": False,
+}
+
+JUDGE_SYSTEM_PROMPT = (
+    "You grade whether a set of hashcat mask suggestions fully and correctly "
+    "satisfies an English request. Score 1 (does not satisfy the request at "
+    "all) to 5 (fully and precisely satisfies it). Return JSON matching the "
+    "schema. No step-by-step reasoning in the `reason` field — one short "
+    "clause."
+)
+
+
+class JudgeError(Exception):
+    """Raised when the judge model call fails or returns unusable output."""
 
 
 def list_local_models(host: str = LOCAL_HOST) -> dict[str, int]:
@@ -82,6 +115,64 @@ class BenchmarkPrompt:
     name: str
     description: str
     check: Callable[[list[MaskSuggestion]], str | None]
+
+
+def _build_judge_prompt(prompt: BenchmarkPrompt, suggestions: list[MaskSuggestion]) -> str:
+    lines = [f"Original request: {prompt.description}", "", "Candidate's suggestions:"]
+    for s in suggestions:
+        full_line = format_hcmask_line(s.custom_charsets, s.mask)
+        lines.append(f"- mask: {full_line}")
+        lines.append(f"  description: {describe(s.line)}")
+        lines.append(f"  why: {s.why}")
+    return "\n".join(lines)
+
+
+def judge_score(
+    prompt: BenchmarkPrompt,
+    suggestions: list[MaskSuggestion],
+    *,
+    model: str = JUDGE_MODEL,
+    host: str | None = None,
+    client: Any = None,
+) -> int:
+    """Score how well `suggestions` satisfies `prompt`, 1-5, via the judge model.
+
+    Raises JudgeError on any failure: the request itself failing, malformed
+    JSON in the response, or a score outside 1-5.
+    """
+    active_client: Any = (
+        client
+        if client is not None
+        else OpenAI(base_url=resolve_base_url(host), api_key="ollama", timeout=60.0, max_retries=0)
+    )
+
+    try:
+        response = active_client.chat.completions.create(
+            model=model,
+            temperature=0,
+            messages=[
+                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": _build_judge_prompt(prompt, suggestions)},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "judge_score", "strict": True, "schema": JUDGE_SCHEMA},
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - judge failures must not crash the benchmark
+        raise JudgeError(f"judge request failed: {exc}") from exc
+
+    content = response.choices[0].message.content
+    try:
+        data = json.loads(content)
+        score = int(data["score"])
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        raise JudgeError(f"judge returned unusable output: {content!r}") from exc
+
+    if not 1 <= score <= 5:
+        raise JudgeError(f"judge score out of range 1-5: {score}")
+
+    return score
 
 
 @dataclass
