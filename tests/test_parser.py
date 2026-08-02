@@ -23,11 +23,23 @@ class TestModeFourColon:
         assert entry["candidate"] == "Password"
         assert entry["wordlist"] is None
 
-    def test_candidate_with_internal_colon_preserved(self):
+    def test_extra_colon_belongs_to_the_rule_not_the_candidate(self):
+        """A colon past the first separator is part of the rule.
+
+        hashcat never emits a raw colon in the candidate -- it hex-encodes any
+        plaintext containing the field separator. Captured from hashcat 7.1.2
+        cracking md5("abc:") with the rule ``$:``::
+
+            abc:$::$HEX[6162633a]:words.txt
+
+        Rules, by contrast, contain colons routinely: ``:`` (no-op), ``$:``,
+        ``c $:``. So the last colon is the separator, not the first.
+        """
         parser = DebugLogParser(debug_mode=4)
         entries = parser.parse_debug_lines(["password:c:Pass:word"])
         assert len(entries) == 1
-        assert entries[0]["candidate"] == "Pass:word"
+        assert entries[0]["rule"] == "c:Pass"
+        assert entries[0]["candidate"] == "word"
         assert entries[0]["wordlist"] is None
 
 
@@ -50,12 +62,13 @@ class TestModeFiveColon:
         assert entries[0]["candidate"] == "Password"
         assert entries[0]["wordlist"] == "/opt/wordlists/x.txt"
 
-    def test_candidate_with_internal_colon_preserved(self):
+    def test_extra_colon_belongs_to_the_rule_not_the_candidate(self):
+        """See the mode-4 counterpart: candidates are hex-encoded, rules are not."""
         parser = DebugLogParser(debug_mode=5)
         entries = parser.parse_debug_lines(["password:c:Pass:word:rockyou.txt"])
         assert entries[0]["baseword"] == "password"
-        assert entries[0]["rule"] == "c"
-        assert entries[0]["candidate"] == "Pass:word"
+        assert entries[0]["rule"] == "c:Pass"
+        assert entries[0]["candidate"] == "word"
         assert entries[0]["wordlist"] == "rockyou.txt"
 
 
@@ -120,10 +133,13 @@ class TestOverride:
 
     def test_force_mode_four_against_heuristic(self):
         # Trailing field is path-like, so the heuristic would pick mode 5, but
-        # the explicit override forces mode 4 (candidate keeps the trailer).
+        # the explicit override forces mode 4, which knows nothing of a
+        # wordlist field. The trailing colon is then read as part of the rule,
+        # since a mode-4 candidate cannot contain a raw colon.
         parser = DebugLogParser(debug_mode=4)
         entries = parser.parse_debug_lines(["password:c:Password:rockyou.txt"])
-        assert entries[0]["candidate"] == "Password:rockyou.txt"
+        assert entries[0]["rule"] == "c:Password"
+        assert entries[0]["candidate"] == "rockyou.txt"
         assert entries[0]["wordlist"] is None
 
     def test_force_mode_five_three_field_line_skipped(self):
