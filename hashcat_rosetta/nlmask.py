@@ -143,11 +143,12 @@ as-is, e.g. "Summer" in "Summer?d?d?d?d?d?d" is a literal prefix.
   variant.
 - If the description names a CATEGORY of words rather than a single literal
   word (e.g. "mushroom varieties", "months of the year", "NFL team names"),
-  enumerate several concrete real-world members of that category yourself
-  from general knowledge (5-10 is a good default) and emit one mask object
-  per (member word x requested pattern) combination, using the member word
-  as a literal prefix/suffix. Never emit a pattern-only mask with no literal
-  basewords when the description asks for basewords from a category.
+  immediately pick exactly 6 concrete real-world members of that category
+  from general knowledge — do not deliberate over the count, 6 is always
+  correct — and emit one mask object per (member word x requested pattern)
+  combination, using the member word as a literal prefix/suffix. Never emit
+  a pattern-only mask with no literal basewords when the description asks
+  for basewords from a category.
 - The `why` field must be exactly ONE short clause with no step-by-step
   reasoning or "thinking out loud". Do not explain your reasoning process,
   just state the rationale in a few words.
