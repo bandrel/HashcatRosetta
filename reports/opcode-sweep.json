@@ -1,0 +1,557 @@
+{
+  "meta": {
+    "baseword_count": 24,
+    "rule_count": 253,
+    "timestamp": "2026-08-01T18:44:00",
+    "workers": 16
+  },
+  "rows": {
+    "!": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "!",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "$": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "$",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "%": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "%",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "'": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": "'",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    "(": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "(",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    ")": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": ")",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "*": {
+      "first_failing_example": null,
+      "matched": 54,
+      "mismatches": 0,
+      "opcode": "*",
+      "status": "PASS",
+      "tested": 54,
+      "unverifiable": 0
+    },
+    "+": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": "+",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    ",": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": ",",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    "-": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": "-",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    ".": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": ".",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    "3": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "3",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "4": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "4",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "6": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "6",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    ":": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": ":",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "<": {
+      "first_failing_example": null,
+      "matched": 46,
+      "mismatches": 0,
+      "opcode": "<",
+      "status": "PASS",
+      "tested": 46,
+      "unverifiable": 0
+    },
+    "=": {
+      "first_failing_example": null,
+      "matched": 85,
+      "mismatches": 0,
+      "opcode": "=",
+      "status": "PASS",
+      "tested": 85,
+      "unverifiable": 0
+    },
+    ">": {
+      "first_failing_example": null,
+      "matched": 46,
+      "mismatches": 0,
+      "opcode": ">",
+      "status": "PASS",
+      "tested": 46,
+      "unverifiable": 0
+    },
+    "@": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "@",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "B": {
+      "first_failing_example": null,
+      "matched": 17,
+      "mismatches": 0,
+      "opcode": "B",
+      "status": "PASS",
+      "tested": 17,
+      "unverifiable": 0
+    },
+    "C": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "C",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "D": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": "D",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    "E": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "E",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "H": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "H",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "K": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "K",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "L": {
+      "first_failing_example": null,
+      "matched": 13,
+      "mismatches": 0,
+      "opcode": "L",
+      "status": "PASS",
+      "tested": 13,
+      "unverifiable": 0
+    },
+    "M": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "M",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "O": {
+      "first_failing_example": null,
+      "matched": 54,
+      "mismatches": 0,
+      "opcode": "O",
+      "status": "PASS",
+      "tested": 54,
+      "unverifiable": 0
+    },
+    "Q": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "Q",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "R": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": "R",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    "S": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "S",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "T": {
+      "first_failing_example": null,
+      "matched": 71,
+      "mismatches": 0,
+      "opcode": "T",
+      "status": "PASS",
+      "tested": 71,
+      "unverifiable": 0
+    },
+    "X": {
+      "first_failing_example": null,
+      "matched": 207,
+      "mismatches": 0,
+      "opcode": "X",
+      "status": "PASS",
+      "tested": 207,
+      "unverifiable": 0
+    },
+    "Y": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "Y",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "Z": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "Z",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "[": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "[",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "]": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "]",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "^": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "^",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "a": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "a",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "c": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "c",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "d": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "d",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "e": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "e",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "f": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "f",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "h": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "h",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "i": {
+      "first_failing_example": null,
+      "matched": 85,
+      "mismatches": 0,
+      "opcode": "i",
+      "status": "PASS",
+      "tested": 85,
+      "unverifiable": 0
+    },
+    "k": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "k",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "l": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "l",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "o": {
+      "first_failing_example": null,
+      "matched": 85,
+      "mismatches": 0,
+      "opcode": "o",
+      "status": "PASS",
+      "tested": 85,
+      "unverifiable": 0
+    },
+    "p": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "p",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "q": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "q",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "r": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "r",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "s": {
+      "first_failing_example": null,
+      "matched": 207,
+      "mismatches": 0,
+      "opcode": "s",
+      "status": "PASS",
+      "tested": 207,
+      "unverifiable": 0
+    },
+    "t": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "t",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "u": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "u",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "v": {
+      "first_failing_example": null,
+      "matched": 85,
+      "mismatches": 0,
+      "opcode": "v",
+      "status": "PASS",
+      "tested": 85,
+      "unverifiable": 0
+    },
+    "x": {
+      "first_failing_example": null,
+      "matched": 54,
+      "mismatches": 0,
+      "opcode": "x",
+      "status": "PASS",
+      "tested": 54,
+      "unverifiable": 0
+    },
+    "y": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "y",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "z": {
+      "first_failing_example": null,
+      "matched": 115,
+      "mismatches": 0,
+      "opcode": "z",
+      "status": "PASS",
+      "tested": 115,
+      "unverifiable": 0
+    },
+    "{": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "{",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    },
+    "}": {
+      "first_failing_example": null,
+      "matched": 23,
+      "mismatches": 0,
+      "opcode": "}",
+      "status": "PASS",
+      "tested": 23,
+      "unverifiable": 0
+    }
+  },
+  "summary": {
+    "latent": 0,
+    "pass": 60,
+    "regression": 0,
+    "untracked": 0,
+    "unverifiable": 0
+  }
+}

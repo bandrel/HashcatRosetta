@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import tempfile
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,23 +78,33 @@ def decide_rejection_status(
 
 # Mirrors verify_rules.py - keep in sync if hashcat adds opcodes.
 _THREE_ARG_OPCODES: set[str] = set("X")
-_TWO_ARG_OPCODES: set[str] = set("soix*=vOB3")
-_ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,%LR()e")
-_ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMa")
+_TWO_ARG_OPCODES: set[str] = set("soix*=vOB3%")
+_ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,LR()")
+_ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMahHS46Q")
 _ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | _ZERO_ARG_OPCODES
 
-# Opcodes that hashcat's --stdout pipeline refuses to compile (rule rejected
-# with exit 255 "No valid rules left"). Verified empirically against 6.2.6 and
-# 7.1.2.
-#   M, X: CPU-only rule operations not in OpenCL/Metal kernels.
-#   !, <, >, %, (, ), =: filter/reject opcodes. --stdout only emits *modified*
-#     candidates; pure-filter rules (those whose only effect is to accept or
-#     reject the unchanged baseword) produce no --stdout output at all, even
-#     when the filter logically passes. Filters exist for the hashing flow,
-#     not the candidate-emission flow.
-# Rules whose leading opcode is in this set are skipped by the harness because
-# hashcat cannot serve as an oracle for them.
-_HASHCAT_STDOUT_UNSUPPORTED: set[str] = set("MX!<>%()=")
+# Opcodes hashcat refuses to compile into a `-r` rule file, in every mode
+# (verified: `hashcat -m 0 -a 0 -r <(echo '>4 $1')` returns "No valid rules
+# left" in a real attack, not only under --stdout).
+#   M, X, 4, 6, Q: memory operations, host-side only.
+#   !, <, >, %, (, ), =: filter/reject operations, host-side only.
+#   a: RULE_OP_MANGLE_TOGGLECASE_REC, a `/* todo */ break;` stub upstream.
+#      Host-side only and a genuine no-op there, so "unchanged" is the
+#      expected value rather than something unverifiable.
+# These are reachable through `-j`/`-k`, so the CPU engine is their oracle.
+# It is also their only semantics: there is no GPU implementation to differ
+# from. Everything else is oracled on GPU, which is what rule files run.
+_CPU_ONLY_OPCODES: set[str] = set("MX!<>%()=46Qa")
+
+
+def _select_engine(rule: str) -> str:
+    """Return "cpu" if any opcode in `rule` is host-side only, else "gpu".
+
+    One CPU-only opcode taints the whole rule, because hashcat rejects the
+    entire rule file rather than the individual operation.
+    """
+    return "cpu" if any(op in _CPU_ONLY_OPCODES for op in _extract_opcodes(rule)) else "gpu"
+
 
 # Default implemented-opcodes set for the harness. Mirrors
 # scripts/verify_rules.py:IMPLEMENTED_OPCODES; the script wraps this module
@@ -152,6 +163,13 @@ _DEFAULT_IMPLEMENTED: set[str] = {
     "v",
     "e",
     "3",
+    "h",
+    "H",
+    "S",
+    "4",
+    "6",
+    "Q",
+    "a",
 }
 
 
@@ -369,59 +387,60 @@ def _unimplemented_opcodes(rule_str: str, implemented: set[str]) -> list[str]:
     )
 
 
-def _hashcat_output(rule: str, baseword: str) -> tuple[str | None, bool]:
+def _hashcat_output(rule: str, baseword: str, engine: str = "gpu") -> tuple[str | None, bool]:
     """Run a rule through hashcat. Returns (stdout-or-None, hashcat_failed).
 
-    hashcat_failed=True only for actual failures (timeout, binary missing, or
-    unexpected non-zero exit). Exit code 255 ("No valid rules left") means
-    hashcat ran successfully but the filter rule rejected all candidates —
-    that is returned as ("", False) to signal a clean rejection.
+    engine="gpu" uses `-r <file>`, the OpenCL/Metal rule engine. This is the
+    authoritative semantics for rule files and the default.
+
+    engine="cpu" uses `-j <rule>`, the host-side engine in src/rp_cpu.c. It is
+    the only engine that accepts filter and memory opcodes, which hashcat
+    refuses to compile into a `-r` rule file in any mode. Under `-j` a passing
+    filter emits the unmodified word and a rejecting filter emits nothing, so
+    "" is a real answer here rather than a failure.
+
+    The two engines are not interchangeable: they disagree on `3NX`. Route by
+    opcode via _CPU_ONLY_OPCODES; never substitute one for the other.
+
+    hashcat_failed=True for timeout, missing binary, or any non-zero exit
+    including 255. Exit 255 is "No valid rules left", a rule-compilation
+    failure, not a filter rejection.
     """
+    session = f"rosetta-{uuid.uuid4().hex}"
+    common = [
+        "hashcat",
+        "-a0",
+        "--stdout",
+        "-d1",
+        "--session",
+        session,
+        "--potfile-disable",
+        "--restore-disable",
+    ]
+    tmp: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".rule", delete=False) as f:
-            f.write(rule)
-            tmp = f.name
-        # hashcat 6.2.x refuses to start when another instance holds the
-        # default session lock — fatal under ThreadPoolExecutor parallelism.
-        # Pass a unique --session per call so each worker gets its own
-        # session/restore-file namespace.
-        session = f"rosetta-{os.getpid()}-{os.path.basename(tmp)}"
+        if engine == "cpu":
+            argv = common + ["-j", rule]
+        else:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".rule", delete=False) as f:
+                f.write(rule)
+                tmp = f.name
+            argv = common + ["-r", tmp]
         try:
             result = subprocess.run(
-                [
-                    "hashcat",
-                    "-a0",
-                    "-r",
-                    tmp,
-                    "--stdout",
-                    "-d1",
-                    "--session",
-                    session,
-                    "--potfile-disable",
-                    "--restore-disable",
-                ],
+                argv,
                 input=baseword.encode(),
                 capture_output=True,
-                # POCL on Ubuntu rebuilds the OpenCL kernel on every
-                # hashcat invocation; under ThreadPoolExecutor contention
-                # the first calls per worker can take >10s. 30s leaves
-                # headroom without making genuine failures slow to detect.
                 timeout=30,
             )
         finally:
-            if os.path.exists(tmp):
+            if tmp is not None and os.path.exists(tmp):
                 os.unlink(tmp)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None, True
-    # Exit 255 means "No valid rules left" — hashcat ran but all candidates
-    # were filtered by a reject opcode (!, %, =, <, >, etc.).  Treat as a
-    # clean empty result, not a binary failure.
-    if result.returncode == 255:
-        return "", False
     if result.returncode != 0:
         return None, True
-    out = result.stdout.decode(errors="replace").rstrip("\n")
-    return out, False
+    return result.stdout.decode(errors="replace").rstrip("\n"), False
 
 
 def _extract_final(explanation: list[str] | None) -> str:
@@ -468,12 +487,9 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
         )
 
     extracted_opcodes = _extract_opcodes(decoded)
-    unsupported = any(
-        op in _HASHCAT_STDOUT_UNSUPPORTED or op not in _ALL_KNOWN_OPCODES
-        for op in extracted_opcodes
-    )
+    unknown_opcode = any(op not in _ALL_KNOWN_OPCODES for op in extracted_opcodes)
     if (
-        unsupported
+        unknown_opcode
         or _has_truncated_opcode(decoded)
         or _has_oob_position(decoded, baseword)
         or _has_invalid_position_arg(decoded)
@@ -491,7 +507,8 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
     # rejection to keep parity with hashcat's filtering semantics.
     ours_rejected = explanation is None or len(explanation) == 0 or our_final == ""
 
-    hashcat_out, hashcat_failed = _hashcat_output(rule, baseword)
+    engine = _select_engine(rule)
+    hashcat_out, hashcat_failed = _hashcat_output(rule, baseword, engine=engine)
     if hashcat_failed:
         return VerifyResult(status="skipped_hashcat", rule=rule, baseword=baseword)
 

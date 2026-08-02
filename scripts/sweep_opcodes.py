@@ -29,7 +29,6 @@ from hashcat_rosetta._verify import (
     CorpusReport,
     _ALL_KNOWN_OPCODES,
     _DEFAULT_IMPLEMENTED,
-    _HASHCAT_STDOUT_UNSUPPORTED,
     _ONE_ARG_OPCODES,
     _THREE_ARG_OPCODES,
     _TWO_ARG_OPCODES,
@@ -191,12 +190,14 @@ def aggregate_by_opcode(
                     "hashcat": mm.get("hashcat"),
                 }
         # Matched + unverifiable: walk the rule list and classify by opcode.
-        # A rule whose leading opcode is in _HASHCAT_STDOUT_UNSUPPORTED counts
-        # toward `unverifiable`. Otherwise, a rule counts as matched only if
-        # the verify harness didn't classify it as mismatched OR skipped — we
-        # need the explicit skipped-rule sets because skipped_hashcat /
-        # skipped_nonascii / skipped_hashcat_unsupported (e.g. OOB position)
-        # would otherwise be silently counted as matches.
+        # Every opcode is now routed to whichever engine (GPU `-r` or CPU
+        # `-j`) actually implements it (see `_select_engine` in _verify.py),
+        # so nothing is unconditionally unverifiable anymore. A rule counts
+        # as matched only if the verify harness didn't classify it as
+        # mismatched OR skipped — we need the explicit skipped-rule sets
+        # because skipped_hashcat / skipped_nonascii /
+        # skipped_hashcat_unsupported (e.g. OOB position) would otherwise be
+        # silently counted as matches.
         mismatched_rules_this_round = {mm["rule"] for mm in round_result["mismatches"]}
         skipped_strings = round_result.get("skipped_rule_strings", {})
         skipped_rules_this_round = (
@@ -207,9 +208,7 @@ def aggregate_by_opcode(
         for rule, op in rule_to_opcode.items():
             if op not in stats:
                 continue
-            if op in _HASHCAT_STDOUT_UNSUPPORTED:
-                stats[op]["unverifiable"] += 1
-            elif rule in mismatched_rules_this_round or rule in skipped_rules_this_round:
+            if rule in mismatched_rules_this_round or rule in skipped_rules_this_round:
                 continue
             else:
                 stats[op]["tested"] += 1
@@ -316,6 +315,21 @@ def render_json(rows: dict[str, dict], meta: dict) -> str:
     return json.dumps(doc, indent=2, sort_keys=True)
 
 
+def unoracled_opcodes() -> dict[str, str]:
+    """Return {opcode: reason} for every known opcode with no oracle coverage.
+
+    An opcode is oracled when it is simulated (in _DEFAULT_IMPLEMENTED) and an
+    engine accepts it. Every known opcode is accepted by exactly one engine:
+    _CPU_ONLY_OPCODES go to `-j`, everything else to `-r`. So the only real
+    gap left is "recognized by the tokenizer but not simulated".
+    """
+    gaps: dict[str, str] = {}
+    for op in sorted(_ALL_KNOWN_OPCODES):
+        if op not in _DEFAULT_IMPLEMENTED:
+            gaps[op] = "tokenized and described, but not simulated by explain_rule()"
+    return gaps
+
+
 def _check_prerequisites() -> None:
     try:
         subprocess.run(["hashcat", "--version"], capture_output=True, timeout=5).check_returncode()
@@ -390,7 +404,15 @@ def main() -> None:
         f"untracked={summary['untracked']}"
     )
 
-    exit_code = compute_exit_code(rows)
+    gaps = {op: why for op, why in unoracled_opcodes().items() if op not in KNOWN_LATENT}
+    if gaps:
+        print(f"\nFAIL: {len(gaps)} opcode(s) have no oracle coverage:", file=sys.stderr)
+        for op, why in gaps.items():
+            print(f"  {op!r}: {why}", file=sys.stderr)
+        exit_code = 1
+    else:
+        exit_code = compute_exit_code(rows)
+
     if exit_code != 0:
         print("RESULT: FAIL — new regression(s) outside KNOWN_LATENT")
     else:

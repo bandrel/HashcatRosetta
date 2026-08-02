@@ -9,7 +9,13 @@ import click
 
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
+from .mask import describe, format_hcmask_line
 from .parser import decode_hex_escapes
+
+# NOTE: hashcat_rosetta.nlmask is deliberately NOT imported here. It pulls in
+# the ``openai`` SDK, which costs ~450ms of import time that every non-LLM
+# invocation (--explain, debug-file analysis, ...) would otherwise pay. It is
+# imported lazily inside the ``--mask`` branch of main().
 
 _BANNER = r"""
  _   _           _               _   ____                _   _
@@ -100,6 +106,116 @@ def _ascii_swapcase(s: str) -> str:
     return "".join(out)
 
 
+# hashcat's cshift_lookup, transcribed from OpenCL/inc_rp_common.cl:42.
+# It is an XOR mask, not a substitution map: S(c) = chr(ord(c) ^ mask[ord(c)]).
+# The upstream table is 256 bytes but zero outside 33..126, so only that
+# window is stored here; index 0 corresponds to codepoint 33.
+_CSHIFT_MASK_33_126: tuple[int, ...] = (
+    16,
+    5,
+    16,
+    16,
+    16,
+    17,
+    5,
+    17,
+    25,
+    18,
+    22,
+    16,
+    114,
+    16,
+    16,
+    25,
+    16,
+    114,
+    16,
+    16,
+    16,
+    104,
+    17,
+    18,
+    17,
+    1,
+    1,
+    16,
+    22,
+    16,
+    16,
+    114,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    104,
+    114,
+    30,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    32,
+    30,
+)
+
+
+def _shift_char(ch: str) -> str:
+    """Apply hashcat's `S` keyboard-shift to one character."""
+    code = ord(ch)
+    if 33 <= code <= 126:
+        return chr(code ^ _CSHIFT_MASK_33_126[code - 33])
+    return ch
+
+
 def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     """Explain what a hashcat rule does with examples."""
     if not rule_str:
@@ -145,7 +261,11 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
 
     # Parse and apply rules sequentially
     current = baseword
-    memorized = baseword  # Default memorized word is the original input
+    # hashcat zero-fills the memory buffer to the plain's length rather than
+    # seeding it with the plain, so a memory op used without a preceding `M`
+    # reads NUL bytes. Verified against 7.1.2: bare `4` on "abcdef" yields
+    # "abcdef" + six NULs, and bare `X012` on "abc" yields "ab\0c".
+    memorized = "\x00" * len(baseword)
     steps = []
     i = 0
 
@@ -328,22 +448,7 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             i += 2
 
         elif char == ">" and i + 1 < len(rule_str):
-            # Reject if word length > N
-            n_char = rule_str[i + 1]
-            try:
-                n = _hashcat_pos(n_char)
-            except ValueError:
-                i += 1
-                continue
-            if len(current) > n:
-                return None
-            steps.append(
-                f">{n_char}: Length {len(current)} <= {n} (filter passed) → {current} → {current}"
-            )
-            i += 2
-
-        elif char == "<" and i + 1 < len(rule_str):
-            # Reject if word length < N
+            # hashcat: reject if word length is LESS than N (inclusive keep at N)
             n_char = rule_str[i + 1]
             try:
                 n = _hashcat_pos(n_char)
@@ -353,7 +458,22 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             if len(current) < n:
                 return None
             steps.append(
-                f"<{n_char}: Length {len(current)} >= {n} (filter passed) → {current} → {current}"
+                f">{n_char}: Length {len(current)} >= {n} (filter passed) → {current} → {current}"
+            )
+            i += 2
+
+        elif char == "<" and i + 1 < len(rule_str):
+            # hashcat: reject if word length is GREATER than N (inclusive keep at N)
+            n_char = rule_str[i + 1]
+            try:
+                n = _hashcat_pos(n_char)
+            except ValueError:
+                i += 1
+                continue
+            if len(current) > n:
+                return None
+            steps.append(
+                f"<{n_char}: Length {len(current)} <= {n} (filter passed) → {current} → {current}"
             )
             i += 2
 
@@ -429,15 +549,23 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             except (ValueError, IndexError):
                 i += 1
 
-        elif char == "%" and i + 1 < len(rule_str):
-            # Reject unless word contains char X
-            check_char = rule_str[i + 1]
-            if check_char not in current:
+        elif char == "%" and i + 2 < len(rule_str):
+            # hashcat %NX: reject unless `current` contains X at least N times
+            n_char = rule_str[i + 1]
+            check_char = rule_str[i + 2]
+            try:
+                n = _hashcat_pos(n_char)
+            except ValueError:
+                i += 1
+                continue
+            if current.count(check_char) < n:
                 return None
             steps.append(
-                f"%{check_char}: Contains '{check_char}' (filter passed) → {current} → {current}"
+                f"%{n_char}{check_char}: Contains '{check_char}' "
+                f"{current.count(check_char)} >= {n} times (filter passed) "
+                f"→ {current} → {current}"
             )
-            i += 2
+            i += 3
 
         elif char == "R" and i + 1 < len(rule_str):
             # Bitwise shift right character at position N
@@ -522,17 +650,18 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 1
 
         elif char == "a":
-            # Append memorized word (RULE_OP_MANGLE_TOGGLECASE_REC in hashcat source,
-            # but treated here as append-memorized semantics matching CPU-mode behavior)
-            prev = current
-            current = _cap(prev, current + memorized)
-            steps.append(f"a: Append memorized '{memorized}' → {prev} → {current}")
+            # RULE_OP_MANGLE_TOGGLECASE_REC. hashcat declares the opcode but
+            # its implementation body is `/* todo */ break;`, so it is a no-op
+            # upstream. Verified against 7.1.2: `-j 'a'` on abc gives abc.
+            # This previously appended the memory buffer, which nothing in
+            # hashcat does.
+            steps.append(f"a: No-op (unimplemented in hashcat) → {current} → {current}")
             i += 1
 
         elif char == "M":
             # Memorize current word for later use with X opcode
             memorized = current
-            steps.append(f"M: Memorize current word '{current}'")
+            steps.append(f"M: Memorize current word '{current}' → {current} → {current}")
             i += 1
 
         elif char == "X" and i + 3 < len(rule_str):
@@ -545,11 +674,43 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 n = _hashcat_pos(n_char)
                 m = _hashcat_pos(m_char)
                 l_pos = _hashcat_pos(l_char)
+                # hashcat rejects X rules with m == 0 (empty extracted substring) outright,
+                # independent of n/l_pos validity — verified against hashcat 7.1.2:
+                # X201 on 'cat' (m=0) is rejected; X210 on 'cat' (m=1) succeeds.
+                if not (
+                    m > 0
+                    and n < len(memorized)
+                    and n + m <= len(memorized)
+                    and l_pos <= len(current)
+                ):
+                    return None
                 prev = current
                 # Extract substring from memorized word
-                if n < len(memorized) and n + m <= len(memorized) and l_pos <= len(current):
-                    substring = memorized[n : n + m]
-                    current = _cap(prev, current[:l_pos] + substring + current[l_pos:])
+                substring = memorized[n : n + m]
+                current = _cap(prev, current[:l_pos] + substring + current[l_pos:])
+
+                # hashcat's mangle_insert_multi (src/rp_cpu.c) mutates the
+                # memory buffer as a side effect of every X call: it shifts
+                # out the first `n` bytes, then splices in bytes from the
+                # *current* word (before this op) starting at position `m`.
+                # A second X with no intervening M therefore reads a
+                # different buffer than the first one did. This mutation
+                # operates on a buffer sized to the logical mem_len (len of
+                # `memorized`, which never changes here — X never updates
+                # it, only M does) — verified sufficient (no need to model
+                # hashcat's full 256-byte physical buffer) by constructing
+                # oracle cases that force writes past the logical mem_len
+                # and confirming against real hashcat 7.1.2 that only the
+                # first mem_len bytes of the result are ever observable.
+                mem_len = len(memorized)
+                shifted = memorized[n:mem_len]
+                new_mem = list(shifted) + list(memorized[len(shifted) :])
+                tail = prev[l_pos:]
+                write_end = min(m + len(tail), mem_len)
+                write_n = max(0, write_end - m)
+                new_mem[m : m + write_n] = list(tail[:write_n])
+                memorized = "".join(new_mem)
+
                 steps.append(
                     f"X{n_char}{m_char}{l_char}: Insert {m} chars from memorized word"
                     f" at pos {n} into pos {l_pos} → {prev} → {current}"
@@ -557,6 +718,36 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
                 i += 4
             except (ValueError, IndexError):
                 i += 1
+
+        elif char == "4":
+            # RULE_OP_MANGLE_APPEND_MEMORY (src/rp_cpu.c): hashcat rejects the
+            # rule outright when the memory buffer is empty (mem_len < 1) or
+            # when appending would reach/exceed RP_PASSWORD_SIZE (256 bytes).
+            if len(memorized) < 1 or len(current) + len(memorized) >= _RP_PASSWORD_SIZE:
+                return None
+            prev = current
+            current = current + memorized
+            steps.append(f"4: Append memorized '{memorized}' → {prev} → {current}")
+            i += 1
+
+        elif char == "6":
+            # RULE_OP_MANGLE_PREPEND_MEMORY (src/rp_cpu.c): same two reject
+            # conditions as '4' above (empty memory buffer, or result would
+            # reach/exceed RP_PASSWORD_SIZE).
+            if len(memorized) < 1 or len(current) + len(memorized) >= _RP_PASSWORD_SIZE:
+                return None
+            prev = current
+            current = memorized + current
+            steps.append(f"6: Prepend memorized '{memorized}' → {prev} → {current}")
+            i += 1
+
+        elif char == "Q":
+            if current == memorized:
+                return None
+            steps.append(
+                f"Q: Differs from memorized '{memorized}' (filter passed) → {current} → {current}"
+            )
+            i += 1
 
         elif char == "=" and i + 2 < len(rule_str):
             # Reject unless character at position N is X
@@ -700,6 +891,24 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
             except (ValueError, IndexError):
                 i += 1
 
+        elif char == "h":
+            prev = current
+            current = _cap(prev, current.encode("latin-1", errors="replace").hex())
+            steps.append(f"h: Hex encode lowercase → {prev} → {current}")
+            i += 1
+
+        elif char == "H":
+            prev = current
+            current = _cap(prev, current.encode("latin-1", errors="replace").hex().upper())
+            steps.append(f"H: Hex encode uppercase → {prev} → {current}")
+            i += 1
+
+        elif char == "S":
+            prev = current
+            current = "".join(_shift_char(ch) for ch in current)
+            steps.append(f"S: Keyboard shift → {prev} → {current}")
+            i += 1
+
         elif char in rule_map:
             name, transform_func = rule_map[char]
             prev = current
@@ -773,6 +982,29 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
         "(baseword:rule:candidate:wordlist with wordlist attribution)."
     ),
 )
+@click.option(
+    "--mask",
+    type=str,
+    help="Generate an hcmask from an English description via a local Ollama server",
+)
+@click.option(
+    "-o",
+    "--mask-out",
+    type=click.Path(),
+    help="Write generated mask(s) to a .hcmask file (used with --mask)",
+)
+@click.option(
+    "--model",
+    type=str,
+    default=lambda: os.environ.get("OLLAMA_MODEL"),
+    help="Override the model name used for --mask (default: OLLAMA_MODEL env var)",
+)
+@click.option(
+    "--ollama-host",
+    type=str,
+    default=None,
+    help="Override the Ollama host/URL used for --mask (default: OLLAMA_HOST env var)",
+)
 @click.pass_context
 def main(
     ctx,
@@ -790,6 +1022,10 @@ def main(
     detail,
     analyze_rules,
     debug_mode,
+    mask,
+    mask_out,
+    model,
+    ollama_host,
 ):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
 
@@ -815,10 +1051,66 @@ def main(
 
     Analyze rule file opcodes:
         hashcat-rosetta rules.txt --analyze-rules
+
+    Generate masks:
+        hashcat-rosetta --mask "The word 'Summer' followed by six digits."
+        hashcat-rosetta --mask "a season and a year" -o seasons.hcmask
     """
 
     # Show the banner (to stderr so it never pollutes piped/exported stdout)
     click.echo(_BANNER, err=True)
+
+    # Handle natural-language mask generation
+    if mask:
+        # Lazy import: keeps the openai SDK out of the import path of every
+        # other command. See the note at the top of this module.
+        from . import nlmask
+
+        try:
+            suggestions = nlmask.generate_masks(mask, model=model, host=ollama_host)
+        except nlmask.MaskGenerationError as e:
+            click.echo(f"[!] {e}", err=True)
+            sys.exit(1)
+
+        click.echo(f"\nMask Suggestions for: '{mask}'")
+        click.echo("=" * 70)
+        for i, suggestion in enumerate(suggestions, 1):
+            line_str = format_hcmask_line(suggestion.custom_charsets, suggestion.mask)
+            click.echo(f"\n{i}. {line_str}")
+            # describe() already ends with "→ N candidates", so the keyspace
+            # is not printed a second time on its own line.
+            click.echo(f"   {describe(suggestion.line)}")
+            click.echo(f"   Why: {suggestion.why}")
+        click.echo()
+
+        if mask_out:
+            # The description is written as a header comment; collapse any
+            # newlines so it cannot inject extra lines into the file.
+            header = " ".join(mask.splitlines())
+            lines = [
+                format_hcmask_line(suggestion.custom_charsets, suggestion.mask)
+                for suggestion in suggestions
+            ]
+            try:
+                with open(mask_out, "w", encoding="utf-8") as f:
+                    f.write(f"# {header}\n")
+                    for line_str in lines:
+                        # hashcat skips any line starting with '#' as a
+                        # comment; '\#' is its accepted escape for a literal
+                        # leading '#'.
+                        if line_str.startswith("#"):
+                            click.echo(
+                                f"[!] mask '{line_str}' starts with '#'; written as "
+                                f"'\\{line_str}' so hashcat does not treat it as a comment",
+                                err=True,
+                            )
+                            line_str = "\\" + line_str
+                        f.write(line_str + "\n")
+            except OSError as e:
+                click.echo(f"[!] could not write {mask_out}: {e}", err=True)
+                sys.exit(1)
+            click.echo(f"Done: Mask(s) written to: {mask_out}")
+        return
 
     # Handle rule explanation
     if explain:

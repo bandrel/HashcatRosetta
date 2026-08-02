@@ -8,6 +8,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Releases predating this file are summarized from their git history; see the tags
 for exact timing.
 
+## [Unreleased]
+
+### Fixed
+
+- **`<` and `>` length filters were inverted.** hashcat's `>N` rejects plains
+  shorter than N and `<N` rejects longer; both the descriptions and the
+  simulation had it backwards, so `--explain` reported "filter passed" for
+  candidates hashcat drops and refused to explain rules hashcat runs.
+- **`%` is `%NX`, not `%X`.** The wrong arity made every `%` rule unexplainable
+  and mis-tokenized every opcode following a `%`, which corrupted
+  `--analyze-rules` statistics for any rule file containing one.
+- **`a` is a no-op.** hashcat declares `RULE_OP_MANGLE_TOGGLECASE_REC` but its
+  body is a `/* todo */ break;` stub. We were appending the memory buffer,
+  which no hashcat version does.
+- **The memory buffer is zero-filled, not seeded with the plain.** hashcat
+  fills it with `len(plain)` NUL bytes, so a memory op with no preceding `M`
+  reads NULs. `X` had been wrong since 0.4.0 for exactly that case: bare
+  `X012` on `abc` is `ab\0c`, and we produced `abac`.
+- **`X` now rejects out-of-bounds inserts and `m == 0` instead of silently
+  no-opping.** hashcat rejects the whole rule (not a no-op) when the
+  extracted length is zero or the insert position exceeds the current word,
+  independent of the other arguments' validity.
+- **`X` now mutates the shared memory buffer as a side effect, matching
+  hashcat's `mangle_insert_multi`.** Every `X` call shifts and splices the
+  buffer, not just the current word, so chained `X` opcodes with no
+  intervening `M` now read a different (correct) buffer than before and can
+  produce different output than the earlier, buffer-inert implementation.
+- **`4` and `6` now reject when the memory buffer is empty or appending would
+  overflow the 256-byte cap.** hashcat rejects the entire rule when appending
+  or prepending the memorized word would overflow the 256-byte buffer or when
+  the memory buffer is empty, not silently leaving the word unchanged as
+  before.
+
+### Added
+
+- **A second oracle: the host-side rule engine via `hashcat -j`.** Filter and
+  memory opcodes (`! < > % ( ) = M X 4 6 Q`) are invalid in `-r` rule files in
+  every mode, so they had never been compared against hashcat at all. They are
+  now oracled against the engine that actually implements them. The two engines
+  are routed per opcode and never interchanged, because they disagree on `3NX`.
+- **`S`, `h`, `H`, `4`, `6`, and `Q` are implemented** (#37), closing the last
+  simulator gaps. `S` is an XOR against hashcat's `cshift_lookup` mask, not a
+  case toggle.
+- **The sweep now fails on any opcode with no oracle coverage,** so a
+  simulated-but-unverified opcode cannot ship again without a cited excuse.
+- **Natural language to hcmask generation via `--mask` flag.** Describe a password
+  pattern in English (e.g., `"The word 'Summer' followed by six digits."`) and
+  HashcatRosetta generates one or more candidate hashcat masks using a local Ollama
+  server. Every generated mask is validated deterministically through the mask module
+  before being shown to the user. Configurable via `--ollama-host` and `--model` CLI
+  flags, or the `OLLAMA_HOST` and `OLLAMA_MODEL` environment variables. Output can be
+  written to an `.hcmask` file via `-o`/`--mask-out`. All descriptions and generations
+  remain local to the machine — no cloud API calls are made.
+- **`openai` dependency (>=2.52.0)** for OpenAI-compatible API calls to local Ollama.
+
 ## [0.4.0] - 2026-07-29
 
 The headline is accuracy. A full byte-for-byte comparison against hashcat 7.1.2

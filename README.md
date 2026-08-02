@@ -27,26 +27,6 @@ A Python project designed to analyze hashcat debug mode 4 and mode 5 output file
 
 ## Installation
 
-### From source
-
-```bash
-git clone https://github.com/bandrel/HashcatRosetta.git
-cd HashcatRosetta
-pip install -e .
-```
-
-### With development dependencies
-
-The dev tools live in the `dev` [dependency group](https://peps.python.org/pep-0735/).
-
-```bash
-# With uv (installs the dev group by default)
-uv sync
-
-# With pip (25.1+)
-pip install -e . --group dev
-```
-
 ### Using with uv (recommended)
 
 If you're using [uv](https://github.com/astral-sh/uv), you can run without installation:
@@ -61,6 +41,24 @@ uv run python -m hashcat_rosetta --help
 
 # Or use the installed command
 uv run hashcat-rosetta --help
+```
+
+### From source
+
+```bash
+uv tool install git+https://github.com/bandrel/HashcatRosetta.git
+```
+
+### With development dependencies
+
+The dev tools live in the `dev` [dependency group](https://peps.python.org/pep-0735/).
+
+```bash
+# With uv (installs the dev group by default)
+uv sync
+
+# With pip (25.1+)
+pip install -e . --group dev
 ```
 
 ## Quick Start
@@ -126,6 +124,53 @@ hashcat-rosetta --explain "c$1" --baseword admin
 hashcat-rosetta --explain "u$!" --baseword myword
 ```
 
+### Generating Masks with Natural Language
+
+Generate hashcat masks from English descriptions using a local LLM:
+
+```bash
+hashcat-rosetta --mask "The word 'Summer' followed by six digits."
+```
+
+Output:
+```
+Mask Suggestions for: 'The word 'Summer' followed by six digits.'
+======================================================================
+
+1. Summer?d?d?d?d?d?d
+   literal "Summer", then 6 × digit → 1,000,000 candidates
+   Why: matches the literal word followed by a 6-digit number
+```
+
+Save the generated mask to a file:
+```bash
+hashcat-rosetta --mask "The word 'Summer' followed by six digits." -o masks.hcmask
+```
+
+Generate masks from other descriptions:
+```bash
+hashcat-rosetta --mask "a capitalized season, two digits, and a special char"
+hashcat-rosetta --mask "year 2020-2025 followed by exclamation or question mark"
+```
+
+The mask generation feature uses a local Ollama server running an OpenAI-compatible chat
+endpoint. By default, it connects to `http://localhost:11434` and uses the model
+`qwen3.6:35b-a3b`. These can be configured via environment variables or CLI flags:
+
+```bash
+# Using environment variables
+OLLAMA_HOST=http://192.168.1.100:11434 OLLAMA_MODEL=llama2:70b \
+  hashcat-rosetta --mask "your description here"
+
+# Using CLI flags (override environment variables)
+hashcat-rosetta --mask "your description" --ollama-host http://custom.host:11434 --model llama2
+```
+
+**Security note:** Mask descriptions are sent only to the Ollama endpoint you configure
+(`localhost` by default, or wherever `--ollama-host`/`OLLAMA_HOST` points) — never to a
+cloud provider. The OpenAI SDK is used purely as an HTTP client against that endpoint;
+no data or API key is ever transmitted to `api.openai.com`.
+
 ### Using the Python API
 
 ```python
@@ -166,7 +211,23 @@ export = analyzer.export_to_dict()
 
 The analyzer automatically detects and supports both hashcat debug output formats:
 
-### Space-separated format (modern hashcat)
+### Colon-separated format (hashcat's native format)
+
+```
+baseword:rule:candidate
+COMPUTER:} } } } t:retupmoc
+EXAMPLE:sa@ se3 so0:3x@mpl3
+admin:$1 $5 c ^@:@Admin15
+```
+
+Each line contains three **colon-separated** fields:
+- **baseword**: The original dictionary word
+- **rule**: The hashcat rule applied
+- **candidate**: The resulting password candidate after applying the rule
+
+hashcat has always emitted this format (`src/debugfile.c` writes `orig`, `:`, `rule`, `:`, `mod`).
+
+### Space-separated format (legacy)
 
 ```
 baseword rule candidate
@@ -176,21 +237,7 @@ admin l admin
 letmein [ etmein
 ```
 
-Each line contains three **space-separated** fields:
-- **baseword**: The original dictionary word
-- **rule**: The hashcat rule applied
-- **candidate**: The resulting password candidate after applying the rule
-
-### Colon-separated format (older hashcat versions)
-
-```
-baseword:rule:candidate
-COMPUTER:} } } } t:retupmoc
-EXAMPLE:sa@ se3 so0:3x@mpl3
-admin:$1 $5 c ^@:@Admin15
-```
-
-Each line contains three **colon-separated** fields with the same meaning as above.
+Each line contains three **space-separated** fields with the same meaning as above. This is an older, legacy format that this parser also accepts.
 
 **Note**: The analyzer automatically detects which format your file uses. No manual configuration needed!
 
