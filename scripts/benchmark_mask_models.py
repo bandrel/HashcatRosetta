@@ -25,6 +25,7 @@ candidates.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -51,13 +52,42 @@ from hashcat_rosetta.nlmask import (
 LOCAL_HOST = "http://localhost:11434"
 
 CANDIDATES: list[str] = [
+    "qwen2.5:0.5b",
+    "qwen2.5:1.5b",
+    "llama3.2:1b",
+    "phi:latest",
+    "smollm2:1.7b",
+    "qwen2.5:3b",
+    "llama3.2:3b",
+    "phi3:latest",
     "granite4:3b",
+    "llama3:latest",
+    "qwen3:8b",
     "mistral:latest",
+    "qwen3.5:9b",
     "qwen2.5:latest",
     "llama3.1:8b",
+    "gemma4:latest",
+    "gpt-oss:20b",
     "phi4:14b",
+    "mistral-small:24b",
+    "devstral-small-2:24b",
+    "gemma3:27b",
+    "qwen3.5:27b",
+    "qwen3:30b",
+    "dengcao/Qwen3-30B-A3B-Instruct-2507:latest",
+    "gemma4:31b",
     "qwen2.5:32b",
+    "glm-4.7-flash:latest",
+    "qwen3:32b",
     "qwen3-coder:latest",
+    "laguna-xs-2.1:latest",
+    "mixtral:8x7b",
+    "hermes3:70b",
+    "llama3.3:70b",
+    "deepseek-r1:70b",
+    "qwen2.5:72b",
+    "qwen3-coder-next:Q4_K_M",
 ]
 
 JUDGE_MODEL = "qwen3-coder:latest"
@@ -101,10 +131,19 @@ def ensure_model_pulled(model: str, *, host: str = LOCAL_HOST) -> bool:
 
     Returns True if the model is present after this call (whether it was
     already there or the pull succeeded), False if the pull failed.
+
+    The `ollama` CLI picks its target server from the `OLLAMA_HOST`
+    environment variable, which may point somewhere other than `host` (e.g.
+    a shared team server). Overriding it for this subprocess only ensures
+    the pull lands on the same server `host` will be queried against —
+    otherwise the model can "pull successfully" to the wrong host and still
+    be reported missing on every later check.
     """
     if model in list_local_models(host):
         return True
-    result = subprocess.run(["ollama", "pull", model], capture_output=True, timeout=1800)
+    env = dict(os.environ)
+    env["OLLAMA_HOST"] = host.split("://", 1)[-1]
+    result = subprocess.run(["ollama", "pull", model], capture_output=True, timeout=1800, env=env)
     return result.returncode == 0
 
 
@@ -139,7 +178,7 @@ def judge_score(
     suggestions: list[MaskSuggestion],
     *,
     model: str = JUDGE_MODEL,
-    host: str | None = None,
+    host: str = LOCAL_HOST,
     client: Any = None,
 ) -> int:
     """Score how well `suggestions` satisfies `prompt`, 1-5, via the judge model.
@@ -400,12 +439,12 @@ def run_prompt_for_model(
     return PromptResult(prompt.name, elapsed, None, score)
 
 
-def benchmark_model(model: str) -> ModelReport:
+def benchmark_model(model: str, *, host: str = LOCAL_HOST) -> ModelReport:
     print(f"Benchmarking {model}...", file=sys.stderr)
 
     try:
-        pulled = ensure_model_pulled(model)
-        models = list_local_models()
+        pulled = ensure_model_pulled(model, host=host)
+        models = list_local_models(host)
     except Exception as exc:  # noqa: BLE001 - infra failures must not crash the sweep
         results = [PromptResult(p.name, 0.0, f"infrastructure error: {exc}", None) for p in PROMPTS]
         return ModelReport(model, None, results)
@@ -415,7 +454,7 @@ def benchmark_model(model: str) -> ModelReport:
         return ModelReport(model, None, results)
 
     disk_size_gb = models[model] / (1024**3)
-    results = [run_prompt_for_model(model, p, host=LOCAL_HOST) for p in PROMPTS]
+    results = [run_prompt_for_model(model, p, host=host) for p in PROMPTS]
     return ModelReport(model, disk_size_gb, results)
 
 
