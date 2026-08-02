@@ -9,6 +9,7 @@ Tests in this module verify the correctness of:
 - Tokenizer opcode coverage vs OPCODE_DESCRIPTIONS completeness
 - Parser file-level format detection heuristic
 - explain_rule() handler correctness for all supported opcodes
+- Reject sentinel contract: rejection opcodes emit a sentinel, not a transformation step
 """
 
 import json
@@ -18,7 +19,7 @@ import tempfile
 import pytest
 
 from hashcat_rosetta import DebugAnalyzer, DebugLogParser, RuleParser
-from hashcat_rosetta.cli import explain_rule
+from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, explain_rule
 from hashcat_rosetta.formatting import OPCODE_DESCRIPTIONS, extract_rule_opcodes
 
 
@@ -770,6 +771,166 @@ class TestOpcodeClassification:
         # O34: omit 4 chars starting at pos 3 -> "helworld"
         assert "Omit" in result[0] or "omit" in result[0].lower()
         assert "helorld" in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Reject sentinel contract
+# ---------------------------------------------------------------------------
+
+
+class TestRejectSentinel:
+    """Verify explain_rule() emits REJECT_SENTINEL_PREFIX for rejection opcodes.
+
+    The sentinel contract:
+      - When a rejection opcode fires, the last step in the returned list MUST
+        start with REJECT_SENTINEL_PREFIX and the list is terminated (no further
+        steps are appended after the sentinel).
+      - When a rejection opcode does NOT fire (word passes the check), the last
+        step must NOT start with REJECT_SENTINEL_PREFIX.
+
+    This contract is consumed by scripts/verify_rules.py to distinguish a
+    predicted rejection from a transformation result.
+    """
+
+    # ------------------------------------------------------------------
+    # ! opcode: reject if word contains X
+    # ------------------------------------------------------------------
+
+    def test_bang_rejects_when_word_contains_char(self) -> None:
+        """!a: word 'banana' contains 'a' → last step is REJECTED sentinel."""
+        result = explain_rule("!a", "banana")
+        assert result is not None, "explain_rule returned None"
+        assert result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Expected last step to start with '{REJECT_SENTINEL_PREFIX}', got: {result[-1]!r}"
+        )
+
+    def test_bang_passes_when_word_does_not_contain_char(self) -> None:
+        """!z: word 'banana' does not contain 'z' → last step is a pass step, not a sentinel."""
+        result = explain_rule("!z", "banana")
+        assert result is not None, "explain_rule returned None"
+        assert not result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Last step should NOT be a sentinel when word passes '!z': {result[-1]!r}"
+        )
+        assert (
+            "passed" in result[-1].lower()
+            or "does not contain" in result[-1].lower()
+            or "no match" in result[-1].lower()
+        ), f"Last step should indicate the word passed the '!z' check: {result[-1]!r}"
+
+    # ------------------------------------------------------------------
+    # > opcode: hashcat rejects if word length is LESS than N (verified
+    # against hashcat 7.1.2 -- see feat/oracle-every-opcode).
+    # ------------------------------------------------------------------
+
+    def test_gt_rejects_when_word_is_too_short(self) -> None:
+        """>8: 'hello' has length 5 < 8 → REJECTED sentinel."""
+        result = explain_rule(">8", "hello")
+        assert result is not None
+        assert result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Expected REJECTED sentinel for '>8' on 'hello', got: {result[-1]!r}"
+        )
+
+    def test_gt_passes_when_word_is_long_enough(self) -> None:
+        """>3: 'hello' has length 5 ≥ 3 → no sentinel."""
+        result = explain_rule(">3", "hello")
+        assert result is not None
+        assert not result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Should not be rejected by '>3' when word length is 5: {result[-1]!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # < opcode: hashcat rejects if word length is GREATER than N (verified
+    # against hashcat 7.1.2 -- see feat/oracle-every-opcode).
+    # ------------------------------------------------------------------
+
+    def test_lt_rejects_when_word_is_too_long(self) -> None:
+        """<3: 'hello' has length 5 > 3 → REJECTED sentinel."""
+        result = explain_rule("<3", "hello")
+        assert result is not None
+        assert result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Expected REJECTED sentinel for '<3' on 'hello', got: {result[-1]!r}"
+        )
+
+    def test_lt_passes_when_word_is_short_enough(self) -> None:
+        """<8: 'hello' has length 5 ≤ 8 → no sentinel."""
+        result = explain_rule("<8", "hello")
+        assert result is not None
+        assert not result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Should not be rejected by '<8' when word length is 5: {result[-1]!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # % opcode: %NX (two-arg) rejects unless the word contains X at least
+    # N times (verified against hashcat 7.1.2 -- see feat/oracle-every-opcode).
+    # ------------------------------------------------------------------
+
+    def test_percent_rejects_when_word_missing_char(self) -> None:
+        """%1a: 'test' contains 'a' zero times, need >= 1 → REJECTED sentinel."""
+        result = explain_rule("%1a", "test")
+        assert result is not None
+        assert result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Expected REJECTED sentinel for '%1a' on 'test', got: {result[-1]!r}"
+        )
+
+    def test_percent_passes_when_word_contains_char(self) -> None:
+        """%1e: 'test' contains 'e' once, need >= 1 → no sentinel."""
+        result = explain_rule("%1e", "test")
+        assert result is not None
+        assert not result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Should not be rejected by '%1e' when word contains 'e': {result[-1]!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # = opcode: reject unless char at position N is X
+    # ------------------------------------------------------------------
+
+    def test_equals_rejects_when_wrong_char_at_position(self) -> None:
+        """=0z: char at pos 0 of 'hello' is 'h', not 'z' → REJECTED sentinel."""
+        result = explain_rule("=0z", "hello")
+        assert result is not None
+        assert result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Expected REJECTED sentinel for '=0z' on 'hello', got: {result[-1]!r}"
+        )
+
+    def test_equals_passes_when_correct_char_at_position(self) -> None:
+        """=0h: char at pos 0 of 'hello' is 'h' → no sentinel."""
+        result = explain_rule("=0h", "hello")
+        assert result is not None
+        assert not result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Should not be rejected by '=0h' when char at pos 0 is 'h': {result[-1]!r}"
+        )
+
+    def test_equals_rejects_when_position_out_of_bounds(self) -> None:
+        """=9x: pos 9 is beyond 'hi' (length 2) → REJECTED sentinel."""
+        result = explain_rule("=9x", "hi")
+        assert result is not None
+        assert result[-1].startswith(REJECT_SENTINEL_PREFIX), (
+            f"Expected REJECTED sentinel for '=9x' on 'hi' (out of bounds), got: {result[-1]!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Sentinel format consistency
+    # ------------------------------------------------------------------
+
+    def test_sentinel_format_does_not_contain_arrow(self) -> None:
+        """Rejection sentinels must not contain '→' (which would confuse the result extractor)."""
+        cases = [
+            ("!a", "banana"),
+            (">8", "hello"),
+            ("<3", "hello"),
+            ("%1a", "test"),
+            ("=0z", "hello"),
+        ]
+        for rule, word in cases:
+            result = explain_rule(rule, word)
+            assert result is not None
+            last = result[-1]
+            assert last.startswith(REJECT_SENTINEL_PREFIX), (
+                f"rule={rule!r}, word={word!r}: last step is not a sentinel: {last!r}"
+            )
+            assert "\u2192" not in last, (
+                f"rule={rule!r}, word={word!r}: sentinel must not contain '→': {last!r}"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,11 @@ _BANNER = r"""
 # file". The sentinel holds a NUL byte so no real rule or path can collide.
 _EXPLAIN_FROM_LOG = "\x00explain-from-log"
 
+# Prefix used by explain_rule() to signal that a word was rejected by a filter opcode.
+# Consumers (e.g. scripts/verify_rules.py) check for this prefix to distinguish a
+# rejection sentinel from a normal transformation step.
+REJECT_SENTINEL_PREFIX = "REJECTED: "
+
 
 def _hashcat_pos(c: str) -> int:
     """Parse a hashcat position char.
@@ -225,10 +230,14 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
     """Simulate a hashcat rule, returning its steps and the resulting word.
 
     Returns ``(steps, final_word)``, or ``None`` when there is nothing to
-    explain — an empty rule, a filter opcode that rejected the word, or a rule
-    that produced no recognized steps. ``final_word`` is the transformed word
-    itself, not a value re-parsed out of the step text: steps such as ``M:
-    Memorize ...`` carry no ``->`` arrow, so text parsing is unreliable.
+    explain at all — an empty rule, or a rule that produced no recognized
+    steps. When a filter opcode rejects the word, a non-``None`` tuple is
+    still returned, with its last step starting with
+    ``REJECT_SENTINEL_PREFIX``; ``final_word`` in that case is the word as of
+    the moment of rejection, not a value hashcat would ever emit. ``final_word``
+    is the transformed word itself, not a value re-parsed out of the step
+    text: steps such as ``M: Memorize ...`` carry no ``->`` arrow, so text
+    parsing is unreliable.
     """
     if not rule_str:
         return None
@@ -452,7 +461,10 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             # Reject if contains char X
             reject_char = rule_str[i + 1]
             if reject_char in current:
-                return None
+                steps.append(
+                    f"{REJECT_SENTINEL_PREFIX}!{reject_char}: word contains '{reject_char}'"
+                )
+                return (steps, current)
             steps.append(
                 f"!{reject_char}: Reject if contains '{reject_char}' (no match) "
                 f"→ {current} → {current}"
@@ -468,7 +480,8 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 i += 1
                 continue
             if len(current) < n:
-                return None
+                steps.append(f"{REJECT_SENTINEL_PREFIX}>{n_char}: word length {len(current)} < {n}")
+                return (steps, current)
             steps.append(
                 f">{n_char}: Length {len(current)} >= {n} (filter passed) → {current} → {current}"
             )
@@ -483,7 +496,8 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 i += 1
                 continue
             if len(current) > n:
-                return None
+                steps.append(f"{REJECT_SENTINEL_PREFIX}<{n_char}: word length {len(current)} > {n}")
+                return (steps, current)
             steps.append(
                 f"<{n_char}: Length {len(current)} <= {n} (filter passed) → {current} → {current}"
             )
@@ -571,7 +585,11 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 i += 1
                 continue
             if current.count(check_char) < n:
-                return None
+                steps.append(
+                    f"{REJECT_SENTINEL_PREFIX}%{n_char}{check_char}: word contains "
+                    f"'{check_char}' only {current.count(check_char)} times, need {n}"
+                )
+                return (steps, current)
             steps.append(
                 f"%{n_char}{check_char}: Contains '{check_char}' "
                 f"{current.count(check_char)} >= {n} times (filter passed) "
@@ -695,7 +713,11 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                     and n + m <= len(memorized)
                     and l_pos <= len(current)
                 ):
-                    return None
+                    steps.append(
+                        f"{REJECT_SENTINEL_PREFIX}X{n_char}{m_char}{l_char}: "
+                        f"invalid X rule (m=0 or out of bounds)"
+                    )
+                    return (steps, current)
                 prev = current
                 # Extract substring from memorized word
                 substring = memorized[n : n + m]
@@ -747,7 +769,10 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
 
         elif char == "Q":
             if current == memorized:
-                return None
+                steps.append(
+                    f"{REJECT_SENTINEL_PREFIX}Q: word matches memorized word '{memorized}'"
+                )
+                return (steps, current)
             steps.append(
                 f"Q: Differs from memorized '{memorized}' (filter passed) → {current} → {current}"
             )
@@ -763,7 +788,12 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 i += 1
                 continue
             if pos >= len(current) or current[pos] != check_char:
-                return None
+                if pos >= len(current):
+                    reason = f"word length {len(current)} <= {pos} (pos out of range)"
+                else:
+                    reason = f"char at pos {pos} is '{current[pos]}', not '{check_char}'"
+                steps.append(f"{REJECT_SENTINEL_PREFIX}={pos_char}{check_char}: {reason}")
+                return (steps, current)
             steps.append(
                 f"={pos_char}{check_char}: Char at pos {pos} is '{check_char}' (filter passed) "
                 f"→ {current} → {current}"
@@ -774,7 +804,10 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             # Reject unless first character equals X
             check_char = rule_str[i + 1]
             if not current or current[0] != check_char:
-                return None
+                steps.append(
+                    f"{REJECT_SENTINEL_PREFIX}({check_char}: first char is not '{check_char}'"
+                )
+                return (steps, current)
             steps.append(
                 f"({check_char}: First char is '{check_char}' (filter passed) "
                 f"→ {current} → {current}"
@@ -785,7 +818,10 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             # Reject unless last character equals X
             check_char = rule_str[i + 1]
             if not current or current[-1] != check_char:
-                return None
+                steps.append(
+                    f"{REJECT_SENTINEL_PREFIX}){check_char}: last char is not '{check_char}'"
+                )
+                return (steps, current)
             steps.append(
                 f"){check_char}: Last char is '{check_char}' (filter passed) "
                 f"→ {current} → {current}"

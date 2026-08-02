@@ -1,0 +1,85 @@
+# Regression rules: one rule per implemented opcode (plus known-combo rules).
+# Used by tests/test_validation_oracle.py for deterministic testing.
+# One rule per line; lines starting with # are comments.
+
+# Zero-arg opcodes
+:
+c
+u
+l
+d
+r
+t
+[
+]
+{
+}
+f
+k
+K
+q
+C
+E
+
+# One-arg opcodes
+$1
+$!
+^x
+^0
+p2
+D3
+D0
+T3
+T0
+y3
+Y3
+z3
+Z3
+@s
+@a
+!z
+>A
+>5
+<3
+<9
+'5
+'0
++3
+-3
+.3
+,3
+%p
+%a
+R3
+L3
+
+# Two-arg opcodes
+i2!
+i0x
+ss$
+sap
+o3x
+o0y
+x33
+x05
+*01
+*23
+
+# Three-arg opcodes (X: insert from memory — always rejects without memory op)
+# XNM — these typically reject since no M opcode precedes them
+
+# Memory and filter opcodes
+M
+=0p
+=3a
+O23
+MX023
+B0A
+
+# Known-broken combos (multi-opcode rules)
+c$1$2
+u]r
+l^x$1
+d[r
+tss!
+c i2! ss$

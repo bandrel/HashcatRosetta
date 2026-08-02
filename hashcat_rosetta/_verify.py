@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from hashcat_rosetta.cli import _simulate_rule, explain_rule
+from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, _simulate_rule, explain_rule
 from hashcat_rosetta.parser import RuleParser, decode_hex_escapes
 
 VerifyStatus = Literal[
@@ -449,9 +449,18 @@ def _extract_final(rule: str, baseword: str) -> str:
     Reads the final word straight out of the simulation. The previous version
     string-parsed the last step on " -> ", which returned the step sentence
     itself for steps that carry no arrow (a rule ending in M, for example).
+    A rejected rule (last step starting with REJECT_SENTINEL_PREFIX) also
+    produces "" here, matching hashcat producing no candidate at all -- the
+    word _simulate_rule reports at the moment of rejection is not something
+    hashcat would ever emit.
     """
     simulated = _simulate_rule(rule, baseword)
-    return simulated[1] if simulated else ""
+    if not simulated:
+        return ""
+    steps, final = simulated
+    if steps[-1].startswith(REJECT_SENTINEL_PREFIX):
+        return ""
+    return final
 
 
 def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -> VerifyResult:
@@ -501,8 +510,16 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
     our_final = _extract_final(rule, baseword)
     # An empty result is functionally a rejection: hashcat's --stdout pipeline
     # filters empty candidates and exits 255, so treat our empty output as a
-    # rejection to keep parity with hashcat's filtering semantics.
-    ours_rejected = explanation is None or len(explanation) == 0 or our_final == ""
+    # rejection to keep parity with hashcat's filtering semantics. A filter
+    # opcode firing is a rejection too, signaled by a final step starting
+    # with REJECT_SENTINEL_PREFIX rather than by explanation being None/empty
+    # (see _simulate_rule's docstring).
+    ours_rejected = (
+        explanation is None
+        or len(explanation) == 0
+        or our_final == ""
+        or explanation[-1].startswith(REJECT_SENTINEL_PREFIX)
+    )
 
     engine = _select_engine(rule)
     hashcat_out, hashcat_failed = _hashcat_output(rule, baseword, engine=engine)

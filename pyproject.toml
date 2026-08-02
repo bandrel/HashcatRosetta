@@ -47,6 +47,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not integration and not validation'"
 markers = [
     "integration: integration tests requiring an external resource (the actual hashcat binary, generate-rules.bin, or a machine-local corpus file) not present in CI",
+    "validation: marks tests as heavyweight accuracy validation (deselect with '-m \"not validation\"')",
 ]

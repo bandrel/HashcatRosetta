@@ -18,7 +18,13 @@ import pytest
 from click.testing import CliRunner
 
 from hashcat_rosetta import RuleAnalyzer, RuleParser
-from hashcat_rosetta.cli import explain_rule, main
+from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, explain_rule, main
+
+
+def _rejected(rule, word):
+    """True if explain_rule rejects (word, rule) -- None or a sentinel-suffixed result."""
+    result = explain_rule(rule, word)
+    return result is None or result[-1].startswith(REJECT_SENTINEL_PREFIX)
 
 
 def get_hashcat_output(rule, baseword="password"):
@@ -844,35 +850,35 @@ class TestFilterRejection:
     """Filter rules must return None when their condition fires."""
 
     def test_bang_rejects_when_char_present(self) -> None:
-        assert explain_rule("!a", "password") is None
+        assert _rejected("!a", "password")
 
     def test_bang_passes_when_char_absent(self) -> None:
         assert explain_rule("!z", "password") is not None
 
     def test_lt_rejects_when_word_too_short(self) -> None:
         # <5 means reject if length > 5; "password" is len 8, so reject.
-        assert explain_rule("<5", "password") is None
+        assert _rejected("<5", "password")
 
     def test_lt_passes_when_word_long_enough(self) -> None:
         assert explain_rule("<5", "cat") is not None
 
     def test_gt_rejects_when_word_too_long(self) -> None:
         # >5 means reject if length < 5; "cat" is len 3, so reject.
-        assert explain_rule(">5", "cat") is None
+        assert _rejected(">5", "cat")
 
     def test_gt_passes_when_word_short_enough(self) -> None:
         assert explain_rule(">5", "password") is not None
 
     def test_percent_rejects_when_char_absent(self) -> None:
         # %1a means reject unless contains 'a' at least once; "test" has no 'a' so reject.
-        assert explain_rule("%1a", "test") is None
+        assert _rejected("%1a", "test")
 
     def test_percent_passes_when_char_present(self) -> None:
         assert explain_rule("%1a", "admin") is not None
 
     def test_equals_rejects_when_char_at_pos_differs(self) -> None:
         # =0a means reject unless char at pos 0 is 'a'; "password" pos 0 is 'p'
-        assert explain_rule("=0a", "password") is None
+        assert _rejected("=0a", "password")
 
     def test_equals_passes_when_char_at_pos_matches(self) -> None:
         assert explain_rule("=0p", "password") is not None
@@ -983,20 +989,20 @@ class TestOpcodeV:
 class TestNewFilterOpcodes:
     def test_lparen_rejects_when_first_char_differs(self) -> None:
         # (a means reject unless first char is 'a'; "password" starts with 'p'
-        assert explain_rule("(a", "password") is None
+        assert _rejected("(a", "password")
 
     def test_lparen_passes_when_first_char_matches(self) -> None:
         assert explain_rule("(p", "password") is not None
 
     def test_lparen_rejects_empty_word(self) -> None:
-        assert explain_rule("(p", "") is None
+        assert _rejected("(p", "")
 
     def test_rparen_rejects_when_last_char_differs(self) -> None:
         assert explain_rule(")d", "password") is not None  # last is 'd'
-        assert explain_rule(")z", "password") is None
+        assert _rejected(")z", "password")
 
     def test_rparen_rejects_empty_word(self) -> None:
-        assert explain_rule(")a", "") is None
+        assert _rejected(")a", "")
 
 
 class TestOpcodeE:

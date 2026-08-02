@@ -43,8 +43,8 @@ def opcodes(reference: dict[str, Any]) -> list[dict[str, Any]]:
 # If parser.py changes, update this block AND the reference JSON.
 # ---------------------------------------------------------------------------
 PARSER_NO_ARG_OPS: set[str] = set(":lucCtdfr{}[]kKqEMmSwWhH4579a")
-PARSER_ONE_ARG_OPS: set[str] = set("TDpyYezZ^$@!><'+-.,%LR()")
-PARSER_TWO_ARG_OPS: set[str] = set("soi3x*=vOB")
+PARSER_ONE_ARG_OPS: set[str] = set("TDpyYezZ^$@!><'+-.,LR()")
+PARSER_TWO_ARG_OPS: set[str] = set("soi3x*=vOB%")
 PARSER_THREE_ARG_OPS: set[str] = set("X")
 PARSER_ALL_OPS: set[str] = (
     PARSER_NO_ARG_OPS | PARSER_ONE_ARG_OPS | PARSER_TWO_ARG_OPS | PARSER_THREE_ARG_OPS

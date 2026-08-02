@@ -432,10 +432,14 @@ class TestSimulateRule:
         assert final == "Admin1"
 
     def test_returns_none_where_explain_rule_returns_none(self):
-        from hashcat_rosetta.cli import _simulate_rule
+        from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, _simulate_rule
 
         assert _simulate_rule("") is None
-        assert _simulate_rule("!s", "password") is None  # filter rejects
+        # A filter opcode rejecting the word is signaled by a sentinel-suffixed
+        # tuple, not None -- see _simulate_rule's docstring.
+        rejected = _simulate_rule("!s", "password")
+        assert rejected is not None
+        assert rejected[0][-1].startswith(REJECT_SENTINEL_PREFIX)
 
 
 class TestExplainRuleEdgeCases:

@@ -1,12 +1,14 @@
 import pytest
-from hashcat_rosetta.cli import explain_rule
+from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, explain_rule
 from hashcat_rosetta.parser import RuleParser
 
 
 def _final(rule, word):
     """Return the final candidate, or None if the rule rejected the word."""
     steps = explain_rule(rule, word)
-    return None if not steps else steps[-1].rsplit(" → ", 1)[-1]
+    if not steps or steps[-1].startswith(REJECT_SENTINEL_PREFIX):
+        return None
+    return steps[-1].rsplit(" → ", 1)[-1]
 
 
 class TestLengthFilters:

@@ -1,9 +1,11 @@
-from hashcat_rosetta.cli import explain_rule
+from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, explain_rule
 
 
 def _final(rule, word):
     steps = explain_rule(rule, word)
-    return None if not steps else steps[-1].rsplit(" → ", 1)[-1]
+    if not steps or steps[-1].startswith(REJECT_SENTINEL_PREFIX):
+        return None
+    return steps[-1].rsplit(" → ", 1)[-1]
 
 
 class TestHexEncoding:
@@ -81,7 +83,11 @@ class TestMemoryOpcodes:
         """A no-op must still produce a step, so a reader never mistakes a
         silently-skipped opcode for one that legitimately did nothing."""
         steps = explain_rule("MQ4", "abc")
-        assert steps is None or any(s.startswith("4:") for s in steps)
+        assert (
+            steps is None
+            or steps[-1].startswith(REJECT_SENTINEL_PREFIX)
+            or any(s.startswith("4:") for s in steps)
+        )
 
 
 class TestMemoryInitialization:
