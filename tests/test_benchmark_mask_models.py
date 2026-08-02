@@ -110,12 +110,14 @@ class TestSeasonDigitsSpecialChecker:
         assert result is None
 
     def test_corrupted_special_token_fails(self):
-        # The exact qwen2.5:32b bug: "??s?d" parses as literal '?' + literal
-        # 's' + digit, not as a real ?s (special) token.
-        suggestions = [_suggestion("Summer??s?d")]
+        # The exact qwen2.5:32b bug: "??s" parses as a literal '?' + literal
+        # 's', not as a real ?s (special) token. Uses 2 digit tokens so the
+        # digit-count check passes and the special-token check is what
+        # actually fires.
+        suggestions = [_suggestion("?u?l?l?l?l?l?d?d??s")]
         result = benchmark_mask_models.PROMPTS[2].check(suggestions)
         assert result is not None
-        assert "?s" in result
+        assert "expected >= 1 special token" in result
 
     def test_too_few_digits_fails(self):
         suggestions = [_suggestion("Summer?d?s")]
@@ -422,6 +424,64 @@ class TestRunPromptForModel:
         assert result.judge_score is None
 
 
+class TestHostAlwaysLocal:
+    """Regression tests for the host=None -> OLLAMA_HOST env fallback bug.
+
+    run_prompt_for_model and benchmark_model must always drive generate_masks
+    and judge_score against LOCAL_HOST, never against whatever OLLAMA_HOST
+    happens to be set to in the environment (e.g. a remote host).
+    """
+
+    def test_run_prompt_for_model_uses_local_host_regardless_of_env(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "ollama.example.test:11434")
+
+        recorded_hosts: dict[str, str | None] = {}
+
+        def fake_generate_masks(description, **kwargs):
+            recorded_hosts["generate_masks"] = kwargs.get("host")
+            return [_suggestion("Summer?d?d?d?d?d?d")]
+
+        def fake_judge_score(prompt, suggestions, **kwargs):
+            recorded_hosts["judge_score"] = kwargs.get("host")
+            return 5
+
+        monkeypatch.setattr(benchmark_mask_models, "generate_masks", fake_generate_masks)
+        monkeypatch.setattr(benchmark_mask_models, "judge_score", fake_judge_score)
+
+        benchmark_mask_models.run_prompt_for_model("some-model", benchmark_mask_models.PROMPTS[0])
+
+        assert recorded_hosts["generate_masks"] == benchmark_mask_models.LOCAL_HOST
+        assert recorded_hosts["judge_score"] == benchmark_mask_models.LOCAL_HOST
+        assert recorded_hosts["generate_masks"] != "ollama.example.test:11434"
+
+    def test_benchmark_model_uses_local_host_regardless_of_env(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "ollama.example.test:11434")
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {"some-model": 3 * 1024**3},
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True
+        )
+
+        recorded_hosts: list[str | None] = []
+
+        def fake_run_prompt_for_model(model, prompt, **kwargs):
+            recorded_hosts.append(kwargs.get("host"))
+            return benchmark_mask_models.PromptResult(prompt.name, 1.0, None, 5)
+
+        monkeypatch.setattr(
+            benchmark_mask_models, "run_prompt_for_model", fake_run_prompt_for_model
+        )
+
+        benchmark_mask_models.benchmark_model("some-model")
+
+        assert recorded_hosts
+        assert all(h == benchmark_mask_models.LOCAL_HOST for h in recorded_hosts)
+        assert all(h != "ollama.example.test:11434" for h in recorded_hosts)
+
+
 class TestBenchmarkModel:
     def test_unpullable_model_hard_fails_every_prompt(self, monkeypatch):
         monkeypatch.setattr(
@@ -460,6 +520,23 @@ class TestBenchmarkModel:
         assert report.disk_size_gb == 3.0
         assert len(report.prompt_results) == len(benchmark_mask_models.PROMPTS)
         assert report.hard_fail_count == 0
+
+    def test_infrastructure_failure_hard_fails_every_prompt_without_crashing(self, monkeypatch):
+        def raising_ensure_model_pulled(model, **kwargs):
+            raise FileNotFoundError("ollama: command not found")
+
+        monkeypatch.setattr(
+            benchmark_mask_models, "ensure_model_pulled", raising_ensure_model_pulled
+        )
+
+        report = benchmark_mask_models.benchmark_model("some-model")
+
+        assert report.disk_size_gb is None
+        assert report.hard_fail_count == len(benchmark_mask_models.PROMPTS)
+        assert all(
+            r.hard_fail_reason is not None and "infrastructure error" in r.hard_fail_reason
+            for r in report.prompt_results
+        )
 
 
 class TestFormatReport:
@@ -511,3 +588,62 @@ class TestFormatReport:
         report_text = benchmark_mask_models.format_report(reports)
 
         assert "no candidate clears the bar" in report_text
+
+    def test_none_disk_size_renders_na_and_sorts_last(self):
+        reports = [
+            benchmark_mask_models.ModelReport(
+                "small-model",
+                2.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, None, 5)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+            benchmark_mask_models.ModelReport(
+                "unpullable-model",
+                None,
+                [
+                    benchmark_mask_models.PromptResult(
+                        p.name, 0.0, "model could not be pulled", None
+                    )
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+            benchmark_mask_models.ModelReport(
+                "big-model",
+                20.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, None, 4)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+        ]
+
+        report_text = benchmark_mask_models.format_report(reports)
+
+        assert "N/A" in report_text
+        assert "unpullable-model" in report_text
+        # The N/A (None) row must sort after both finite-size rows.
+        assert report_text.index("small-model") < report_text.index("unpullable-model")
+        assert report_text.index("big-model") < report_text.index("unpullable-model")
+
+
+class TestMain:
+    def test_main_wires_candidates_through_to_printed_report(self, monkeypatch, capsys):
+        def fake_benchmark_model(model: str):
+            return benchmark_mask_models.ModelReport(
+                model,
+                1.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, None, 5)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            )
+
+        monkeypatch.setattr(benchmark_mask_models, "benchmark_model", fake_benchmark_model)
+
+        benchmark_mask_models.main()
+
+        captured = capsys.readouterr()
+        assert benchmark_mask_models.CANDIDATES[0] in captured.out
+        assert "Recommendation:" in captured.out
