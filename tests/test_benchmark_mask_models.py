@@ -1,0 +1,513 @@
+"""Tests for scripts/benchmark_mask_models.py — pure-logic pieces only.
+
+The benchmark script lives in scripts/ (not in the package), so we import it
+via importlib, matching the convention in tests/test_opcode_sweep.py.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from hashcat_rosetta.mask import parse_hcmask_line
+from hashcat_rosetta.nlmask import MaskSuggestion
+
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "benchmark_mask_models.py"
+_spec = importlib.util.spec_from_file_location("benchmark_mask_models", _SCRIPT_PATH)
+assert _spec is not None and _spec.loader is not None
+benchmark_mask_models = importlib.util.module_from_spec(_spec)
+sys.modules["benchmark_mask_models"] = benchmark_mask_models
+_spec.loader.exec_module(benchmark_mask_models)
+
+
+def _suggestion(
+    mask_str: str, custom: list[str] | None = None, why: str = "test"
+) -> MaskSuggestion:
+    """Build a real, parsed MaskSuggestion for a hand-written hcmask line."""
+    custom = custom or []
+    if custom:
+        raw = ",".join(custom) + "," + mask_str
+    else:
+        raw = mask_str
+    line = parse_hcmask_line(raw)
+    return MaskSuggestion(mask=mask_str, custom_charsets=custom, why=why, line=line)
+
+
+class TestPromptResultAndModelReport:
+    def test_model_report_aggregates_hard_fails_and_scores(self):
+        results = [
+            benchmark_mask_models.PromptResult("a", 1.0, None, 5),
+            benchmark_mask_models.PromptResult("b", 2.0, "bad output", None),
+            benchmark_mask_models.PromptResult("c", 1.5, None, 3),
+        ]
+        report = benchmark_mask_models.ModelReport("test-model", 4.2, results)
+
+        assert report.hard_fail_count == 1
+        assert report.judge_scores == [5, 3]
+        assert report.mean_judge_score == 4.0
+        assert report.min_judge_score == 3
+        assert report.total_seconds == 4.5
+
+    def test_model_report_with_no_judge_scores(self):
+        results = [benchmark_mask_models.PromptResult("a", 1.0, "hard fail", None)]
+        report = benchmark_mask_models.ModelReport("test-model", 1.0, results)
+
+        assert report.judge_scores == []
+        assert report.mean_judge_score is None
+        assert report.min_judge_score is None
+
+
+class TestSummerDigitsChecker:
+    def test_correct_mask_passes(self):
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[0].check(suggestions)
+        assert result is None
+
+    def test_wrong_keyspace_fails(self):
+        suggestions = [_suggestion("Summer?d?d?d?d?d")]  # only 5 digits
+        result = benchmark_mask_models.PROMPTS[0].check(suggestions)
+        assert result is not None
+        assert "keyspace" in result
+
+    def test_multiple_suggestions_fails(self):
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d"), _suggestion("Winter?d?d?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[0].check(suggestions)
+        assert result is not None
+        assert "1 suggestion" in result
+
+
+class TestMushroomCategoriesChecker:
+    def test_multiple_literal_basewords_pass(self):
+        suggestions = [
+            _suggestion("Chanterelle?s?d"),
+            _suggestion("Chanterelle?d?s"),
+            _suggestion("Morel?s?d"),
+        ]
+        result = benchmark_mask_models.PROMPTS[1].check(suggestions)
+        assert result is None
+
+    def test_pattern_only_mask_fails(self):
+        suggestions = [_suggestion("?s?d"), _suggestion("?d?s")]
+        result = benchmark_mask_models.PROMPTS[1].check(suggestions)
+        assert result is not None
+        assert "literal baseword" in result
+
+    def test_single_suggestion_fails(self):
+        suggestions = [_suggestion("Morel?s?d")]
+        result = benchmark_mask_models.PROMPTS[1].check(suggestions)
+        assert result is not None
+        assert ">= 2" in result
+
+
+class TestSeasonDigitsSpecialChecker:
+    def test_correct_tokens_pass(self):
+        suggestions = [_suggestion("?u?l?l?l?l?l?d?d?s")]
+        result = benchmark_mask_models.PROMPTS[2].check(suggestions)
+        assert result is None
+
+    def test_corrupted_special_token_fails(self):
+        # The exact qwen2.5:32b bug: "??s?d" parses as literal '?' + literal
+        # 's' + digit, not as a real ?s (special) token.
+        suggestions = [_suggestion("Summer??s?d")]
+        result = benchmark_mask_models.PROMPTS[2].check(suggestions)
+        assert result is not None
+        assert "?s" in result
+
+    def test_too_few_digits_fails(self):
+        suggestions = [_suggestion("Summer?d?s")]
+        result = benchmark_mask_models.PROMPTS[2].check(suggestions)
+        assert result is not None
+        assert "digit" in result
+
+
+class TestFourOrSixDigitsChecker:
+    def test_exactly_two_suggestions_pass(self):
+        suggestions = [_suggestion("?d?d?d?d"), _suggestion("?d?d?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[3].check(suggestions)
+        assert result is None
+
+    def test_one_suggestion_fails(self):
+        suggestions = [_suggestion("?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[3].check(suggestions)
+        assert result is not None
+
+
+class TestVowelCustomCharsetChecker:
+    def test_correct_custom_charset_passes(self):
+        suggestions = [_suggestion("?1?1?1?1?d?d", custom=["aeiou"])]
+        result = benchmark_mask_models.PROMPTS[4].check(suggestions)
+        assert result is None
+
+    def test_non_vowel_charset_fails(self):
+        suggestions = [_suggestion("?1?1?1?1?d?d", custom=["abcde"])]
+        result = benchmark_mask_models.PROMPTS[4].check(suggestions)
+        assert result is not None
+        assert "vowel" in result
+
+    def test_no_custom_charset_fails(self):
+        suggestions = [_suggestion("?l?l?l?l?d?d")]
+        result = benchmark_mask_models.PROMPTS[4].check(suggestions)
+        assert result is not None
+        assert "custom charset" in result
+
+
+class TestHexDigitsChecker:
+    def test_correct_mask_passes(self):
+        suggestions = [_suggestion("?h?h?h?h?d?d")]
+        result = benchmark_mask_models.PROMPTS[5].check(suggestions)
+        assert result is None
+
+    def test_wrong_hex_count_fails(self):
+        suggestions = [_suggestion("?h?h?h?d?d")]
+        result = benchmark_mask_models.PROMPTS[5].check(suggestions)
+        assert result is not None
+        assert "?h" in result
+
+
+class TestLiteralQuestionMarkChecker:
+    def test_correct_mask_passes(self):
+        suggestions = [_suggestion("???d?d?d")]
+        result = benchmark_mask_models.PROMPTS[6].check(suggestions)
+        assert result is None
+
+    def test_missing_escape_fails(self):
+        # A model that drops the escape entirely and emits a bare '?d?d?d'
+        # with no literal '?' at all must fail this check.
+        suggestions = [_suggestion("?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[6].check(suggestions)
+        assert result is not None
+        assert "??" in result
+
+
+class _FakeHTTPResponse:
+    """Minimal context-manager stand-in for urllib's response object."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+class TestListLocalModels:
+    def test_parses_tags_response(self, monkeypatch):
+        payload = json.dumps(
+            {
+                "models": [
+                    {"name": "qwen2.5:32b", "size": 19851349669},
+                    {"name": "granite4:3b", "size": 2000000000},
+                ]
+            }
+        ).encode()
+
+        def fake_urlopen(url, timeout=None):
+            assert "api/tags" in url
+            return _FakeHTTPResponse(payload)
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+
+        result = benchmark_mask_models.list_local_models()
+
+        assert result == {"qwen2.5:32b": 19851349669, "granite4:3b": 2000000000}
+
+    def test_empty_models_list(self, monkeypatch):
+        payload = json.dumps({"models": []}).encode()
+        monkeypatch.setattr(
+            benchmark_mask_models.urllib.request,
+            "urlopen",
+            lambda url, timeout=None: _FakeHTTPResponse(payload),
+        )
+
+        assert benchmark_mask_models.list_local_models() == {}
+
+
+class TestEnsureModelPulled:
+    def test_already_present_skips_pull(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {"granite4:3b": 123},
+        )
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError(
+                "subprocess.run should not be called when model is already present"
+            )
+
+        monkeypatch.setattr(benchmark_mask_models.subprocess, "run", fail_if_called)
+
+        assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is True
+
+    def test_pulls_missing_model_successfully(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+        )
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, returncode=0)
+
+        monkeypatch.setattr(benchmark_mask_models.subprocess, "run", fake_run)
+
+        assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is True
+        assert calls == [["ollama", "pull", "granite4:3b"]]
+
+    def test_pull_failure_returns_false(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models.subprocess,
+            "run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, returncode=1),
+        )
+
+        assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is False
+
+
+def _judge_response(content: str) -> SimpleNamespace:
+    message = SimpleNamespace(content=content)
+    choice = SimpleNamespace(message=message)
+    return SimpleNamespace(choices=[choice])
+
+
+class _FakeJudgeCompletions:
+    def __init__(self, responses: list[str]):
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        content = self._responses.pop(0)
+        return _judge_response(content)
+
+
+class _FakeJudgeClient:
+    def __init__(self, completions):
+        self.chat = SimpleNamespace(completions=completions)
+
+
+class TestJudgeScore:
+    def test_valid_score_returned(self):
+        completions = _FakeJudgeCompletions([json.dumps({"score": 4, "reason": "close enough"})])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        score = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+        )
+
+        assert score == 4
+        assert len(completions.calls) == 1
+
+    def test_out_of_range_score_raises_judge_error(self):
+        completions = _FakeJudgeCompletions([json.dumps({"score": 9, "reason": "nonsense"})])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_malformed_json_raises_judge_error(self):
+        completions = _FakeJudgeCompletions(["not json at all"])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_prompt_and_suggestions_included_in_request(self):
+        completions = _FakeJudgeCompletions([json.dumps({"score": 5, "reason": "good"})])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+        )
+
+        user_message = completions.calls[0]["messages"][-1]["content"]
+        assert "Summer?d?d?d?d?d?d" in user_message
+        assert benchmark_mask_models.PROMPTS[0].description in user_message
+
+
+class TestRunPromptForModel:
+    def test_hard_fail_when_generate_masks_raises(self, monkeypatch):
+        def raising_generate_masks(description, **kwargs):
+            raise benchmark_mask_models.MaskGenerationError("simulated failure")
+
+        monkeypatch.setattr(benchmark_mask_models, "generate_masks", raising_generate_masks)
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is not None
+        assert "simulated failure" in result.hard_fail_reason
+        assert result.judge_score is None
+
+    def test_hard_fail_when_check_fails(self, monkeypatch):
+        # generate_masks succeeds, but returns output the checker rejects.
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("?d?d?d?d?d")],  # wrong count
+        )
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is not None
+        assert result.judge_score is None
+
+    def test_passes_and_gets_judge_score(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "judge_score", lambda prompt, suggestions, **kwargs: 5
+        )
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is None
+        assert result.judge_score == 5
+
+    def test_judge_failure_does_not_crash(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+
+        def raising_judge(prompt, suggestions, **kwargs):
+            raise benchmark_mask_models.JudgeError("judge is down")
+
+        monkeypatch.setattr(benchmark_mask_models, "judge_score", raising_judge)
+
+        result = benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0]
+        )
+
+        assert result.hard_fail_reason is None
+        assert result.judge_score is None
+
+
+class TestBenchmarkModel:
+    def test_unpullable_model_hard_fails_every_prompt(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: False
+        )
+
+        report = benchmark_mask_models.benchmark_model("nonexistent:model")
+
+        assert report.disk_size_gb is None
+        assert report.hard_fail_count == len(benchmark_mask_models.PROMPTS)
+
+    def test_present_model_runs_all_prompts(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {"some-model": 3 * 1024**3},
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "run_prompt_for_model",
+            lambda model, prompt, **kwargs: benchmark_mask_models.PromptResult(
+                prompt.name, 1.0, None, 5
+            ),
+        )
+
+        report = benchmark_mask_models.benchmark_model("some-model")
+
+        assert report.disk_size_gb == 3.0
+        assert len(report.prompt_results) == len(benchmark_mask_models.PROMPTS)
+        assert report.hard_fail_count == 0
+
+
+class TestFormatReport:
+    def test_recommends_smallest_passing_model(self):
+        reports = [
+            benchmark_mask_models.ModelReport(
+                "big-good-model",
+                20.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, None, 5)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+            benchmark_mask_models.ModelReport(
+                "small-good-model",
+                3.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, None, 4)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+            benchmark_mask_models.ModelReport(
+                "small-bad-model",
+                2.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, "hard fail", None)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            ),
+        ]
+
+        report_text = benchmark_mask_models.format_report(reports)
+
+        assert "small-good-model" in report_text
+        assert "Recommendation: small-good-model" in report_text
+
+    def test_no_candidate_clears_the_bar(self):
+        reports = [
+            benchmark_mask_models.ModelReport(
+                "bad-model",
+                2.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 1.0, "hard fail", None)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            )
+        ]
+
+        report_text = benchmark_mask_models.format_report(reports)
+
+        assert "no candidate clears the bar" in report_text
