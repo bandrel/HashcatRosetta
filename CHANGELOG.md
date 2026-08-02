@@ -79,6 +79,17 @@ for exact timing.
   written to an `.hcmask` file via `-o`/`--mask-out`. All descriptions and generations
   remain local to the machine — no cloud API calls are made.
 - **`openai` dependency (>=2.52.0)** for OpenAI-compatible API calls to local Ollama.
+- **`scripts/benchmark_mask_models.py`**, a standalone harness that runs 7
+  candidate local Ollama models against 7 fixed `--mask` prompts, gating each
+  on a deterministic checker before scoring with an LLM judge
+  (`qwen3-coder:latest`), then recommends the smallest model with zero hard
+  fails and a mean judge score >= 4. Not wired into the CLI or installed
+  package. First real run (`granite4:3b` through `qwen2.5:32b`) found no
+  candidate clears the bar: `qwen3-coder:latest` was closest with a single
+  hard fail (an off-by-one `?d` count on the `literal_question_mark`
+  prompt), `qwen2.5:32b` failed two prompts including silently corrupting a
+  custom-charset keyspace. `nlmask.py`'s shipped default model is unchanged
+  pending a follow-up decision.
 
 ## [0.4.0] - 2026-07-29
 

@@ -1,6 +1,6 @@
 # Mask Model Benchmark Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build a standalone script that benchmarks a curated shortlist of small,
 non-thinking local Ollama models against 7 fixed hcmask-generation prompts, scoring
@@ -71,7 +71,7 @@ This task has no network calls and no LLM calls — every function here is pure 
 over `MaskSuggestion`/`HcmaskLine` objects you construct by hand in tests via
 `hashcat_rosetta.mask.parse_hcmask_line`.
 
-- [ ] **Step 1: Write the failing tests for the dataclasses and one checker**
+- [x] **Step 1: Write the failing tests for the dataclasses and one checker**
 
 Create `tests/test_benchmark_mask_models.py`:
 
@@ -151,12 +151,12 @@ class TestSummerDigitsChecker:
         assert "1 suggestion" in result
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v`
 Expected: FAIL with `ModuleNotFoundError` (script doesn't exist yet).
 
-- [ ] **Step 3: Write the module header, dataclasses, and the first checker**
+- [x] **Step 3: Write the module header, dataclasses, and the first checker**
 
 Create `scripts/benchmark_mask_models.py`:
 
@@ -314,12 +314,12 @@ but not yet used by this step's code alone; they ARE used by the checkers added 
 Step 7 below, in this same task, so this is not an unused-import problem at any commit
 boundary (Step 7 lands before Task 1's Step 9 lint check runs).
 
-- [ ] **Step 4: Run the tests to verify Step 1's tests now pass**
+- [x] **Step 4: Run the tests to verify Step 1's tests now pass**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v`
 Expected: All `TestPromptResultAndModelReport` and `TestSummerDigitsChecker` tests PASS.
 
-- [ ] **Step 5: Add the remaining 6 checkers, their prompts, and their tests**
+- [x] **Step 5: Add the remaining 6 checkers, their prompts, and their tests**
 
 Append to `tests/test_benchmark_mask_models.py`:
 
@@ -427,13 +427,13 @@ class TestLiteralQuestionMarkChecker:
         assert "??" in result
 ```
 
-- [ ] **Step 6: Run the new tests to verify they fail**
+- [x] **Step 6: Run the new tests to verify they fail**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v`
 Expected: FAIL — `IndexError: list index out of range` on `PROMPTS[1]` through
 `PROMPTS[6]` (only 1 prompt exists so far).
 
-- [ ] **Step 7: Add the remaining 6 checker functions and prompts**
+- [x] **Step 7: Add the remaining 6 checker functions and prompts**
 
 In `scripts/benchmark_mask_models.py`, insert these functions directly above the
 `PROMPTS: list[BenchmarkPrompt] = [` line, and replace that list to include all 7
@@ -559,13 +559,13 @@ PROMPTS: list[BenchmarkPrompt] = [
 ]
 ```
 
-- [ ] **Step 8: Run all tests to verify they pass**
+- [x] **Step 8: Run all tests to verify they pass**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v`
 Expected: All tests PASS (20 tests: 2 dataclass + 3 summer + 3 mushroom + 3 season +
 2 four-or-six + 3 vowel + 2 hex + 2 literal-question-mark).
 
-- [ ] **Step 9: Lint, format, typecheck**
+- [x] **Step 9: Lint, format, typecheck**
 
 Run:
 ```bash
@@ -578,7 +578,7 @@ isn't used yet at this point in the file — fix by removing it (only `dataclass
 `Callable`, `expand_custom_charsets`, `keyspace`, `tokens`, `MaskSuggestion` should be
 imported after this task; do not add Task 2/3/4's imports early).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add scripts/benchmark_mask_models.py tests/test_benchmark_mask_models.py
@@ -601,7 +601,7 @@ git commit -m "feat(benchmark): add fixed prompts and deterministic checkers"
   LOCAL_HOST) -> bool` (True if the model is present after this call, whether it was
   already there or successfully pulled).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_benchmark_mask_models.py`. First add the two new stdlib imports
 this step's tests need, at the top of the test file alongside the existing imports:
@@ -705,13 +705,13 @@ class TestEnsureModelPulled:
         assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is False
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v -k "ListLocalModels or EnsureModelPulled"`
 Expected: FAIL with `AttributeError: module 'benchmark_mask_models' has no attribute
 'urllib'` (or `'list_local_models'`).
 
-- [ ] **Step 3: Add imports and implement `list_local_models`/`ensure_model_pulled`**
+- [x] **Step 3: Add imports and implement `list_local_models`/`ensure_model_pulled`**
 
 In `scripts/benchmark_mask_models.py`, add two stdlib imports to the top import block
 (directly below `from __future__ import annotations`):
@@ -746,12 +746,12 @@ def ensure_model_pulled(model: str, *, host: str = LOCAL_HOST) -> bool:
     return result.returncode == 0
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v -k "ListLocalModels or EnsureModelPulled"`
 Expected: All 5 tests PASS.
 
-- [ ] **Step 5: Run the full test file, lint, format, typecheck**
+- [x] **Step 5: Run the full test file, lint, format, typecheck**
 
 ```bash
 uv run pytest tests/test_benchmark_mask_models.py -v
@@ -761,7 +761,7 @@ uv run mypy scripts/benchmark_mask_models.py
 ```
 Expected: everything passes/clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/benchmark_mask_models.py tests/test_benchmark_mask_models.py
@@ -792,7 +792,7 @@ this test file (`_FakeJudgeCompletions`/`_FakeJudgeClient`/`_judge_response`) ra
 than importing across test files, matching how this repo keeps each test file
 self-contained.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add one new import to the top of `tests/test_benchmark_mask_models.py`:
 
@@ -872,13 +872,13 @@ class TestJudgeScore:
         assert benchmark_mask_models.PROMPTS[0].description in user_message
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v -k TestJudgeScore`
 Expected: FAIL with `AttributeError: module 'benchmark_mask_models' has no attribute
 'judge_score'`.
 
-- [ ] **Step 3: Add imports and implement `JudgeError`, `_build_judge_prompt`, `judge_score`**
+- [x] **Step 3: Add imports and implement `JudgeError`, `_build_judge_prompt`, `judge_score`**
 
 In `scripts/benchmark_mask_models.py`, add to the top import block: change
 `from hashcat_rosetta.mask import expand_custom_charsets, keyspace, tokens` to also
@@ -1005,12 +1005,12 @@ which Task 2 placed after `JUDGE_MODEL`) — reorder so `JUDGE_SCHEMA` through
 dataclass except `_build_judge_prompt`/`judge_score` themselves which come after it as
 shown.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v -k TestJudgeScore`
 Expected: All 4 tests PASS.
 
-- [ ] **Step 5: Run the full test file, lint, format, typecheck**
+- [x] **Step 5: Run the full test file, lint, format, typecheck**
 
 ```bash
 uv run pytest tests/test_benchmark_mask_models.py -v
@@ -1020,7 +1020,7 @@ uv run mypy scripts/benchmark_mask_models.py
 ```
 Expected: everything passes/clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/benchmark_mask_models.py tests/test_benchmark_mask_models.py
@@ -1043,7 +1043,7 @@ git commit -m "feat(benchmark): add LLM judge scoring"
   `format_report(reports: list[ModelReport]) -> str`, `main() -> None` (the script's
   entry point, and the file's first and only `if __name__ == "__main__":` block).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_benchmark_mask_models.py`:
 
@@ -1174,13 +1174,13 @@ class TestFormatReport:
         assert "no candidate clears the bar" in report_text
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v -k "RunPromptForModel or BenchmarkModel or FormatReport"`
 Expected: FAIL with `AttributeError: module 'benchmark_mask_models' has no attribute
 'generate_masks'` (or `'run_prompt_for_model'`/`'benchmark_model'`/`'format_report'`).
 
-- [ ] **Step 3: Add imports and implement orchestration, report, and main()**
+- [x] **Step 3: Add imports and implement orchestration, report, and main()**
 
 In `scripts/benchmark_mask_models.py`, add three stdlib imports to the top import
 block (alongside `json`, `subprocess`, `urllib.request` from Task 2):
@@ -1283,14 +1283,14 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_benchmark_mask_models.py -v`
 Expected: All tests in the file PASS (37 total: 20 from Task 1 + 5 from Task 2 + 4
 from Task 3 + 8 from Task 4's three new test classes — count the actual collected
 total and confirm it matches `-v`'s printed count, don't just trust this arithmetic).
 
-- [ ] **Step 5: Lint, format, typecheck, full project test suite**
+- [x] **Step 5: Lint, format, typecheck, full project test suite**
 
 ```bash
 uv run ruff check scripts/benchmark_mask_models.py tests/test_benchmark_mask_models.py
@@ -1301,7 +1301,7 @@ uv run pytest -q
 Expected: everything clean, full suite passes (this script has no runtime import
 side-effects on the shipped package, so the existing suite should be unaffected).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/benchmark_mask_models.py tests/test_benchmark_mask_models.py
