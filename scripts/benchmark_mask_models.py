@@ -24,6 +24,9 @@ candidates.
 
 from __future__ import annotations
 
+import json
+import subprocess
+import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
@@ -43,6 +46,26 @@ CANDIDATES: list[str] = [
 ]
 
 JUDGE_MODEL = "qwen3-coder:latest"
+
+
+def list_local_models(host: str = LOCAL_HOST) -> dict[str, int]:
+    """Return {model_name: size_in_bytes} for every model on the local Ollama."""
+    url = f"{host.rstrip('/')}/api/tags"
+    with urllib.request.urlopen(url, timeout=10) as response:
+        data = json.loads(response.read())
+    return {m["name"]: m["size"] for m in data.get("models", [])}
+
+
+def ensure_model_pulled(model: str, *, host: str = LOCAL_HOST) -> bool:
+    """Pull `model` if it isn't already present locally.
+
+    Returns True if the model is present after this call (whether it was
+    already there or the pull succeeded), False if the pull failed.
+    """
+    if model in list_local_models(host):
+        return True
+    result = subprocess.run(["ollama", "pull", model], capture_output=True, timeout=1800)
+    return result.returncode == 0
 
 
 @dataclass

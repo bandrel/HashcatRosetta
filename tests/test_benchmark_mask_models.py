@@ -7,6 +7,8 @@ via importlib, matching the convention in tests/test_opcode_sweep.py.
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -178,3 +180,100 @@ class TestLiteralQuestionMarkChecker:
         result = benchmark_mask_models.PROMPTS[6].check(suggestions)
         assert result is not None
         assert "??" in result
+
+
+class _FakeHTTPResponse:
+    """Minimal context-manager stand-in for urllib's response object."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+class TestListLocalModels:
+    def test_parses_tags_response(self, monkeypatch):
+        payload = json.dumps(
+            {
+                "models": [
+                    {"name": "qwen2.5:32b", "size": 19851349669},
+                    {"name": "granite4:3b", "size": 2000000000},
+                ]
+            }
+        ).encode()
+
+        def fake_urlopen(url, timeout=None):
+            assert "api/tags" in url
+            return _FakeHTTPResponse(payload)
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+
+        result = benchmark_mask_models.list_local_models()
+
+        assert result == {"qwen2.5:32b": 19851349669, "granite4:3b": 2000000000}
+
+    def test_empty_models_list(self, monkeypatch):
+        payload = json.dumps({"models": []}).encode()
+        monkeypatch.setattr(
+            benchmark_mask_models.urllib.request,
+            "urlopen",
+            lambda url, timeout=None: _FakeHTTPResponse(payload),
+        )
+
+        assert benchmark_mask_models.list_local_models() == {}
+
+
+class TestEnsureModelPulled:
+    def test_already_present_skips_pull(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {"granite4:3b": 123},
+        )
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError(
+                "subprocess.run should not be called when model is already present"
+            )
+
+        monkeypatch.setattr(benchmark_mask_models.subprocess, "run", fail_if_called)
+
+        assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is True
+
+    def test_pulls_missing_model_successfully(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+        )
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, returncode=0)
+
+        monkeypatch.setattr(benchmark_mask_models.subprocess, "run", fake_run)
+
+        assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is True
+        assert calls == [["ollama", "pull", "granite4:3b"]]
+
+    def test_pull_failure_returns_false(self, monkeypatch):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "list_local_models",
+            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models.subprocess,
+            "run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, returncode=1),
+        )
+
+        assert benchmark_mask_models.ensure_model_pulled("granite4:3b") is False
