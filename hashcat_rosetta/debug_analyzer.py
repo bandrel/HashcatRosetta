@@ -88,6 +88,27 @@ class DebugAnalyzer:
         self.entries = self.parser.parse_debug_lines(lines)
         return self._compute_analysis()
 
+    def analyze_debug_files(self, filepaths: list[str]) -> dict:
+        """
+        Analyze multiple debug files, detecting format/mode independently per file.
+
+        Prefer this over concatenating each file's lines and calling
+        :meth:`analyze_debug_lines` once: format/mode detection samples the
+        start of whatever list it is given, so a merged batch spanning a
+        mode-4/mode-5 switch lets one file's sample decide the mode for both,
+        misparsing the other file's lines as malformed. See
+        :meth:`DebugLogParser.parse_debug_files`.
+
+        Args:
+            filepaths: Paths to the debug files, in the order to concatenate
+                their entries.
+
+        Returns:
+            Dictionary containing analysis results
+        """
+        self.entries = self.parser.parse_debug_files(filepaths)
+        return self._compute_analysis()
+
     def _compute_analysis(self) -> dict:
         """Compute statistics from parsed entries."""
         self.rule_stats.clear()
