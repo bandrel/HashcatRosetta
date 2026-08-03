@@ -26,8 +26,8 @@ this repo's own `hashcat_rosetta.mask`/`hashcat_rosetta.nlmask` modules.
 
 - Script lives at `scripts/benchmark_mask_models.py` — not part of the installed
   package, not wired into the CLI, not imported by any shipped module.
-- Runs against the **local** Ollama only (`http://localhost:11434`), never gpu-host or
-  any remote host — this is a design requirement from the spec (the security property
+- Runs against the **local** Ollama only (`http://localhost:11434`), never a remote
+  team/shared host — this is a design requirement from the spec (the security property
   of `--mask` is local-only, so the model chosen for the default must be evaluated on
   realistic local hardware).
 - Candidate list is exactly these 7 model names, in this order (spec's Candidates
