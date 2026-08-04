@@ -1072,6 +1072,12 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     default=None,
     help="Override the Ollama host/URL used for --mask (default: OLLAMA_HOST env var)",
 )
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Print the model's reasoning trace to stderr (used with --mask)",
+)
 @click.pass_context
 def main(
     ctx,
@@ -1093,6 +1099,7 @@ def main(
     mask_out,
     model,
     ollama_host,
+    debug,
 ):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
 
@@ -1134,7 +1141,7 @@ def main(
         from . import nlmask
 
         try:
-            suggestions = nlmask.generate_masks(mask, model=model, host=ollama_host)
+            suggestions = nlmask.generate_masks(mask, model=model, host=ollama_host, debug=debug)
         except nlmask.MaskGenerationError as e:
             click.echo(f"[!] {e}", err=True)
             sys.exit(1)
