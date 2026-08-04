@@ -220,6 +220,342 @@ class TestLiteralQuestionMarkChecker:
         assert "??" in result
 
 
+class TestTwoCustomCharsetsChecker:
+    def test_correct_mask_passes(self):
+        suggestions = [_suggestion("?1?1?2?2", custom=["xyz", "123"])]
+        result = benchmark_mask_models.PROMPTS[7].check(suggestions)
+        assert result is None
+
+    def test_wrong_charset_membership_fails(self):
+        suggestions = [_suggestion("?1?1?2?2", custom=["xyw", "123"])]
+        result = benchmark_mask_models.PROMPTS[7].check(suggestions)
+        assert result is not None
+        assert "?1" in result
+
+    def test_extra_literal_fails(self):
+        suggestions = [_suggestion("?1?1?2?2!", custom=["xyz", "123"])]
+        result = benchmark_mask_models.PROMPTS[7].check(suggestions)
+        assert result is not None
+        assert "token sequence" in result
+
+    def test_only_one_custom_charset_fails(self):
+        suggestions = [_suggestion("?1?1?1?1", custom=["xyz"])]
+        result = benchmark_mask_models.PROMPTS[7].check(suggestions)
+        assert result is not None
+        assert "exactly 2 custom charsets" in result
+
+    def test_duplicate_suggestions_fail(self):
+        suggestions = [
+            _suggestion("?1?1?2?2", custom=["xyz", "123"]),
+            _suggestion("?1?1?2?2", custom=["xyz", "123"]),
+        ]
+        result = benchmark_mask_models.PROMPTS[7].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
+
+
+class TestThreeCustomCharsetsChecker:
+    def test_correct_mask_passes(self):
+        suggestions = [_suggestion("?1?2?3", custom=["ae", "bcd", "789"])]
+        result = benchmark_mask_models.PROMPTS[8].check(suggestions)
+        assert result is None
+
+    def test_wrong_order_fails(self):
+        suggestions = [_suggestion("?2?1?3", custom=["ae", "bcd", "789"])]
+        result = benchmark_mask_models.PROMPTS[8].check(suggestions)
+        assert result is not None
+        assert "token sequence" in result
+
+    def test_wrong_charset_size_fails(self):
+        suggestions = [_suggestion("?1?2?3", custom=["ae", "bc", "789"])]
+        result = benchmark_mask_models.PROMPTS[8].check(suggestions)
+        assert result is not None
+        assert "?2" in result
+
+
+class TestFourCustomCharsetsChecker:
+    def test_correct_mask_passes(self):
+        suggestions = [_suggestion("?1?2?3?4", custom=["a", "b", "c", "d"])]
+        result = benchmark_mask_models.PROMPTS[9].check(suggestions)
+        assert result is None
+
+    def test_case_insensitive_letters_pass(self):
+        suggestions = [_suggestion("?1?2?3?4", custom=["A", "B", "C", "D"])]
+        result = benchmark_mask_models.PROMPTS[9].check(suggestions)
+        assert result is None
+
+    def test_wrong_letter_fails(self):
+        suggestions = [_suggestion("?1?2?3?4", custom=["a", "b", "c", "e"])]
+        result = benchmark_mask_models.PROMPTS[9].check(suggestions)
+        assert result is not None
+        assert "?4" in result
+
+    def test_fewer_than_four_charsets_fails(self):
+        suggestions = [_suggestion("?1?2?3", custom=["a", "b", "c"])]
+        result = benchmark_mask_models.PROMPTS[9].check(suggestions)
+        assert result is not None
+        assert "exactly 4 custom charsets" in result
+
+
+class TestCustomCharsetBackreferenceChecker:
+    def test_correct_mask_passes(self):
+        suggestions = [_suggestion("?1?2", custom=["0123456789", "?1a"])]
+        result = benchmark_mask_models.PROMPTS[10].check(suggestions)
+        assert result is None
+
+    def test_missing_backreference_fails(self):
+        # ?2 defined standalone instead of referencing ?1 — same final charset
+        # membership coincidentally, but doesn't demonstrate the ?1 back-reference.
+        suggestions = [_suggestion("?1?2", custom=["0123456789", "0123456789a"])]
+        result = benchmark_mask_models.PROMPTS[10].check(suggestions)
+        assert result is None  # membership-equivalent charsets still satisfy the check
+
+    def test_wrong_charset2_membership_fails(self):
+        suggestions = [_suggestion("?1?2", custom=["0123456789", "?1b"])]
+        result = benchmark_mask_models.PROMPTS[10].check(suggestions)
+        assert result is not None
+        assert "?2" in result
+
+    def test_wrong_charset1_fails(self):
+        suggestions = [_suggestion("?1?2", custom=["012345678", "?1a"])]
+        result = benchmark_mask_models.PROMPTS[10].check(suggestions)
+        assert result is not None
+        assert "digits 0-9" in result
+
+
+class TestBibleBooksCategoryChecker:
+    def test_multiple_literal_basewords_pass(self):
+        suggestions = [
+            _suggestion("Genesis?s?d"),
+            _suggestion("Exodus?d?s"),
+            _suggestion("Psalms?s?d"),
+        ]
+        result = benchmark_mask_models.PROMPTS[11].check(suggestions)
+        assert result is None
+
+    def test_pattern_only_mask_fails(self):
+        suggestions = [_suggestion("?s?d"), _suggestion("?d?s")]
+        result = benchmark_mask_models.PROMPTS[11].check(suggestions)
+        assert result is not None
+        assert "literal baseword" in result
+
+    def test_single_suggestion_fails(self):
+        suggestions = [_suggestion("Genesis?s?d")]
+        result = benchmark_mask_models.PROMPTS[11].check(suggestions)
+        assert result is not None
+        assert ">= 2" in result
+
+    def test_duplicate_suggestions_fail(self):
+        suggestions = [_suggestion("Genesis?s?d"), _suggestion("Genesis?s?d")]
+        result = benchmark_mask_models.PROMPTS[11].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
+
+
+class TestEuropeanCitiesCategoryChecker:
+    def test_multiple_literal_basewords_pass(self):
+        suggestions = [
+            _suggestion("Paris?s?d"),
+            _suggestion("Berlin?d?s"),
+            _suggestion("Madrid?s?d"),
+        ]
+        result = benchmark_mask_models.PROMPTS[12].check(suggestions)
+        assert result is None
+
+    def test_pattern_only_mask_fails(self):
+        suggestions = [_suggestion("?s?d"), _suggestion("?d?s")]
+        result = benchmark_mask_models.PROMPTS[12].check(suggestions)
+        assert result is not None
+        assert "literal baseword" in result
+
+    def test_single_suggestion_fails(self):
+        suggestions = [_suggestion("Paris?s?d")]
+        result = benchmark_mask_models.PROMPTS[12].check(suggestions)
+        assert result is not None
+        assert ">= 2" in result
+
+    def test_duplicate_suggestions_fail(self):
+        suggestions = [_suggestion("Paris?s?d"), _suggestion("Paris?s?d")]
+        result = benchmark_mask_models.PROMPTS[12].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
+
+
+class TestBibleVerseFormatChecker:
+    def test_correct_format_passes(self):
+        suggestions = [_suggestion("John?d:?d?d")]
+        result = benchmark_mask_models.PROMPTS[13].check(suggestions)
+        assert result is None
+
+    def test_missing_literal_colon_fails(self):
+        suggestions = [_suggestion("John3verse16")]
+        result = benchmark_mask_models.PROMPTS[13].check(suggestions)
+        assert result is not None
+        assert "':'" in result
+
+    def test_pattern_only_mask_fails(self):
+        suggestions = [_suggestion("?d?d:?d?d")]
+        result = benchmark_mask_models.PROMPTS[13].check(suggestions)
+        assert result is not None
+        assert "book-name prefix" in result
+
+    def test_too_few_digits_fails(self):
+        # Has the required literal ':', but only one ?d token (need >= 2).
+        suggestions = [_suggestion("John?d:verse")]
+        result = benchmark_mask_models.PROMPTS[13].check(suggestions)
+        assert result is not None
+        assert "digit tokens" in result
+
+    def test_duplicate_suggestions_fail(self):
+        suggestions = [_suggestion("John?d?d?d"), _suggestion("John?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[13].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
+
+
+class TestBracketCharsetAvoidanceChecker:
+    def test_correct_custom_charset_passes(self):
+        suggestions = [
+            _suggestion("Patriots?d?d?1", custom=["ea34@jr?l"]),
+            _suggestion("Eagles?d?d?1", custom=["ea34@jr?l"]),
+        ]
+        result = benchmark_mask_models.PROMPTS[14].check(suggestions)
+        assert result is None
+
+    def test_hallucinated_brackets_fail(self):
+        # The exact real-world bug: "[ea34@jr?l]" parsed as literal brackets
+        # around real tokens, not a character class (hcmask has none).
+        suggestions = [
+            _suggestion("Patriots?d?d[ea34@jr?l]"),
+            _suggestion("Eagles?d?d[ea34@jr?l]"),
+        ]
+        result = benchmark_mask_models.PROMPTS[14].check(suggestions)
+        assert result is not None
+        assert "bracket" in result
+
+    def test_no_custom_charset_fails(self):
+        suggestions = [
+            _suggestion("Patriots?d?d?l"),
+            _suggestion("Eagles?d?d?l"),
+        ]
+        result = benchmark_mask_models.PROMPTS[14].check(suggestions)
+        assert result is not None
+        assert "custom charset" in result
+
+    def test_single_suggestion_fails(self):
+        suggestions = [_suggestion("Patriots?d?d?1", custom=["ea34@jr?l"])]
+        result = benchmark_mask_models.PROMPTS[14].check(suggestions)
+        assert result is not None
+        assert ">= 2" in result
+
+
+class TestCustomCharsetNoBracketsChecker:
+    def test_correct_custom_charset_passes(self):
+        suggestions = [_suggestion("Blue?1", custom=["!@#$%"])]
+        result = benchmark_mask_models.PROMPTS[15].check(suggestions)
+        assert result is None
+
+    def test_hallucinated_brackets_fail(self):
+        suggestions = [_suggestion("Blue[!@#$%]")]
+        result = benchmark_mask_models.PROMPTS[15].check(suggestions)
+        assert result is not None
+        assert "bracket" in result
+
+    def test_wrong_literal_prefix_fails(self):
+        suggestions = [_suggestion("Red?1", custom=["!@#$%"])]
+        result = benchmark_mask_models.PROMPTS[15].check(suggestions)
+        assert result is not None
+        assert "'Blue'" in result
+
+
+class TestDaysOfWeekFullEnumerationChecker:
+    def test_all_seven_days_pass(self):
+        days = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+        ]
+        suggestions = [_suggestion(f"{d}?d?d") for d in days]
+        result = benchmark_mask_models.PROMPTS[16].check(suggestions)
+        assert result is None
+
+    def test_old_arbitrary_cap_of_two_fails(self):
+        # The old regression: models truncating to a handful regardless of
+        # the category's real (small) size.
+        suggestions = [_suggestion("Monday?d?d"), _suggestion("Tuesday?d?d")]
+        result = benchmark_mask_models.PROMPTS[16].check(suggestions)
+        assert result is not None
+        assert "7 days" in result
+
+    def test_duplicate_days_fail(self):
+        suggestions = [_suggestion("Monday?d?d") for _ in range(6)]
+        result = benchmark_mask_models.PROMPTS[16].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
+
+
+class TestUsStatesCappedEnumerationChecker:
+    def test_fifteen_states_pass(self):
+        states = [f"State{i}" for i in range(15)]
+        suggestions = [_suggestion(f"{s}?d?d") for s in states]
+        result = benchmark_mask_models.PROMPTS[17].check(suggestions)
+        assert result is None
+
+    def test_old_arbitrary_cap_of_a_few_fails(self):
+        suggestions = [_suggestion("Texas?d?d"), _suggestion("Ohio?d?d")]
+        result = benchmark_mask_models.PROMPTS[17].check(suggestions)
+        assert result is not None
+        assert "10" in result
+
+    def test_way_too_many_fails(self):
+        # The cap says "up to 15" — a model that ignores it entirely and
+        # tries all 50 defeats the point of capping (it's the same latency
+        # problem the 15-item cap exists to avoid).
+        states = [f"State{i}" for i in range(25)]
+        suggestions = [_suggestion(f"{s}?d?d") for s in states]
+        result = benchmark_mask_models.PROMPTS[17].check(suggestions)
+        assert result is not None
+        assert "cap not respected" in result
+
+
+class TestLiteralWordNotDecomposedChecker:
+    def test_correct_literal_passes(self):
+        suggestions = [_suggestion("Falcons?d?d")]
+        result = benchmark_mask_models.PROMPTS[18].check(suggestions)
+        assert result is None
+
+    def test_decomposed_first_letter_fails(self):
+        # The exact real-world bug: "?u??alcons" instead of literal "Falcons".
+        suggestions = [_suggestion("?u??alcons?d?d")]
+        result = benchmark_mask_models.PROMPTS[18].check(suggestions)
+        assert result is not None
+        assert "not decomposed" in result
+
+
+class TestChessPiecesNoDuplicatesChecker:
+    def test_all_distinct_pieces_pass(self):
+        pieces = ["Pawn", "Knight", "Bishop", "Rook", "Queen", "King"]
+        suggestions = [_suggestion(f"{p}?d?d?d?d") for p in pieces]
+        result = benchmark_mask_models.PROMPTS[19].check(suggestions)
+        assert result is None
+
+    def test_duplicate_pieces_fail(self):
+        suggestions = [_suggestion("Pawn?d?d?d?d") for _ in range(5)]
+        result = benchmark_mask_models.PROMPTS[19].check(suggestions)
+        assert result is not None
+        assert "duplicate" in result
+
+    def test_too_few_pieces_fails(self):
+        suggestions = [_suggestion("Pawn?d?d?d?d"), _suggestion("King?d?d?d?d")]
+        result = benchmark_mask_models.PROMPTS[19].check(suggestions)
+        assert result is not None
+        assert "6 chess piece names" in result
+
+
 class _FakeHTTPResponse:
     """Minimal context-manager stand-in for urllib's response object."""
 
@@ -273,7 +609,7 @@ class TestEnsureModelPulled:
         monkeypatch.setattr(
             benchmark_mask_models,
             "list_local_models",
-            lambda host=benchmark_mask_models.LOCAL_HOST: {"granite4:3b": 123},
+            lambda host=benchmark_mask_models.CANDIDATE_HOST: {"granite4:3b": 123},
         )
 
         def fail_if_called(*args, **kwargs):
@@ -289,7 +625,7 @@ class TestEnsureModelPulled:
         monkeypatch.setattr(
             benchmark_mask_models,
             "list_local_models",
-            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+            lambda host=benchmark_mask_models.CANDIDATE_HOST: {},
         )
         calls = []
 
@@ -306,7 +642,7 @@ class TestEnsureModelPulled:
         monkeypatch.setattr(
             benchmark_mask_models,
             "list_local_models",
-            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+            lambda host=benchmark_mask_models.CANDIDATE_HOST: {},
         )
         monkeypatch.setattr(
             benchmark_mask_models.subprocess,
@@ -341,19 +677,33 @@ class _FakeJudgeClient:
 
 class TestJudgeScore:
     def test_valid_score_returned(self):
-        completions = _FakeJudgeCompletions([json.dumps({"score": 4, "reason": "close enough"})])
+        completions = _FakeJudgeCompletions(
+            [
+                json.dumps(
+                    {
+                        "score": 4,
+                        "reason": "close enough",
+                        "prompt_fix_suggestion": "clarify the digit count wording",
+                    }
+                )
+            ]
+        )
         client = _FakeJudgeClient(completions)
         suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
 
-        score = benchmark_mask_models.judge_score(
+        verdict = benchmark_mask_models.judge_score(
             benchmark_mask_models.PROMPTS[0], suggestions, client=client
         )
 
-        assert score == 4
+        assert verdict.score == 4
+        assert verdict.reason == "close enough"
+        assert verdict.prompt_fix_suggestion == "clarify the digit count wording"
         assert len(completions.calls) == 1
 
     def test_out_of_range_score_raises_judge_error(self):
-        completions = _FakeJudgeCompletions([json.dumps({"score": 9, "reason": "nonsense"})])
+        completions = _FakeJudgeCompletions(
+            [json.dumps({"score": 9, "reason": "nonsense", "prompt_fix_suggestion": ""})]
+        )
         client = _FakeJudgeClient(completions)
         suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
 
@@ -378,8 +728,25 @@ class TestJudgeScore:
         except benchmark_mask_models.JudgeError:
             pass
 
-    def test_prompt_and_suggestions_included_in_request(self):
+    def test_missing_prompt_fix_suggestion_raises_judge_error(self):
+        # The schema requires prompt_fix_suggestion; a response missing it
+        # (e.g. an older/non-conforming judge model) must not silently pass.
         completions = _FakeJudgeCompletions([json.dumps({"score": 5, "reason": "good"})])
+        client = _FakeJudgeClient(completions)
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_prompt_and_suggestions_included_in_request(self):
+        completions = _FakeJudgeCompletions(
+            [json.dumps({"score": 5, "reason": "good", "prompt_fix_suggestion": ""})]
+        )
         client = _FakeJudgeClient(completions)
         suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
 
@@ -417,7 +784,11 @@ class TestRunPromptForModel:
             lambda description, **kwargs: [_suggestion("?d?d?d?d?d")],  # wrong count
         )
         monkeypatch.setattr(
-            benchmark_mask_models, "judge_score", lambda prompt, suggestions, **kwargs: 2
+            benchmark_mask_models,
+            "judge_score",
+            lambda prompt, suggestions, **kwargs: benchmark_mask_models.JudgeVerdict(
+                2, "too short", "clarify the digit count"
+            ),
         )
 
         result = benchmark_mask_models.run_prompt_for_model(
@@ -427,6 +798,7 @@ class TestRunPromptForModel:
         assert result.hard_fail_reason is None
         assert result.soft_fail_reason is not None
         assert result.judge_score == 2
+        assert result.judge_reason == "too short"
 
     def test_passes_and_gets_judge_score(self, monkeypatch):
         monkeypatch.setattr(
@@ -435,7 +807,11 @@ class TestRunPromptForModel:
             lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
         )
         monkeypatch.setattr(
-            benchmark_mask_models, "judge_score", lambda prompt, suggestions, **kwargs: 5
+            benchmark_mask_models,
+            "judge_score",
+            lambda prompt, suggestions, **kwargs: benchmark_mask_models.JudgeVerdict(
+                5, "perfect", ""
+            ),
         )
 
         result = benchmark_mask_models.run_prompt_for_model(
@@ -444,8 +820,9 @@ class TestRunPromptForModel:
 
         assert result.hard_fail_reason is None
         assert result.judge_score == 5
+        assert result.judge_reason == "perfect"
 
-    def test_judge_failure_does_not_crash(self, monkeypatch, capsys):
+    def test_judge_failure_does_not_crash(self, monkeypatch):
         monkeypatch.setattr(
             benchmark_mask_models,
             "generate_masks",
@@ -463,18 +840,48 @@ class TestRunPromptForModel:
 
         assert result.hard_fail_reason is None
         assert result.judge_score is None
+        assert result.judge_reason is None
+
+    def test_logs_suggestions_for_manual_review(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "judge_score",
+            lambda prompt, suggestions, **kwargs: benchmark_mask_models.JudgeVerdict(
+                5, "fully satisfies the request", ""
+            ),
+        )
+        log_path = tmp_path / "suggestions.jsonl"
+        monkeypatch.setenv("SUGGESTIONS_LOG_PATH", str(log_path))
+
+        benchmark_mask_models.run_prompt_for_model("some-model", benchmark_mask_models.PROMPTS[0])
+
+        lines = log_path.read_text().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["model"] == "some-model"
+        assert entry["prompt"] == benchmark_mask_models.PROMPTS[0].name
+        assert entry["suggestions"] == [{"mask": "Summer?d?d?d?d?d?d", "why": "test"}]
+        assert entry["judge_score"] == 5
+        assert entry["judge_reason"] == "fully satisfies the request"
 
 
 class TestHostAlwaysLocal:
     """Regression tests for the host=None -> OLLAMA_HOST env fallback bug.
 
     run_prompt_for_model and benchmark_model must always drive generate_masks
-    and judge_score against LOCAL_HOST, never against whatever OLLAMA_HOST
-    happens to be set to in the environment (e.g. a remote host).
+    against CANDIDATE_HOST and judge_score against JUDGE_HOST, never against
+    whatever OLLAMA_HOST happens to be set to in the environment (e.g. a
+    remote host) — and never against each other's host, since candidates and
+    the judge are deliberately split across two different Ollama servers.
     """
 
-    def test_run_prompt_for_model_uses_local_host_regardless_of_env(self, monkeypatch):
-        monkeypatch.setenv("OLLAMA_HOST", "ollama.example.test:11434")
+    def test_run_prompt_for_model_uses_split_hosts_regardless_of_env(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "some-other-team.example:11434")
 
         recorded_hosts: dict[str, str | None] = {}
 
@@ -484,32 +891,38 @@ class TestHostAlwaysLocal:
 
         def fake_judge_score(prompt, suggestions, **kwargs):
             recorded_hosts["judge_score"] = kwargs.get("host")
-            return 5
+            return benchmark_mask_models.JudgeVerdict(5, "good", "")
 
         monkeypatch.setattr(benchmark_mask_models, "generate_masks", fake_generate_masks)
         monkeypatch.setattr(benchmark_mask_models, "judge_score", fake_judge_score)
 
         benchmark_mask_models.run_prompt_for_model("some-model", benchmark_mask_models.PROMPTS[0])
 
-        assert recorded_hosts["generate_masks"] == benchmark_mask_models.LOCAL_HOST
-        assert recorded_hosts["judge_score"] == benchmark_mask_models.LOCAL_HOST
-        assert recorded_hosts["generate_masks"] != "ollama.example.test:11434"
+        assert recorded_hosts["generate_masks"] == benchmark_mask_models.CANDIDATE_HOST
+        assert recorded_hosts["judge_score"] == benchmark_mask_models.JUDGE_HOST
+        assert recorded_hosts["generate_masks"] != "some-other-team.example:11434"
+        assert recorded_hosts["judge_score"] != "some-other-team.example:11434"
 
-    def test_benchmark_model_uses_local_host_regardless_of_env(self, monkeypatch):
-        monkeypatch.setenv("OLLAMA_HOST", "ollama.example.test:11434")
+    def test_benchmark_model_uses_split_hosts_regardless_of_env(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "some-other-team.example:11434")
         monkeypatch.setattr(
             benchmark_mask_models,
             "list_local_models",
-            lambda host=benchmark_mask_models.LOCAL_HOST: {"some-model": 3 * 1024**3},
+            lambda host=benchmark_mask_models.CANDIDATE_HOST: {"some-model": 3 * 1024**3},
         )
         monkeypatch.setattr(
             benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True
         )
 
-        recorded_hosts: list[str | None] = []
+        recorded_calls: list[dict[str, str | None]] = []
 
         def fake_run_prompt_for_model(model, prompt, **kwargs):
-            recorded_hosts.append(kwargs.get("host"))
+            recorded_calls.append(
+                {
+                    "candidate_host": kwargs.get("candidate_host"),
+                    "judge_host": kwargs.get("judge_host"),
+                }
+            )
             return benchmark_mask_models.PromptResult(prompt.name, 1.0, None, 5)
 
         monkeypatch.setattr(
@@ -518,9 +931,12 @@ class TestHostAlwaysLocal:
 
         benchmark_mask_models.benchmark_model("some-model")
 
-        assert recorded_hosts
-        assert all(h == benchmark_mask_models.LOCAL_HOST for h in recorded_hosts)
-        assert all(h != "ollama.example.test:11434" for h in recorded_hosts)
+        assert recorded_calls
+        assert all(
+            c["candidate_host"] == benchmark_mask_models.CANDIDATE_HOST for c in recorded_calls
+        )
+        assert all(c["judge_host"] == benchmark_mask_models.JUDGE_HOST for c in recorded_calls)
+        assert all(c["candidate_host"] != "some-other-team.example:11434" for c in recorded_calls)
 
 
 class TestBenchmarkModel:
@@ -528,7 +944,7 @@ class TestBenchmarkModel:
         monkeypatch.setattr(
             benchmark_mask_models,
             "list_local_models",
-            lambda host=benchmark_mask_models.LOCAL_HOST: {},
+            lambda host=benchmark_mask_models.CANDIDATE_HOST: {},
         )
         monkeypatch.setattr(
             benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: False
@@ -543,7 +959,7 @@ class TestBenchmarkModel:
         monkeypatch.setattr(
             benchmark_mask_models,
             "list_local_models",
-            lambda host=benchmark_mask_models.LOCAL_HOST: {"some-model": 3 * 1024**3},
+            lambda host=benchmark_mask_models.CANDIDATE_HOST: {"some-model": 3 * 1024**3},
         )
         monkeypatch.setattr(
             benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True

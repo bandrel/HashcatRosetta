@@ -359,14 +359,16 @@ class TestRealClientTimeout:
         timeout = captured.get("timeout")
         assert timeout is not None, "no explicit timeout passed to OpenAI(...)"
         # httpx.Timeout or a plain float/int are both acceptable; either way
-        # every leg must be well under the old 600s default.
+        # every leg must be well under the SDK's own 600s x 3-attempt default
+        # (i.e. under 1800s), even though 600s itself is no longer "tight" —
+        # category-enumeration prompts measured at ~250s on gemma3:27b alone.
         if isinstance(timeout, (int, float)):
-            assert timeout <= 180
+            assert timeout <= 600
         else:
             for leg in ("connect", "read", "write", "pool"):
                 value = getattr(timeout, leg, None)
                 if value is not None:
-                    assert value <= 180, f"{leg} timeout {value}s is not tightly bounded"
+                    assert value <= 600, f"{leg} timeout {value}s is not tightly bounded"
 
 
 class TestModuleConstants:

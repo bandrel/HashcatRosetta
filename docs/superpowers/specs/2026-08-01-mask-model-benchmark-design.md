@@ -121,6 +121,6 @@ to the remaining candidates rather than aborting.
 - No change to `nlmask.py`'s shipped default model as part of this script — the
   benchmark produces a recommendation; adopting it (changing `_DEFAULT_MODEL`, updating
   docs/tests) is a separate follow-up decision after reviewing the report.
-- No gpu-host/remote comparison (see Scope).
+- No remote-host comparison (see Scope).
 - No repeated-trial statistics (min/max/stddev) — one run per (model, prompt) is enough
   for this comparison; this is a one-off evaluation tool, not a CI benchmark suite.

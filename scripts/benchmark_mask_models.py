@@ -1,26 +1,41 @@
 #!/usr/bin/env python3
 """Benchmark candidate local Ollama models for the --mask feature.
 
-Runs a fixed set of 7 hcmask-generation prompts against a curated shortlist of
+Runs a fixed, progressively harder set of hcmask-generation prompts against a
+curated shortlist of
 small, non-thinking models via hashcat_rosetta.nlmask.generate_masks (the real
 production code path — same timeout/retry logic already shipped). Each
 prompt's output is checked deterministically first (hard gate: does it parse,
 does it match the hand-written expectation for that prompt), then judged by
 JUDGE_MODEL (deliberately not a candidate itself, to avoid self-grading bias)
-for overall correctness/plausibility. Prints a report ranking candidates by
-disk size (a VRAM proxy) among those that pass.
+for overall correctness/plausibility. Every suggestion is also appended to
+SUGGESTIONS_LOG_PATH (if set) for manual/agent spot-checking alongside the
+automated score. Prints a report ranking candidates by disk size (a VRAM
+proxy) among those that pass the deterministic gate.
 
 This script is NOT part of the installed package and does NOT change
 nlmask.py's shipped default model — see
 docs/superpowers/specs/2026-08-01-mask-model-benchmark-design.md.
 
-Runs against the LOCAL Ollama only (http://localhost:11434).
+Runs against two Ollama targets — CANDIDATE_HOST for the models under test,
+JUDGE_HOST for the judge model — configurable via the BENCHMARK_CANDIDATE_HOST
+/ BENCHMARK_JUDGE_HOST environment variables (both default to the local
+Ollama). Never falls back to the ambient OLLAMA_HOST env var, to avoid a
+prior bug class where pulls landed on a different server than the one being
+queried. Point the two at separate hosts (e.g. a large remote GPU box for
+candidates, a smaller one for the judge) when the candidate models don't
+fit on a single shared GPU, so the judge's GPU/compute needs don't contend
+with candidate testing.
 
 Usage:
     uv run python scripts/benchmark_mask_models.py
+    BENCHMARK_CANDIDATE_HOST=http://big-gpu-host:11434 \\
+        BENCHMARK_JUDGE_HOST=http://other-host:11434 \\
+        uv run python scripts/benchmark_mask_models.py
 
-Requires: a running local Ollama server; `ollama` on PATH to pull missing
-candidates.
+Requires: running Ollama servers at CANDIDATE_HOST and JUDGE_HOST; `ollama`
+on PATH locally to pull missing models (pulls are pinned to the relevant
+host regardless of the local OLLAMA_HOST setting).
 """
 
 from __future__ import annotations
@@ -50,41 +65,49 @@ from hashcat_rosetta.nlmask import (
     resolve_base_url,
 )
 
-LOCAL_HOST = "http://localhost:11434"
+# Never read the ambient OLLAMA_HOST here — see module docstring. Each has
+# its own dedicated env var instead, defaulting to the local Ollama.
+CANDIDATE_HOST = os.environ.get("BENCHMARK_CANDIDATE_HOST", "http://localhost:11434")
+JUDGE_HOST = os.environ.get("BENCHMARK_JUDGE_HOST", "http://localhost:11434")
 
+# Expanded to all non-tiny (>=8GB) models available on the candidate host,
+# excluding JUDGE_MODEL itself (never a candidate — self-grading bias).
+# SYSTEM_PROMPT has changed materially since any prior sweep (8 custom
+# charsets instead of 4, the 256-position/non-empty-mask constraints, the
+# generic-vs-specific charset rule, category cap, bracket-avoidance,
+# duplicate suppression) — prior per-model results are not comparable,
+# every candidate here needs a fresh run.
 CANDIDATES: list[str] = [
-    "qwen2.5:0.5b",
-    "qwen2.5:1.5b",
-    "llama3.2:1b",
-    "phi:latest",
-    "smollm2:1.7b",
-    "qwen2.5:3b",
-    "llama3.2:3b",
-    "phi3:latest",
-    "granite4:3b",
-    "llama3:latest",
-    "qwen3:8b",
-    "mistral:latest",
-    "qwen3.5:9b",
-    "qwen2.5:latest",
-    "llama3.1:8b",
-    "gemma4:latest",
-    "gpt-oss:20b",
-    "phi4:14b",
-    "mistral-small:24b",
-    "devstral-small-2:24b",
-    "gemma3:27b",
-    "qwen3.5:27b",
-    "qwen3:30b",
-    "dengcao/Qwen3-30B-A3B-Instruct-2507:latest",
-    "qwen2.5:32b",
-    "glm-4.7-flash:latest",
-    "qwen3:32b",
-    "qwen3-coder:latest",
     "laguna-xs-2.1:latest",
+    "dengcao/Qwen3-30B-A3B-Instruct-2507:latest",
+    "gemma3:27b",
+    "qwen3-coder-next:Q4_K_M",
+    "qwen2.5:72b",
+    "llama3.3:70b",
+    "deepseek-r1:70b",
+    "hermes3:70b",
+    "mixtral:8x7b",
+    "qwen3:32b",
+    "gemma4:31b",
+    "glm-4.7-flash:latest",
+    "qwen3-coder:latest",
+    "qwen3:30b",
+    "qwen3.5:27b",
+    "devstral-small-2:24b",
+    "mistral-small:24b",
+    "phi4:14b",
 ]
 
-JUDGE_MODEL = "qwen3.6:35b-a3b"
+JUDGE_MODEL = "gpt-oss:20b"
+
+# The judge host may have a small/shared GPU with other concurrent consumers
+# and a service-wide context-length setting that reserves a KV cache large
+# enough to spill even a mid-size model onto CPU; capping it here keeps the
+# judge fully on GPU (gemma3:12b @ 8192 ctx measured at 8.0GB / 100% GPU)
+# regardless of that global setting. Deliberately not a Qwen3 model, to
+# avoid the hidden "thinking" hangs/timeouts that family caused as a judge
+# before.
+JUDGE_NUM_CTX = 8192
 
 JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -94,8 +117,17 @@ JUDGE_SCHEMA: dict[str, Any] = {
             "description": "1 (does not satisfy the request) to 5 (fully and precisely satisfies it)",
         },
         "reason": {"type": "string", "description": "one short clause"},
+        "prompt_fix_suggestion": {
+            "type": "string",
+            "description": (
+                "If score < 5: one concrete, specific suggestion for how the "
+                "generator's system prompt could be reworded to prevent this "
+                "exact mistake next time (e.g. 'clarify that X token means Y', "
+                "not 'be more careful'). Empty string if score is 5."
+            ),
+        },
     },
-    "required": ["score", "reason"],
+    "required": ["score", "reason", "prompt_fix_suggestion"],
     "additionalProperties": False,
 }
 
@@ -104,7 +136,11 @@ JUDGE_SYSTEM_PROMPT = (
     "satisfies an English request. Score 1 (does not satisfy the request at "
     "all) to 5 (fully and precisely satisfies it). Return JSON matching the "
     "schema. No step-by-step reasoning in the `reason` field — one short "
-    "clause."
+    "clause. If score < 5, `prompt_fix_suggestion` must name a concrete, "
+    "specific rewording of the generator's system prompt that would have "
+    "prevented this exact mistake — not generic advice like 'be more "
+    "careful' or 'follow instructions better'. If score is 5, "
+    "`prompt_fix_suggestion` must be an empty string."
 )
 
 
@@ -112,7 +148,27 @@ class JudgeError(Exception):
     """Raised when the judge model call fails or returns unusable output."""
 
 
-def list_local_models(host: str = LOCAL_HOST) -> dict[str, int]:
+@dataclass
+class JudgeVerdict:
+    """The judge model's full verdict for one (prompt, suggestions) pair.
+
+    Attributes:
+        score: 1-5, how well the suggestions satisfy the prompt.
+        reason: The judge's one-clause rationale for that score — kept so
+            a surprising score (especially a low one) can be audited
+            against the judge's own stated reasoning instead of trusted
+            blindly.
+        prompt_fix_suggestion: When score < 5, the judge's concrete
+            suggestion for rewording generator's SYSTEM_PROMPT to prevent
+            this exact mistake. Empty string when score is 5.
+    """
+
+    score: int
+    reason: str
+    prompt_fix_suggestion: str
+
+
+def list_local_models(host: str = CANDIDATE_HOST) -> dict[str, int]:
     """Return {model_name: size_in_bytes} for every model on the local Ollama."""
     url = f"{host.rstrip('/')}/api/tags"
     with urllib.request.urlopen(url, timeout=10) as response:
@@ -120,7 +176,7 @@ def list_local_models(host: str = LOCAL_HOST) -> dict[str, int]:
     return {m["name"]: m["size"] for m in data.get("models", [])}
 
 
-def ensure_model_pulled(model: str, *, host: str = LOCAL_HOST) -> bool:
+def ensure_model_pulled(model: str, *, host: str = CANDIDATE_HOST) -> bool:
     """Pull `model` if it isn't already present locally.
 
     Returns True if the model is present after this call (whether it was
@@ -172,10 +228,14 @@ def judge_score(
     suggestions: list[MaskSuggestion],
     *,
     model: str = JUDGE_MODEL,
-    host: str = LOCAL_HOST,
+    host: str = JUDGE_HOST,
     client: Any = None,
-) -> int:
-    """Score how well `suggestions` satisfies `prompt`, 1-5, via the judge model.
+) -> JudgeVerdict:
+    """Score how well `suggestions` satisfies `prompt`, via the judge model.
+
+    Returns the judge's full verdict (score AND its stated reason) — the
+    reason is what makes a surprising score auditable instead of an opaque
+    number, so it must never be discarded by a caller.
 
     Raises JudgeError on any failure: the request itself failing, malformed
     JSON in the response, or a score outside 1-5.
@@ -198,6 +258,15 @@ def judge_score(
                 "type": "json_schema",
                 "json_schema": {"name": "judge_score", "strict": True, "schema": JUDGE_SCHEMA},
             },
+            # Explicitly disabled: enabling `think` on Qwen3 hybrid-reasoning
+            # models caused judge calls to time out at a high rate (same
+            # failure mode noted in the CHANGELOG for qwen3.6:35b-a3b's
+            # hidden reasoning tokens burning the response budget). Revisit
+            # if the judge's score quality needs improving later.
+            # num_ctx caps the KV cache so the judge model stays fully on
+            # GPU rather than spilling to CPU under the judge host's much
+            # larger global context length.
+            extra_body={"think": False, "options": {"num_ctx": JUDGE_NUM_CTX}},
         )
     except Exception as exc:  # noqa: BLE001 - judge failures must not crash the benchmark
         raise JudgeError(f"judge request failed: {exc}") from exc
@@ -206,13 +275,15 @@ def judge_score(
     try:
         data = json.loads(content)
         score = int(data["score"])
+        reason = str(data["reason"])
+        prompt_fix_suggestion = str(data["prompt_fix_suggestion"])
     except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
         raise JudgeError(f"judge returned unusable output: {content!r}") from exc
 
     if not 1 <= score <= 5:
         raise JudgeError(f"judge score out of range 1-5: {score}")
 
-    return score
+    return JudgeVerdict(score=score, reason=reason, prompt_fix_suggestion=prompt_fix_suggestion)
 
 
 @dataclass
@@ -235,6 +306,14 @@ class PromptResult:
             judge_score rather than being hidden.
         judge_score: 1-5 from the judge model, or None if hard-failed or the
             judge call itself failed.
+        judge_reason: The judge's one-clause rationale for judge_score, or
+            None under the same conditions as judge_score. Kept so a
+            surprising (especially low) score can be audited against the
+            judge's own stated reasoning rather than trusted blindly.
+        prompt_fix_suggestion: When judge_score < 5, the judge's concrete
+            suggestion for rewording nlmask.py's SYSTEM_PROMPT to prevent
+            this exact mistake. Empty string when judge_score is 5, None
+            under the same conditions as judge_score.
         suggestion_count: Number of mask suggestions generate_masks() returned,
             or None if it hard-failed and returned nothing at all.
     """
@@ -245,6 +324,8 @@ class PromptResult:
     judge_score: int | None
     soft_fail_reason: str | None = None
     suggestion_count: int | None = None
+    judge_reason: str | None = None
+    prompt_fix_suggestion: str | None = None
 
 
 @dataclass
@@ -323,7 +404,14 @@ def _check_summer_digits(suggestions: list[MaskSuggestion]) -> str | None:
     return None
 
 
-def _check_mushroom_categories(suggestions: list[MaskSuggestion]) -> str | None:
+def _check_category_with_pattern(suggestions: list[MaskSuggestion]) -> str | None:
+    """Shared checker for "name a category, apply a pattern" prompts.
+
+    Used by mushroom_categories, bible_books_category, and
+    european_cities_category — the requirement is identical regardless of
+    the category's domain: >= 2 distinct suggestions, each with a literal
+    baseword prefix.
+    """
     if len(suggestions) < 2:
         return f"expected >= 2 suggestions, got {len(suggestions)}"
     if (reason := _duplicate_reason(suggestions)) is not None:
@@ -421,6 +509,249 @@ def _check_literal_question_mark(suggestions: list[MaskSuggestion]) -> str | Non
     return None
 
 
+def _check_two_custom_charsets(suggestions: list[MaskSuggestion]) -> str | None:
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        if len(s.line.custom) != 2:
+            return f"expected exactly 2 custom charsets, got {len(s.line.custom)} in {s.mask!r}"
+        c1, c2 = expand_custom_charsets(s.line.custom)
+        if set(c1.lower()) != {"x", "y", "z"}:
+            return f"expected charset ?1 to be exactly x/y/z, got {s.line.custom[0]!r}"
+        if set(c2.lower()) != {"1", "2", "3"}:
+            return f"expected charset ?2 to be exactly 1/2/3, got {s.line.custom[1]!r}"
+        toks = [t for t, _size in tokens(s.line)]
+        if toks != ["?1", "?1", "?2", "?2"]:
+            return f"expected token sequence ?1?1?2?2 with nothing else, got {s.mask!r}"
+        ks = keyspace(s.line)
+        if ks != 81:
+            return f"expected keyspace 81 (3^2 * 3^2), got {ks:,}"
+    return None
+
+
+def _check_three_custom_charsets(suggestions: list[MaskSuggestion]) -> str | None:
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        if len(s.line.custom) != 3:
+            return f"expected exactly 3 custom charsets, got {len(s.line.custom)} in {s.mask!r}"
+        c1, c2, c3 = expand_custom_charsets(s.line.custom)
+        if set(c1.lower()) != {"a", "e"}:
+            return f"expected charset ?1 to be exactly a/e, got {s.line.custom[0]!r}"
+        if set(c2.lower()) != {"b", "c", "d"}:
+            return f"expected charset ?2 to be exactly b/c/d, got {s.line.custom[1]!r}"
+        if set(c3.lower()) != {"7", "8", "9"}:
+            return f"expected charset ?3 to be exactly 7/8/9, got {s.line.custom[2]!r}"
+        toks = [t for t, _size in tokens(s.line)]
+        if toks != ["?1", "?2", "?3"]:
+            return f"expected token sequence ?1?2?3 with nothing else, got {s.mask!r}"
+        ks = keyspace(s.line)
+        if ks != 18:
+            return f"expected keyspace 18 (2 * 3 * 3), got {ks:,}"
+    return None
+
+
+def _check_four_custom_charsets(suggestions: list[MaskSuggestion]) -> str | None:
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    expected_letters = ("a", "b", "c", "d")
+    for s in suggestions:
+        if len(s.line.custom) != 4:
+            return f"expected exactly 4 custom charsets, got {len(s.line.custom)} in {s.mask!r}"
+        expanded = expand_custom_charsets(s.line.custom)
+        for i, (charset, letter) in enumerate(zip(expanded, expected_letters), start=1):
+            if charset.lower() != letter:
+                return (
+                    f"expected charset ?{i} to be exactly {letter!r}, got {s.line.custom[i - 1]!r}"
+                )
+        toks = [t for t, _size in tokens(s.line)]
+        if toks != ["?1", "?2", "?3", "?4"]:
+            return f"expected token sequence ?1?2?3?4 with nothing else, got {s.mask!r}"
+        ks = keyspace(s.line)
+        if ks != 1:
+            return f"expected keyspace 1 (four 1-char charsets), got {ks:,}"
+    return None
+
+
+def _check_custom_charset_backreference(suggestions: list[MaskSuggestion]) -> str | None:
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        if len(s.line.custom) != 2:
+            return f"expected exactly 2 custom charsets, got {len(s.line.custom)} in {s.mask!r}"
+        c1, c2 = expand_custom_charsets(s.line.custom)
+        if set(c1) != set("0123456789"):
+            return f"expected charset ?1 to be exactly the digits 0-9, got {s.line.custom[0]!r}"
+        if set(c2) != set(c1) | {"a"}:
+            return (
+                f"expected charset ?2 to be charset ?1 plus the letter 'a', "
+                f"got {s.line.custom[1]!r}"
+            )
+        toks = [t for t, _size in tokens(s.line)]
+        if toks != ["?1", "?2"]:
+            return f"expected token sequence ?1?2 with nothing else, got {s.mask!r}"
+        ks = keyspace(s.line)
+        if ks != 110:
+            return f"expected keyspace 110 (10 * 11), got {ks:,}"
+    return None
+
+
+def _check_bible_verse_format(suggestions: list[MaskSuggestion]) -> str | None:
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        if not s.mask or s.mask.startswith("?"):
+            return f"expected a literal book-name prefix, got {s.mask!r}"
+        if ":" not in s.mask:
+            return f"expected a literal ':' between chapter and verse, got {s.mask!r}"
+        toks = tokens(s.line)
+        digit_count = sum(1 for t, _size in toks if t == "?d")
+        if digit_count < 2:
+            return (
+                f"expected at least 2 digit tokens (chapter + verse), got "
+                f"{digit_count} in {s.mask!r}"
+            )
+    return None
+
+
+def _check_bracket_charset_avoidance(suggestions: list[MaskSuggestion]) -> str | None:
+    """Regression check for the '[...]' bracket-character-class hallucination.
+
+    hcmask has no regex-style character class; a model that hallucinates one
+    (e.g. "Patriots?d?d[ea34@jr?l]") produces a mask with literal '[' and ']'
+    characters instead of using a real custom charset. See SYSTEM_PROMPT's
+    "NO '[...]' bracket character classes" constraint.
+    """
+    if len(suggestions) < 2:
+        return f"expected >= 2 suggestions (one per team), got {len(suggestions)}"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        full_line = format_hcmask_line(s.custom_charsets, s.mask)
+        if "[" in full_line or "]" in full_line:
+            return f"hallucinated bracket character class, got {full_line!r}"
+        if not s.line.custom:
+            return (
+                f"expected a custom charset for 'one of these characters', got none in {s.mask!r}"
+            )
+        literal_prefix = s.mask.split("?")[0]
+        if not literal_prefix:
+            return f"suggestion {s.mask!r} has no literal team-name prefix"
+    return None
+
+
+def _check_custom_charset_no_brackets(suggestions: list[MaskSuggestion]) -> str | None:
+    """Non-category version of the bracket-avoidance check: a single literal
+    baseword followed by "one of these symbols", with no category involved.
+    """
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        full_line = format_hcmask_line(s.custom_charsets, s.mask)
+        if "[" in full_line or "]" in full_line:
+            return f"hallucinated bracket character class, got {full_line!r}"
+        if not s.line.custom:
+            return f"expected a custom charset for 'one of these symbols', got none in {s.mask!r}"
+        if not s.mask.lower().startswith("blue"):
+            return f"expected mask to start with literal 'Blue', got {s.mask!r}"
+    return None
+
+
+def _check_small_category_full_enumeration(suggestions: list[MaskSuggestion]) -> str | None:
+    """Regression check for the old hardcoded "always pick 6" category cap.
+
+    "Days of the week" has exactly 7 real members — SYSTEM_PROMPT now says
+    to list all of them when the category is this small, not truncate to an
+    arbitrary handful (the prior default behavior for ANY category).
+    """
+    if len(suggestions) < 6:
+        return (
+            f"expected close to all 7 days of the week (>= 6), got "
+            f"{len(suggestions)} — looks like the old fixed-count cap regressed"
+        )
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        literal_prefix = s.mask.split("?")[0]
+        if not literal_prefix:
+            return f"suggestion {s.mask!r} has no literal day-name prefix"
+    return None
+
+
+def _check_large_category_capped_enumeration(suggestions: list[MaskSuggestion]) -> str | None:
+    """Regression check for both failure directions on a large category.
+
+    "US state names" has 50 real members. SYSTEM_PROMPT says to pick up to
+    15 diverse ones — this must catch a regression back to an arbitrary
+    small count (the old "always 6" bug) without requiring all 50 (which
+    would make every local model time out, per the live testing that
+    motivated the 600s timeout and the 15-item cap in the first place).
+    """
+    if len(suggestions) < 10:
+        return (
+            f"expected >= 10 (up to the 15-item cap) distinct state names, got "
+            f"{len(suggestions)} — looks like the old fixed-count cap regressed"
+        )
+    if len(suggestions) > 20:
+        return f"expected <= ~15 per the cap, got {len(suggestions)} (cap not respected)"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        literal_prefix = s.mask.split("?")[0]
+        if not literal_prefix:
+            return f"suggestion {s.mask!r} has no literal state-name prefix"
+    return None
+
+
+def _check_literal_word_not_decomposed(suggestions: list[MaskSuggestion]) -> str | None:
+    """Regression check for the '?u??literal' letter-by-letter decomposition bug.
+
+    A model asked for "the word 'Falcons', capitalized" must emit the literal
+    string "Falcons" as-is, not decompose the first letter into a ?u token
+    plus a stray '??' literal-question-mark token (e.g. "?u??alcons").
+    """
+    if not suggestions:
+        return "expected at least 1 suggestion, got 0"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    for s in suggestions:
+        if not s.mask.startswith("Falcons"):
+            return (
+                f"expected mask to start with literal 'Falcons' (not decomposed "
+                f"into charset tokens), got {s.mask!r}"
+            )
+    return None
+
+
+def _check_no_duplicate_small_category(suggestions: list[MaskSuggestion]) -> str | None:
+    """Regression check for duplicate suggestions within one response.
+
+    "Chess piece names" has exactly 6 real members (pawn, knight, bishop,
+    rook, queen, king) — enough that a model repeating itself would be easy
+    to miss without an explicit duplicate check.
+    """
+    if len(suggestions) < 5:
+        return f"expected close to all 6 chess piece names (>= 5), got {len(suggestions)}"
+    if (reason := _duplicate_reason(suggestions)) is not None:
+        return reason
+    literal_prefixes = [s.mask.split("?")[0].lower() for s in suggestions]
+    if len(set(literal_prefixes)) != len(literal_prefixes):
+        return f"expected all distinct chess piece names, got {literal_prefixes}"
+    return None
+
+
 PROMPTS: list[BenchmarkPrompt] = [
     BenchmarkPrompt(
         "summer_digits",
@@ -433,7 +764,7 @@ PROMPTS: list[BenchmarkPrompt] = [
         "Basewords should be based on mushroom varieties followed by one of the "
         "following patterns: [symbol+digit,digit+symbol]. Give suggestions for as "
         "many different mushroom varieties as you can, no duplicates.",
-        _check_mushroom_categories,
+        _check_category_with_pattern,
     ),
     BenchmarkPrompt(
         "season_digits_special",
@@ -464,15 +795,160 @@ PROMPTS: list[BenchmarkPrompt] = [
         "mask suggestions as you can, no duplicates.",
         _check_literal_question_mark,
     ),
+    BenchmarkPrompt(
+        "two_custom_charsets",
+        "A custom charset made only of the letters x, y, and z, used twice, "
+        "followed by a custom charset made only of the digits 1, 2, and 3, used "
+        "twice — so the mask is ?1?1?2?2 with no other characters. Give as many "
+        "distinct mask suggestions as you can, no duplicates.",
+        _check_two_custom_charsets,
+    ),
+    BenchmarkPrompt(
+        "three_custom_charsets",
+        "Three custom charsets used once each, in order: the vowels a and e, "
+        "the consonants b, c, and d, and the digits 7, 8, and 9 — so the mask "
+        "is ?1?2?3 with no other characters. Give as many distinct mask "
+        "suggestions as you can, no duplicates.",
+        _check_three_custom_charsets,
+    ),
+    BenchmarkPrompt(
+        "four_custom_charsets",
+        "Four custom charsets, each containing exactly one distinct letter: A, "
+        "B, C, and D respectively, combined in order as ?1?2?3?4 with no other "
+        "characters. Give as many distinct mask suggestions as you can, no "
+        "duplicates.",
+        _check_four_custom_charsets,
+    ),
+    BenchmarkPrompt(
+        "custom_charset_backreference",
+        "A custom charset ?1 containing the digits 0-9, and a second custom "
+        "charset ?2 defined as charset 1 plus the letter 'a' (i.e. ?2's "
+        "definition references ?1), combined as ?1?2 with no other characters. "
+        "Give as many distinct mask suggestions as you can, no duplicates.",
+        _check_custom_charset_backreference,
+    ),
+    BenchmarkPrompt(
+        "bible_books_category",
+        "Basewords should be based on books of the Bible followed by one of "
+        "the following patterns: [symbol+digit,digit+symbol]. Give suggestions "
+        "for as many different books as you can, no duplicates.",
+        _check_category_with_pattern,
+    ),
+    BenchmarkPrompt(
+        "european_cities_category",
+        "Basewords should be based on European capital cities followed by one "
+        "of the following patterns: [symbol+digit,digit+symbol]. Give "
+        "suggestions for as many different cities as you can, no duplicates.",
+        _check_category_with_pattern,
+    ),
+    BenchmarkPrompt(
+        "bible_verse_format",
+        "A book of the Bible, followed by a chapter number, a literal colon, "
+        "and a verse number — the format of a Bible verse reference, like "
+        "'John3:16'. Give as many distinct mask suggestions as you can "
+        "(different books/chapters/verses), no duplicates.",
+        _check_bible_verse_format,
+    ),
+    # The following 6 prompts have no "give as many as you can, no
+    # duplicates" reminder suffix (unlike the prompts above) — they
+    # deliberately test whether SYSTEM_PROMPT's own constraints (bracket
+    # avoidance, category-size-aware enumeration, literal-word integrity,
+    # duplicate avoidance) hold up without a per-prompt nudge.
+    BenchmarkPrompt(
+        "nfl_teams_bracket_avoidance",
+        "NFL sports teams. The first letter should be capitalized and then "
+        "the candidate should end it two digits followed by one of the "
+        "following characters the 'ea34@jr?l'",
+        _check_bracket_charset_avoidance,
+    ),
+    BenchmarkPrompt(
+        "one_of_symbols_no_brackets",
+        "The word 'Blue' followed by one of the following symbols: !@#$%",
+        _check_custom_charset_no_brackets,
+    ),
+    BenchmarkPrompt(
+        "days_of_week_full_enumeration",
+        "Basewords should be the days of the week followed by two digits.",
+        _check_small_category_full_enumeration,
+    ),
+    BenchmarkPrompt(
+        "us_states_capped_enumeration",
+        "Basewords should be US state names followed by two digits.",
+        _check_large_category_capped_enumeration,
+    ),
+    BenchmarkPrompt(
+        "capitalized_literal_word_not_decomposed",
+        "The word 'Falcons', with its first letter capitalized, followed by two digits.",
+        _check_literal_word_not_decomposed,
+    ),
+    BenchmarkPrompt(
+        "chess_pieces_no_duplicates",
+        "Basewords should be chess piece names followed by four digits.",
+        _check_no_duplicate_small_category,
+    ),
 ]
 
 
+def _log_suggestions_for_manual_review(
+    model: str,
+    prompt: BenchmarkPrompt,
+    suggestions: list[MaskSuggestion],
+    soft_fail_reason: str | None,
+    judge_score: int | None,
+    judge_reason: str | None,
+    prompt_fix_suggestion: str | None,
+) -> None:
+    """Append raw suggestions to SUGGESTIONS_LOG_PATH for spot-checking.
+
+    Records the judge's score, its stated reason, and (when score < 5) its
+    suggested SYSTEM_PROMPT wording fix alongside the raw suggestions — a
+    transparency log so any score (especially a low or surprising one) can
+    be audited against both the actual model output and the judge's own
+    rationale, not trusted as an opaque number. No-op if
+    SUGGESTIONS_LOG_PATH isn't set.
+    """
+    log_path = os.environ.get("SUGGESTIONS_LOG_PATH")
+    if not log_path:
+        return
+    with open(log_path, "a") as f:
+        f.write(
+            json.dumps(
+                {
+                    "model": model,
+                    "prompt": prompt.name,
+                    "description": prompt.description,
+                    "soft_fail_reason": soft_fail_reason,
+                    "judge_score": judge_score,
+                    "judge_reason": judge_reason,
+                    "prompt_fix_suggestion": prompt_fix_suggestion,
+                    "suggestions": [
+                        {"mask": format_hcmask_line(s.custom_charsets, s.mask), "why": s.why}
+                        for s in suggestions
+                    ],
+                }
+            )
+            + "\n"
+        )
+        f.flush()
+
+
 def run_prompt_for_model(
-    model: str, prompt: BenchmarkPrompt, *, host: str = LOCAL_HOST
+    model: str,
+    prompt: BenchmarkPrompt,
+    *,
+    candidate_host: str = CANDIDATE_HOST,
+    judge_host: str = JUDGE_HOST,
 ) -> PromptResult:
     start = time.monotonic()
     try:
-        suggestions = generate_masks(prompt.description, model=model, host=host)
+        # generate_masks() itself now cross-checks every suggestion's
+        # keyspace against hashcat-utils mp64 (when installed) as part of
+        # its normal validation/retry path — see
+        # hashcat_rosetta.mask.verify_keyspace_with_maskprocessor. A mismatch
+        # surfaces here as a MaskGenerationError, same as any other
+        # validation failure, so there's nothing extra to do in this
+        # benchmark script for that check.
+        suggestions = generate_masks(prompt.description, model=model, host=candidate_host)
     except MaskGenerationError as exc:
         elapsed = time.monotonic() - start
         reason = f"generate_masks raised: {exc}"
@@ -485,20 +961,40 @@ def run_prompt_for_model(
         print(f"  soft fail {model}/{prompt.name}: {soft_fail_reason}", file=sys.stderr)
 
     try:
-        score = judge_score(prompt, suggestions, host=host)
+        verdict = judge_score(prompt, suggestions, host=judge_host)
+        score, judge_reason, fix_suggestion = (
+            verdict.score,
+            verdict.reason,
+            verdict.prompt_fix_suggestion,
+        )
     except JudgeError as exc:
         print(f"  warning: judge failed for {model}/{prompt.name}: {exc}", file=sys.stderr)
-        score = None
+        score, judge_reason, fix_suggestion = None, None, None
 
-    return PromptResult(prompt.name, elapsed, None, score, soft_fail_reason, len(suggestions))
+    _log_suggestions_for_manual_review(
+        model, prompt, suggestions, soft_fail_reason, score, judge_reason, fix_suggestion
+    )
+
+    return PromptResult(
+        prompt.name,
+        elapsed,
+        None,
+        score,
+        soft_fail_reason,
+        len(suggestions),
+        judge_reason,
+        fix_suggestion,
+    )
 
 
-def benchmark_model(model: str, *, host: str = LOCAL_HOST) -> ModelReport:
+def benchmark_model(
+    model: str, *, candidate_host: str = CANDIDATE_HOST, judge_host: str = JUDGE_HOST
+) -> ModelReport:
     print(f"Benchmarking {model}...", file=sys.stderr)
 
     try:
-        pulled = ensure_model_pulled(model, host=host)
-        models = list_local_models(host)
+        pulled = ensure_model_pulled(model, host=candidate_host)
+        models = list_local_models(candidate_host)
     except Exception as exc:  # noqa: BLE001 - infra failures must not crash the sweep
         results = [PromptResult(p.name, 0.0, f"infrastructure error: {exc}", None) for p in PROMPTS]
         return ModelReport(model, None, results)
@@ -508,7 +1004,10 @@ def benchmark_model(model: str, *, host: str = LOCAL_HOST) -> ModelReport:
         return ModelReport(model, None, results)
 
     disk_size_gb = models[model] / (1024**3)
-    results = [run_prompt_for_model(model, p, host=host) for p in PROMPTS]
+    results = [
+        run_prompt_for_model(model, p, candidate_host=candidate_host, judge_host=judge_host)
+        for p in PROMPTS
+    ]
     return ModelReport(model, disk_size_gb, results)
 
 
@@ -567,10 +1066,25 @@ def format_report(reports: list[ModelReport]) -> str:
     else:
         lines.append("Most suggestions while accurate: no candidate has 0 hard fails")
 
+    fix_suggestions = [
+        (r.model, res.prompt_name, res.prompt_fix_suggestion)
+        for r in sorted_reports
+        for res in r.prompt_results
+        if res.prompt_fix_suggestion
+    ]
+    if fix_suggestions:
+        lines.append("\nPrompt improvement suggestions from the judge (score < 5):")
+        for model, prompt_name, suggestion in fix_suggestions:
+            lines.append(f"  [{model}/{prompt_name}] {suggestion}")
+
     return "\n".join(lines)
 
 
 def main() -> None:
+    if not ensure_model_pulled(JUDGE_MODEL, host=JUDGE_HOST):
+        print(f"FATAL: judge model {JUDGE_MODEL!r} could not be pulled/found", file=sys.stderr)
+        sys.exit(1)
+
     results_path = os.environ.get("BENCHMARK_RESULTS_PATH")
     reports = []
     for m in CANDIDATES:

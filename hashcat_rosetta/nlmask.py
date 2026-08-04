@@ -18,23 +18,38 @@ runs the other way.
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any
 
 from openai import APIConnectionError, APIStatusError, OpenAI
 
-from .mask import HcmaskLine, MaskError, format_hcmask_line, parse_hcmask_line
+from .mask import (
+    HcmaskLine,
+    MaskError,
+    format_hcmask_line,
+    parse_hcmask_line,
+    verify_keyspace_with_maskprocessor,
+)
 
 # Default model used when neither the ``model`` argument nor the
 # ``OLLAMA_MODEL`` environment variable is set.
 #
-# Chosen from scripts/benchmark_mask_models.py's 29-candidate sweep: the
-# smallest model with zero hard fails (no infra/parse errors) and a mean
-# judge score >= 4 across the 7 fixed prompts. The prior default,
-# qwen3.6:35b-a3b, is a hybrid-reasoning model whose hidden thinking mode
-# isn't disabled via Ollama's OpenAI-compatible endpoint, which repeatedly
-# caused multi-minute hangs and timeouts (see CHANGELOG).
-_DEFAULT_MODEL = "devstral-small-2:24b"
+# Full 20-prompt scripts/benchmark_mask_models.py sweep after SYSTEM_PROMPT
+# changed to fix the '[...]' bracket hallucination, the arbitrary "always
+# pick 6" category cap (now up to 15, real category size permitting), and
+# the '?u??literal' word-decomposition bug:
+#   gemma3:27b                           — 0 hard fails, 6 soft, mean 4.2, 234s  <- this pick
+#   dengcao/Qwen3-30B-A3B-Instruct-2507   — 2 hard fails, 4 soft, mean 4.4, 170s
+#   laguna-xs-2.1:latest                  — 5 hard fails, 3 soft, mean 4.2, 781s
+# gemma3:27b is the only candidate with zero hard fails, matching the
+# benchmark's own recommendation criteria — it stays the default. dengcao is
+# faster and scores marginally higher on mean judge score, but its 2 hard
+# fails (both a dangling-'?' custom-charset error when a symbol set
+# includes a literal '?' without escaping it as '??' — a real gap, not a
+# quirk of this sweep) rule it out as a default despite an earlier 2-prompt
+# spot-check missing that failure mode.
+_DEFAULT_MODEL = "gemma3:27b"
 
 # Default Ollama base URL when neither ``host`` nor ``OLLAMA_HOST`` is set.
 _DEFAULT_BASE_URL = "http://localhost:11434/v1"
@@ -55,7 +70,7 @@ class MaskSuggestion:
     Attributes:
         mask: The mask field as suggested by the model (before custom
             charsets are prepended), e.g. ``"?1?1?d"``.
-        custom_charsets: The custom charset strings (0-4 items) the model
+        custom_charsets: The custom charset strings (0-8 items) the model
             supplied for this suggestion.
         why: A one-clause human-readable rationale for the suggestion.
         line: The parsed, validated :class:`~hashcat_rosetta.mask.HcmaskLine`
@@ -84,8 +99,8 @@ _MASK_ITEM_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "0-4 custom charset strings referenced in the mask as "
-                "?1-?4, in order. Empty array if the mask uses no custom "
+                "0-8 custom charset strings referenced in the mask as "
+                "?1-?8, in order. Empty array if the mask uses no custom "
                 "charsets."
             ),
         },
@@ -131,11 +146,65 @@ Builtin charset tokens (each is two characters, a '?' followed by a letter):
   ?a  all printable (?l + ?u + ?d + ?s)
   ?b  all 256 byte values
 
-'??' is a literal '?' character, not a token.
+?s, ?a, and ?b are each already a COMPLETE, ready-to-use charset covering
+their entire class — ?s already contains every hashcat "special"
+character, ?a already contains every letter/digit/special, ?b already
+contains all 256 byte values. NEVER attempt to reproduce, re-list, or
+hand-spell out the characters any of these three already cover — not in
+the mask, not in a custom charset. Doing so is always redundant (the
+builtin token already says it) and always error-prone (hand-typing
+hashcat's specials list reliably introduces an unescaped '?' or an
+invalid token like '?/'). If the request is for "a special character" /
+"any symbol" / "punctuation" in general, the answer is simply the token
+?s used directly — nothing else needs to be written for it.
 
-You may define up to 4 custom charsets (strings of characters). Do NOT inline
+These 8 are the ONLY builtin '?X' tokens. There is no '?@', '?/', '?w', or
+any other '?<character>' token beyond this list and '??' below, no matter
+how intuitively it might seem to abbreviate something (e.g. '?@' is NOT
+"the at sign" — it's simply invalid). Any '?X' not in this list or not a
+?1-?8 custom charset reference is always a mistake — if you need one
+specific symbol, write it as a literal character or put it in a custom
+charset, never as a made-up '?X' token.
+
+'??' is a literal '?' character, not a token. This '??' escaping rule applies
+INSIDE custom charset fields too, not just the mask field: if a custom
+charset must contain a literal '?' character (e.g. a symbol set that
+includes '?' itself), write it as '??' there as well — a bare trailing or
+embedded '?' in a custom charset is a dangling/malformed token, not a
+literal question mark.
+
+You may define up to 8 custom charsets (strings of characters). Do NOT inline
 them into the mask string — return them separately in the `custom_charsets`
-array, and reference them from the mask as ?1, ?2, ?3, ?4 in the order given.
+array, and reference them from the mask as ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 in
+the order given. Custom charsets have no range shorthand either — NO "0-9"
+or "a-z" syntax; write out every character explicitly (e.g. "0123456789",
+not "0-9").
+
+Distinguish a GENERIC character class from a SPECIFIC restricted set — this
+determines whether to use a builtin token or a custom charset:
+  - GENERIC / unbounded, e.g. "a special character", "a symbol", "a digit",
+    "a lowercase letter" (no specific characters named): use the matching
+    builtin token (?s, ?d, ?l, ?u) directly. Do NOT spell out hashcat's full
+    specials list as literal characters in the mask or as a custom charset —
+    it's unnecessary, error-prone, and never what "a symbol" means. WRONG:
+    custom_charsets ["!@#$%^&*()_+-=[]{}|;:,.<>?"] for "a special char".
+    RIGHT: mask uses "?s" directly, no custom charset needed.
+  - SPECIFIC / restricted, e.g. "one of these symbols: !@#$%", "a vowel"
+    (only a,e,i,o,u), "the digits 1, 2, and 3": ALWAYS define a custom
+    charset containing exactly the named characters, even if they're a
+    subset of what a builtin token would cover. Never substitute the
+    broader builtin token (?s, ?l, ?d) for a named restricted set, and
+    never pick just one representative character instead of defining the
+    charset.
+  - There is exactly ONE correct way to express a GENERIC class: the
+    builtin token. Never additionally emit a second suggestion that
+    hand-spells the same generic class as a custom charset "for variety" —
+    that is not a distinct pattern, it's the same idea restated in a form
+    that's guaranteed to be wrong (hashcat's specials cannot be
+    hand-enumerated into a custom charset without an escaping error). When
+    asked for "as many distinct suggestions as you can," vary the literal
+    basewords or token counts/order, never re-express the same generic
+    charset a second way.
 
 Literal characters in the mask (anything that is not a '?' token) are used
 as-is, e.g. "Summer" in "Summer?d?d?d?d?d?d" is a literal prefix.
@@ -144,18 +213,62 @@ as-is, e.g. "Summer" in "Summer?d?d?d?d?d?d" is a literal prefix.
 
 - NO '{n}' repetition syntax. Hashcat mask files do not support it. Expand
   repeats explicitly: six digits is "?d?d?d?d?d?d", not "?d{6}".
+- The mask field is limited to 256 positions total (hashcat's own hard
+  limit) — one position per token or literal character ('??' counts as one
+  position, not two). This should never come up for a normal request, but
+  never pad a mask with excessive repeats to reach an arbitrary length.
+- The `mask` field must never be empty. Hashcat itself rejects an empty
+  mask outright ("Invalid mask length (0)."). Even a request for a single
+  fixed literal word with no digits/symbols/pattern still needs that word
+  as the mask (e.g. mask "Summer", not an empty string).
+- NO '[...]' bracket character classes. Hashcat masks have no regex-style
+  character-class syntax — '[' and ']' are ordinary literal characters, the
+  same as any letter. To express "one of these characters at this position,"
+  define a custom charset containing exactly those characters and put it in
+  the `custom_charsets` array, then reference it as ?1-?8 in the `mask`
+  field. WRONG: mask "Patriots?d?d[ea34@jr?l]" (this is a literal "["
+  followed by literal chars, NOT a character class). RIGHT: custom_charsets
+  ["ea34@jr?l"], mask "Patriots?d?d?1".
+- Never emit two suggestions with the same `mask` AND the same
+  `custom_charsets` — every object in `masks` must be a distinct candidate
+  pattern, not a repeat.
+- When a description names multiple DISTINCT custom charsets to be used
+  once each (e.g. "charset A, then charset B, then charset C, combined as
+  ?1?2?3"), each must reference its own charset number in the `mask` —
+  never collapse them onto a single repeated reference. WRONG: mask
+  "?1?1?1?1" when four different charsets were defined. RIGHT: mask
+  "?1?2?3?4", with `custom_charsets` holding all four in order. This holds
+  for any count up to 8 distinct charsets, not just four.
 - Produce one mask object per distinct candidate pattern requested. If the
   description describes multiple variants (e.g. "summer or winter", "either
   4 or 6 digits"), return multiple objects in the `masks` array, one per
   variant.
 - If the description names a CATEGORY of words rather than a single literal
   word (e.g. "mushroom varieties", "months of the year", "NFL team names"),
-  immediately pick exactly 6 concrete real-world members of that category
-  from general knowledge — do not deliberate over the count, 6 is always
-  correct — and emit one mask object per (member word x requested pattern)
-  combination, using the member word as a literal prefix/suffix. Never emit
-  a pattern-only mask with no literal basewords when the description asks
-  for basewords from a category.
+  emit one mask object per (member word x requested pattern) combination,
+  using the member word as a literal prefix/suffix. Never emit a
+  pattern-only mask with no literal basewords when the description asks for
+  basewords from a category. Pick up to 15 concrete real-world members of
+  the category from general knowledge — if the category has 15 or fewer
+  real members (e.g. months of the year: 12), list all of them; if it has
+  more (e.g. NFL teams: 32, US states: 50), pick 15 diverse, well-known
+  ones, not an arbitrary handful like 2 or 3. Do not deliberate over the
+  exact count — 15 (or the category's true size if smaller) is always
+  correct.
+- ANY specific named word chosen as a baseword — a category member (a team
+  name, a Bible book, a city), a named literal from the description itself
+  ("Summer", "Blue"), or any other real, spelled word — is ALWAYS a plain
+  literal string, spelled exactly as it's normally written, never
+  decomposed into charset tokens letter-by-letter. This applies whether or
+  not the description mentions capitalization. WRONG: mask "?u??aguars?d?d?1"
+  for the team "Jaguars", or mask "?l?l?l?l?l?d:?d" for the book "Genesis"
+  (both replace real, specific letters with charset tokens that could
+  produce any letter, plus a stray literal '?' — ??). RIGHT: mask
+  "Jaguars?d?d?1", mask "Genesis?d:?d" — the whole word as one literal.
+  Only use ?u/?l/?d ON a specific word's own letters if the description
+  explicitly asks for a *varying*/unspecified value there (e.g. "any
+  capitalization", "an unknown 3-letter prefix") — never to express "this
+  exact, specific word".
 - The `why` field must be exactly ONE short clause with no step-by-step
   reasoning or "thinking out loud". Do not explain your reasoning process,
   just state the rationale in a few words.
@@ -354,6 +467,18 @@ def _validate_items(
             failures.append((item, str(exc)))
             continue
 
+        # Independent ground-truth check (hashcat-utils mp64), when
+        # available. A mismatch means this module's own keyspace() math is
+        # wrong for this line, not that the model did anything wrong — but
+        # it's still a genuine validation failure, not something a retry can
+        # fix by asking the model to try again. Handled identically to any
+        # other validation failure since the outcome (don't return this
+        # suggestion) is the same either way.
+        mismatch = verify_keyspace_with_maskprocessor(parsed_line)
+        if mismatch is not None:
+            failures.append((item, mismatch))
+            continue
+
         suggestions.append(
             MaskSuggestion(
                 mask=mask_field,
@@ -380,6 +505,19 @@ def _build_retry_message(failures: list[tuple[dict[str, Any], str]]) -> str:
     return "\n".join(lines)
 
 
+def _print_reasoning(message: Any, label: str) -> None:
+    """Print a model's hidden reasoning trace to stderr, if present.
+
+    Ollama surfaces reasoning content (when ``think`` is requested) as a
+    ``reasoning`` field alongside ``content`` on the response message. It
+    isn't part of the OpenAI SDK's typed schema, so it only shows up via
+    ``model_extra`` rather than as a normal attribute.
+    """
+    reasoning = getattr(message, "reasoning", None) or (message.model_extra or {}).get("reasoning")
+    if reasoning:
+        print(f"--- {label} thinking ---\n{reasoning}\n--- end thinking ---", file=sys.stderr)
+
+
 def generate_masks(
     description: str,
     *,
@@ -387,6 +525,7 @@ def generate_masks(
     host: str | None = None,
     temperature: float = 0.0,
     client: Any = None,
+    debug: bool = False,
 ) -> list[MaskSuggestion]:
     """Generate hcmask suggestions for an English description via a local LLM.
 
@@ -399,6 +538,13 @@ def generate_masks(
     response. If validation still fails after the retry, raises
     :class:`MaskGenerationError`.
 
+    Requests are sent with ``think`` enabled — since a slow/hybrid-reasoning
+    model already costs the full round-trip time either way, letting it think
+    tends to improve suggestion quality instead of wasting that time. Ollama
+    isolates reasoning into a separate ``reasoning`` field rather than folding
+    it into ``content``, so this doesn't interfere with the structured JSON
+    response.
+
     Args:
         description: An English description of the passwords to target.
         model: Model name to request. Falls back to the ``OLLAMA_MODEL``
@@ -409,6 +555,8 @@ def generate_masks(
             ``.chat.completions.create(...)`` with the same signature as the
             OpenAI SDK client. When omitted, a real ``OpenAI`` client is
             constructed against the resolved base URL.
+        debug: When True, print the model's reasoning trace (if any) to
+            stderr for each request made (initial and retry).
 
     Returns:
         A list of validated :class:`MaskSuggestion` objects.
@@ -430,7 +578,11 @@ def generate_masks(
             # The SDK's defaults (600s read timeout x up to 3 attempts) let a
             # hung/saturated server block this interactive CLI call for 30
             # minutes. Fail fast instead: one attempt, generous but bounded.
-            timeout=180.0,
+            # 600s (not the previous 180s) because category-enumeration
+            # requests (e.g. "NFL teams") make the model emit up to 15 full
+            # mask objects, which measured at ~250s on gemma3:27b alone —
+            # 180s cut those requests off before they could finish.
+            timeout=600.0,
             max_retries=0,
         )
     )
@@ -455,11 +607,15 @@ def generate_masks(
             temperature=temperature,
             messages=messages,
             response_format=response_format,
+            extra_body={"think": True},
         )
     except (APIConnectionError, APIStatusError) as exc:
         raise MaskGenerationError(f"could not reach Ollama at {base_url}: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - network/SDK failures must not escape uncaught
         raise MaskGenerationError(f"request to Ollama at {base_url} failed: {exc}") from exc
+
+    if debug:
+        _print_reasoning(response.choices[0].message, "initial")
 
     assistant_content = response.choices[0].message.content
     parsed, parse_error = _parse_response_json(assistant_content)
@@ -490,11 +646,15 @@ def generate_masks(
             temperature=temperature,
             messages=messages,
             response_format=response_format,
+            extra_body={"think": True},
         )
     except (APIConnectionError, APIStatusError) as exc:
         raise MaskGenerationError(f"could not reach Ollama at {base_url}: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - network/SDK failures must not escape uncaught
         raise MaskGenerationError(f"request to Ollama at {base_url} failed: {exc}") from exc
+
+    if debug:
+        _print_reasoning(retry_response.choices[0].message, "retry")
 
     retry_content = retry_response.choices[0].message.content
     retry_parsed, retry_parse_error = _parse_response_json(retry_content)

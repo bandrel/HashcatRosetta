@@ -1,7 +1,11 @@
 """Tests for hashcat mask parsing, validation, and keyspace computation."""
 
+import subprocess
+from types import SimpleNamespace
+
 import pytest
 
+import hashcat_rosetta.mask as mask_module
 from hashcat_rosetta.mask import (
     BUILTIN_CHARSETS,
     HcmaskLine,
@@ -13,8 +17,9 @@ from hashcat_rosetta.mask import (
     parse_hcmask_line,
     tokens,
     validate_mask,
+    verify_keyspace_with_maskprocessor,
 )
-from hashcat_rosetta.mask import _short_scientific
+from hashcat_rosetta.mask import _maskprocessor_keyspace, _short_scientific
 
 
 class TestBuiltinCharsets:
@@ -165,8 +170,13 @@ class TestValidationErrors:
             parse_hcmask_line("a,b,?1?2?3")
 
     def test_too_many_custom_charsets(self):
-        with pytest.raises(MaskError, match="at most 4 custom charsets"):
-            parse_hcmask_line("a,b,c,d,e,?1")
+        with pytest.raises(MaskError, match="at most 8 custom charsets"):
+            parse_hcmask_line("a,b,c,d,e,f,g,h,i,?1")
+
+    def test_eight_custom_charsets_allowed(self):
+        line = parse_hcmask_line("a,b,c,d,e,f,g,h,?1?2?3?4?5?6?7?8")
+        assert line.custom == ["a", "b", "c", "d", "e", "f", "g", "h"]
+        assert tokens(line) == [(f"?{n}", 1) for n in range(1, 9)]
 
     def test_validate_mask_directly_unknown_token(self):
         with pytest.raises(MaskError, match="unknown token"):
@@ -179,6 +189,29 @@ class TestValidationErrors:
     def test_validate_mask_directly_bad_reference(self):
         with pytest.raises(MaskError, match="referenced \\?2"):
             validate_mask("?1?2", ["abc"])
+
+    def test_mask_at_256_positions_allowed(self):
+        # hashcat's own limit (SP_PW_MAX in mpsp.h) is 256 positions.
+        validate_mask("a" * 256, [])
+
+    def test_mask_over_256_positions_rejected(self):
+        with pytest.raises(MaskError, match="257 positions"):
+            validate_mask("a" * 257, [])
+
+    def test_empty_mask_rejected(self):
+        # hashcat itself rejects this: "Invalid mask length (0)." (mpsp.c).
+        with pytest.raises(MaskError, match="empty"):
+            validate_mask("", [])
+
+    def test_parse_hcmask_line_rejects_empty_mask(self):
+        with pytest.raises(MaskError, match="empty"):
+            parse_hcmask_line("")
+
+    def test_mask_length_counts_positions_not_characters(self):
+        # '??' is 2 characters but 1 position — 256 of them must still pass.
+        validate_mask("??" * 256, [])
+        with pytest.raises(MaskError, match="257 positions"):
+            validate_mask("??" * 257, [])
 
 
 class TestTokens:
@@ -454,9 +487,9 @@ class TestMaskErrorMessages:
 
     def test_error_message_too_many_charsets(self):
         with pytest.raises(MaskError) as exc_info:
-            parse_hcmask_line("a,b,c,d,e,?1")
-        assert "4" in str(exc_info.value)
-        assert "5" in str(exc_info.value)
+            parse_hcmask_line("a,b,c,d,e,f,g,h,i,?1")
+        assert "8" in str(exc_info.value)
+        assert "9" in str(exc_info.value)
 
 
 class TestHcmaskLineDataclass:
@@ -565,3 +598,154 @@ class TestVeryLargeKeyspaceDescribe:
     def test_describe_scientific_format_unchanged(self):
         line = parse_hcmask_line("?b?b?b?b?b?b")
         assert "(~2.8e+14)" in describe(line)
+
+
+class TestMaskprocessorKeyspace:
+    """Unit tests with subprocess mocked out — no real mp64 binary needed."""
+
+    def test_returns_none_when_binary_missing(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", None)
+        assert _maskprocessor_keyspace([], "?d?d?d") is None
+
+    def test_builds_expected_args_and_parses_output(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+        captured = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            return SimpleNamespace(returncode=0, stdout="1000000\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = _maskprocessor_keyspace([], "Summer?d?d?d?d?d?d")
+
+        assert result == 1000000
+        assert captured["args"] == ["/fake/mp64.bin", "--combinations", "Summer?d?d?d?d?d?d"]
+
+    def test_custom_charsets_become_numbered_slots(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+        captured = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            return SimpleNamespace(returncode=0, stdout="62500\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = _maskprocessor_keyspace(["aeiou"], "?1?1?1?1?d?d")
+
+        assert result == 62500
+        assert captured["args"] == [
+            "/fake/mp64.bin",
+            "-1",
+            "aeiou",
+            "--combinations",
+            "?1?1?1?1?d?d",
+        ]
+
+    def test_hex_tokens_translated_onto_free_slot(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+        captured = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            return SimpleNamespace(returncode=0, stdout="6553600\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = _maskprocessor_keyspace([], "?h?h?h?h?d?d")
+
+        assert result == 6553600
+        assert captured["args"] == [
+            "/fake/mp64.bin",
+            "-1",
+            "0123456789abcdef",
+            "--combinations",
+            "?1?1?1?1?d?d",
+        ]
+
+    def test_hex_token_with_no_free_slots_returns_none(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+        # All 4 slots already used by the caller's own custom charsets.
+        result = _maskprocessor_keyspace(["a", "b", "c", "d"], "?1?2?3?4?h")
+        assert result is None
+
+    def test_more_than_four_custom_charsets_returns_none(self, monkeypatch):
+        # mp64 only has 4 slots (-1..-4); this module supports 8 (?1-?8),
+        # so a 5th+ custom charset is simply outside what mp64 can verify.
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("subprocess.run should not be called with >4 custom charsets")
+
+        monkeypatch.setattr(subprocess, "run", fail_if_called)
+
+        result = _maskprocessor_keyspace(["a", "b", "c", "d", "e"], "?1?2?3?4?5")
+        assert result is None
+
+    def test_nonzero_exit_returns_none(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+        monkeypatch.setattr(
+            subprocess, "run", lambda args, **kwargs: SimpleNamespace(returncode=1, stdout="")
+        )
+        assert _maskprocessor_keyspace([], "?d?d?d") is None
+
+    def test_non_integer_output_returns_none(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda args, **kwargs: SimpleNamespace(returncode=0, stdout="not a number\n"),
+        )
+        assert _maskprocessor_keyspace([], "?d?d?d") is None
+
+    def test_subprocess_exception_returns_none(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "MASKPROCESSOR_BIN", "/fake/mp64.bin")
+
+        def raising_run(args, **kwargs):
+            raise FileNotFoundError("no such binary")
+
+        monkeypatch.setattr(subprocess, "run", raising_run)
+        assert _maskprocessor_keyspace([], "?d?d?d") is None
+
+
+class TestVerifyKeyspaceWithMaskprocessor:
+    def test_skips_when_maskprocessor_unavailable(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "_maskprocessor_keyspace", lambda custom, mask: None)
+        line = parse_hcmask_line("Summer?d?d?d?d?d?d")
+        assert verify_keyspace_with_maskprocessor(line) is None
+
+    def test_matching_keyspace_passes(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "_maskprocessor_keyspace", lambda custom, mask: 1_000_000)
+        line = parse_hcmask_line("Summer?d?d?d?d?d?d")
+        assert verify_keyspace_with_maskprocessor(line) is None
+
+    def test_mismatched_keyspace_fails(self, monkeypatch):
+        monkeypatch.setattr(mask_module, "_maskprocessor_keyspace", lambda custom, mask: 42)
+        line = parse_hcmask_line("Summer?d?d?d?d?d?d")
+        result = verify_keyspace_with_maskprocessor(line)
+        assert result is not None
+        assert "1,000,000" in result
+        assert "42" in result
+
+
+@pytest.mark.integration
+class TestMaskprocessorIntegration:
+    """Requires the real hashcat-utils mp64 binary on PATH or a known location."""
+
+    def test_binary_was_found(self):
+        assert mask_module.MASKPROCESSOR_BIN is not None, (
+            "mp64/mp64.bin not found — install hashcat-utils to run this test"
+        )
+
+    def test_plain_digits_mask_matches(self):
+        line = parse_hcmask_line("Summer?d?d?d?d?d?d")
+        assert verify_keyspace_with_maskprocessor(line) is None
+
+    def test_custom_charset_mask_matches(self):
+        line = parse_hcmask_line("aeiou,?1?1?1?1?d?d")
+        assert verify_keyspace_with_maskprocessor(line) is None
+
+    def test_hex_tokens_match(self):
+        line = parse_hcmask_line("?h?h?h?h?d?d")
+        assert verify_keyspace_with_maskprocessor(line) is None

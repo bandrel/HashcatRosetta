@@ -4,6 +4,9 @@ Provides deterministic parsing, validation, and keyspace computation for
 hashcat mask lines. No networking or LLM code — pure unit-testable functions.
 """
 
+import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 
 
@@ -30,7 +33,7 @@ class HcmaskLine:
     """Represents a parsed hcmask line.
 
     Attributes:
-        custom: List of custom charset definitions (0-4 items).
+        custom: List of custom charset definitions (0-8 items).
         mask: The mask string containing tokens and literals.
         raw: The original unparsed line text (useful for error messages).
     """
@@ -44,7 +47,9 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
     """Parse an hcmask line into custom charsets and mask.
 
     An hcmask line is comma-separated fields. The last field is the mask;
-    all preceding fields are custom charset definitions (max 4). Unescaped
+    all preceding fields are custom charset definitions (max 8, matching
+    hashcat's own ``-1``..``-8``/``?1``-``?8`` limit — not mp64's, which
+    only supports 4; see :func:`_maskprocessor_keyspace`). Unescaped
     commas are field separators; ``\\,`` is a literal comma within a field.
 
     Args:
@@ -55,7 +60,8 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
         HcmaskLine with parsed custom charsets and mask.
 
     Raises:
-        MaskError: If the line has >4 custom charsets, or if the mask is
+        MaskError: If the line has >8 custom charsets, if the mask exceeds
+            hashcat's 256-position limit, or if the mask is otherwise
             invalid (dangling ``?``, unknown token, invalid custom charset
             reference, etc.)
     """
@@ -67,8 +73,8 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
     mask = _unescape_field(fields[-1])
     custom_fields = fields[:-1]
 
-    if len(custom_fields) > 4:
-        raise MaskError(f"at most 4 custom charsets allowed, got {len(custom_fields)}")
+    if len(custom_fields) > 8:
+        raise MaskError(f"at most 8 custom charsets allowed, got {len(custom_fields)}")
 
     # Unescape each custom charset field
     custom = [_unescape_field(f) for f in custom_fields]
@@ -120,7 +126,7 @@ def _expand_charset(field: str, prior_expanded: list[str], position: int) -> str
     hashcat does not treat a custom charset field as an opaque literal
     string: it scans it for the same ``?X`` tokens the mask field supports.
     ``?l``/``?u``/``?d``/``?h``/``?H``/``?s``/``?a``/``?b`` expand to their
-    builtin character sets, ``??`` is a literal ``?``, and ``?1``-``?4`` may
+    builtin character sets, ``??`` is a literal ``?``, and ``?1``-``?8`` may
     reference an *earlier* custom charset. Everything else is a literal
     character. hashcat then deduplicates the resulting character set, so
     ``aa`` and ``ab?l`` are 1- and 26-character charsets respectively.
@@ -128,7 +134,7 @@ def _expand_charset(field: str, prior_expanded: list[str], position: int) -> str
     Args:
         field: The raw (comma-unescaped) custom charset field.
         prior_expanded: Already-expanded charsets defined before this one,
-            in order, so ``?1``-``?4`` back-references can be resolved.
+            in order, so ``?1``-``?8`` back-references can be resolved.
         position: 1-based index of this charset (i.e. ``1`` for ``?1``),
             used for error messages and for rejecting self/forward
             references.
@@ -160,7 +166,7 @@ def _expand_charset(field: str, prior_expanded: list[str], position: int) -> str
                 chars.append("?")
             elif f"?{next_char}" in BUILTIN_CHARSETS:
                 chars.extend(BUILTIN_CHARSETS[f"?{next_char}"])
-            elif next_char in "1234":
+            elif next_char in "12345678":
                 ref = int(next_char)
                 if ref >= position:
                     raise MaskError(
@@ -185,7 +191,7 @@ def expand_custom_charsets(custom: list[str]) -> list[str]:
     """Expand every custom charset definition, resolving back-references.
 
     Args:
-        custom: List of raw custom charset fields (0-4 items), in order.
+        custom: List of raw custom charset fields (0-8 items), in order.
 
     Returns:
         The expanded, deduplicated charsets in the same order.
@@ -205,20 +211,28 @@ def validate_mask(mask: str, custom: list[str]) -> None:
 
     Args:
         mask: The mask string to validate.
-        custom: List of custom charset definitions (0-4 items).
+        custom: List of custom charset definitions (0-8 items).
 
     Raises:
         MaskError: If the mask is invalid (dangling ``?``, unknown token,
-            reference to non-existent custom charset, >4 custom charsets, etc.)
-            or if any custom charset definition is empty or malformed.
+            reference to non-existent custom charset, >8 custom charsets,
+            0 or >256 positions, etc.) or if any custom charset definition
+            is empty or malformed.
     """
-    if len(custom) > 4:
-        raise MaskError(f"at most 4 custom charsets allowed, got {len(custom)}")
+    if len(custom) > 8:
+        raise MaskError(f"at most 8 custom charsets allowed, got {len(custom)}")
 
     # Custom charsets are themselves subject to ?X token grammar; expanding
     # them here rejects empty fields, dangling '?', unknown tokens, and
     # references to charsets that are not defined yet.
     expand_custom_charsets(custom)
+
+    # hashcat's own mask engine caps a mask at 256 positions (SP_PW_MAX in
+    # src/mpsp.h) and refuses anything longer ("Mask length is too long.",
+    # src/mpsp.c). position_count tracks positions (one per token or
+    # literal character), not raw string length — a '??' token is 2
+    # characters but 1 position.
+    position_count = 0
 
     i = 0
     while i < len(mask):
@@ -234,21 +248,24 @@ def validate_mask(mask: str, custom: list[str]) -> None:
             # Check for escaped ?
             if next_char == "?":
                 # ?? is a literal ?
+                position_count += 1
                 i += 2
                 continue
 
             # Check for builtin charset
             if f"?{next_char}" in BUILTIN_CHARSETS:
+                position_count += 1
                 i += 2
                 continue
 
-            # Check for custom charset reference (?1-?4)
-            if next_char in "1234":
+            # Check for custom charset reference (?1-?8)
+            if next_char in "12345678":
                 custom_index = int(next_char) - 1
                 if custom_index >= len(custom):
                     raise MaskError(
                         f"referenced ?{next_char} but only {len(custom)} custom charset(s) provided"
                     )
+                position_count += 1
                 i += 2
                 continue
 
@@ -256,7 +273,13 @@ def validate_mask(mask: str, custom: list[str]) -> None:
             raise MaskError(f"unknown token '?{next_char}'")
 
         # Literal character
+        position_count += 1
         i += 1
+
+    if position_count == 0:
+        raise MaskError("mask is empty; hashcat requires at least 1 position")
+    if position_count > 256:
+        raise MaskError(f"mask has {position_count} positions, hashcat's limit is 256")
 
 
 def tokens(line: HcmaskLine) -> list[tuple[str, int]]:
@@ -304,7 +327,7 @@ def tokens(line: HcmaskLine) -> list[tuple[str, int]]:
                 continue
 
             # Custom charset reference
-            if next_char in "1234":
+            if next_char in "12345678":
                 custom_index = int(next_char) - 1
                 if custom_index >= len(expanded_custom):
                     raise MaskError(
@@ -498,7 +521,7 @@ def format_hcmask_line(custom: list[str], mask: str) -> str:
     joins all fields with commas.
 
     Args:
-        custom: List of custom charset strings (0-4 items).
+        custom: List of custom charset strings (0-8 items).
         mask: The mask string.
 
     Returns:
@@ -516,3 +539,93 @@ def format_hcmask_line(custom: list[str], mask: str) -> str:
     fields.append(escaped_mask)
 
     return ",".join(fields)
+
+
+# hashcat-utils' maskprocessor binary, used as an independent ground-truth
+# oracle for keyspace (see verify_keyspace_with_maskprocessor below). Not
+# required — verification is skipped (not an error) if it can't be found.
+MASKPROCESSOR_BIN = (
+    shutil.which("mp64.bin")
+    or shutil.which("mp64")
+    or next(
+        (
+            p
+            for p in ("/usr/local/bin/mp64.bin", "/opt/maskprocessor/src/mp64.bin")
+            if os.path.exists(p)
+        ),
+        None,
+    )
+)
+
+
+def _maskprocessor_keyspace(custom_charsets: list[str], mask: str) -> int | None:
+    """Return hashcat-utils mp64's keyspace count for (custom_charsets, mask).
+
+    mp64 only has 4 custom-charset slots (-1..-4) and no builtin ?h/?H —
+    unlike this module's own 8-slot (?1-?8) support — so the caller's own
+    custom charsets are assigned to slots first, then any ?h/?H tokens in
+    the mask are rewritten onto whatever slots remain. ``custom_charsets``
+    must already be fully expanded (see :func:`expand_custom_charsets`) —
+    mp64 has no concept of this module's custom-charset back-reference
+    extension.
+
+    Returns None (skip, not a failure) if mp64 isn't installed, the line
+    already uses more than mp64's 4 custom-charset slots, there aren't
+    enough free slots for the ?h/?H tokens present, or the subprocess call
+    itself fails for any reason.
+    """
+    if MASKPROCESSOR_BIN is None:
+        return None
+
+    if len(custom_charsets) > 4:
+        # mp64 physically cannot represent a 5th-8th custom charset — this
+        # is not a failure, just outside what mp64 can verify.
+        return None
+
+    slots = list(custom_charsets)
+    translated = mask
+    for token in ("?h", "?H"):
+        if token in translated:
+            if len(slots) >= 4:
+                return None
+            slots.append(BUILTIN_CHARSETS[token])
+            translated = translated.replace(token, f"?{len(slots)}")
+
+    args = [MASKPROCESSOR_BIN]
+    for i, charset in enumerate(slots, start=1):
+        args += [f"-{i}", charset]
+    args += ["--combinations", translated]
+
+    try:
+        result = subprocess.run(args, capture_output=True, timeout=10, text=True)
+    except Exception:  # noqa: BLE001 - verification is best-effort, never fatal
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def verify_keyspace_with_maskprocessor(line: HcmaskLine) -> str | None:
+    """Cross-check this module's own keyspace() against hashcat-utils mp64's.
+
+    A mismatch almost always indicates a bug in this module's own keyspace
+    math (mp64 is the independent ground truth), not bad model output — the
+    line has already passed parse_hcmask_line by the time this runs. Returns
+    a mismatch description, or None if the two agree (or verification wasn't
+    possible — e.g. mp64 isn't installed).
+    """
+    expanded = expand_custom_charsets(line.custom) if line.custom else []
+    mp_count = _maskprocessor_keyspace(expanded, line.mask)
+    if mp_count is None:
+        return None
+    our_count = keyspace(line)
+    if mp_count != our_count:
+        full_line = format_hcmask_line(line.custom, line.mask)
+        return (
+            f"keyspace mismatch for {full_line!r}: hashcat_rosetta computed "
+            f"{our_count:,}, maskprocessor computed {mp_count:,}"
+        )
+    return None
