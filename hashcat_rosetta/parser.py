@@ -153,6 +153,34 @@ class DebugLogParser:
         self.entries = entries
         return entries
 
+    def parse_debug_files(self, filepaths: list[str]) -> list:
+        """Parse multiple debug files, detecting format/mode independently per file.
+
+        A capture spanning a ``--debug-mode`` switch (or simply two logs from
+        different hashcat runs) mixes mode-4 and mode-5 lines. Concatenating
+        their raw lines into one list before parsing -- as callers previously
+        had to do to use :meth:`parse_debug_lines` on more than one file --
+        samples the detection window from whichever file's lines happen to
+        land in the first ``_DETECTION_SAMPLE_SIZE`` lines and then applies
+        that single verdict to every line, so the other file's lines get
+        logged as malformed and silently dropped. Parsing each file on its
+        own restores the per-file detection :meth:`parse_debug_file` already
+        does for a single file.
+
+        Args:
+            filepaths: Paths to the debug files, in the order to concatenate
+                their entries.
+
+        Returns:
+            List of parsed entries, in file order, then line order within
+            each file. Structure matches :meth:`parse_debug_file`.
+        """
+        entries: list = []
+        for filepath in filepaths:
+            entries.extend(self.parse_debug_file(filepath))
+        self.entries = entries
+        return entries
+
     def _detect_format(self, lines: list[str]) -> str:
         """
         Detect whether the file uses space-separated or colon-separated format.

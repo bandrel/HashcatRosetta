@@ -210,6 +210,61 @@ class TestParseDebugFile:
         assert all(e["wordlist"] == "rockyou.txt" for e in entries)
 
 
+class TestParseDebugFiles:
+    """parse_debug_files detects format/mode independently per file."""
+
+    @staticmethod
+    def _write(content: str) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tf:
+            tf.write(content)
+            return tf.name
+
+    def test_mixed_mode_four_and_five_files_both_parse(self):
+        mode_four = self._write(
+            "\n".join(
+                [
+                    "Moldmastersmmkr:r i45 i52 r:Moldmasters25mmkr",
+                    "Customerserv24:^e ^m ^D T3:Dmecustomerserv24",
+                ]
+            )
+            + "\n"
+        )
+        mode_five = self._write(
+            "\n".join(
+                [
+                    "password:c:Password:rockyou.txt",
+                    "admin:c:Admin:rockyou.txt",
+                ]
+            )
+            + "\n"
+        )
+
+        parser = DebugLogParser()
+        entries = parser.parse_debug_files([mode_four, mode_five])
+
+        assert len(entries) == 4
+        four_entries = [
+            e for e in entries if e["baseword"] in {"Moldmastersmmkr", "Customerserv24"}
+        ]
+        assert len(four_entries) == 2
+        assert all(e["wordlist"] is None for e in four_entries)
+        five_entries = [e for e in entries if e["baseword"] in {"password", "admin"}]
+        assert len(five_entries) == 2
+        assert all(e["wordlist"] == "rockyou.txt" for e in five_entries)
+
+    def test_mode_four_file_first_does_not_starve_mode_five_file(self):
+        """Order shouldn't matter: each file's own sample drives its own mode."""
+        mode_four = self._write("baseword:r:candidate\n" * 25)
+        mode_five = self._write("password:c:Password:rockyou.txt\n")
+
+        parser = DebugLogParser()
+        entries = parser.parse_debug_files([mode_four, mode_five])
+
+        assert len(entries) == 26
+        five_entry = next(e for e in entries if e["baseword"] == "password")
+        assert five_entry["wordlist"] == "rockyou.txt"
+
+
 class TestSpaceFormat:
     """Legacy space format stays 3-field with wordlist None."""
 

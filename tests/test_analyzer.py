@@ -168,6 +168,26 @@ class TestDebugAnalyzer:
         assert result["unique_rules"] == 3  # c, u, l
         assert result["unique_basewords"] == 2  # password, admin
 
+    def test_analyze_debug_files_keeps_mixed_modes_independent(self):
+        """A mode-4 file and a mode-5 file in the same batch must not share
+        one detection verdict (regression: merging their lines before parsing
+        let the mode-5 file's sample decide the mode-4 file's lines too,
+        logging them as malformed and dropping them)."""
+        mode_four = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        mode_four.write("Moldmastersmmkr:r i45 i52 r:Moldmasters25mmkr\n")
+        mode_four.close()
+
+        mode_five = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        mode_five.write("password:c:Password:rockyou.txt\n")
+        mode_five.close()
+
+        analyzer = DebugAnalyzer()
+        result = analyzer.analyze_debug_files([mode_four.name, mode_five.name])
+
+        assert result["total_entries"] == 2
+        assert "Moldmastersmmkr" in analyzer.baseword_stats
+        assert "password" in analyzer.baseword_stats
+
     def test_get_top_rules_by_frequency(self):
         """Test getting top rules by frequency."""
         analyzer = DebugAnalyzer()

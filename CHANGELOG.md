@@ -10,8 +10,23 @@ for exact timing.
 
 ## [Unreleased]
 
+### Added
+
+- **`DebugLogParser.parse_debug_files()` / `DebugAnalyzer.analyze_debug_files()`**
+  parse a list of debug files independently and merge their entries, instead
+  of requiring callers to concatenate raw lines and hand them to
+  `parse_debug_lines`/`analyze_debug_lines`.
+
 ### Fixed
 
+- **A batch mixing mode-4 and mode-5 debug logs misparsed whichever file
+  didn't drive detection, logging its lines as "malformed mode-5" and
+  dropping them.** Callers combining multiple debug files (e.g. a capture
+  spanning a `--debug-mode` switch) concatenated their raw lines into one
+  list before calling `parse_debug_lines`/`analyze_debug_lines`, which
+  samples only the start of whatever it's given and applies that single
+  verdict to every line. `parse_debug_files`/`analyze_debug_files` detect
+  format and mode per file instead.
 - **`--explain` no longer crashes on rule files containing high-byte opcode
   arguments.** Rule files are byte-oriented, not text, and hashcat rules
   legitimately carry high-byte arguments (33,262 lines in `BARRAGE.rule`
