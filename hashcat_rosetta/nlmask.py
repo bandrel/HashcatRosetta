@@ -158,6 +158,12 @@ invalid token like '?/'). If the request is for "a special character" /
 "any symbol" / "punctuation" in general, the answer is simply the token
 ?s used directly — nothing else needs to be written for it.
 
+Self-check while writing a mask or custom charset: if you notice you are
+about to write three or more punctuation/symbol characters in a row as
+literal content (e.g. typing "!@#" or "%^&*()"), STOP — that is the exact
+mistake described above, no matter what prompted it. Delete those literal
+characters and use ?s instead.
+
 These 8 are the ONLY builtin '?X' tokens. There is no '?@', '?/', '?w', or
 any other '?<character>' token beyond this list and '??' below, no matter
 how intuitively it might seem to abbreviate something (e.g. '?@' is NOT
