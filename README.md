@@ -155,7 +155,8 @@ hashcat-rosetta --mask "year 2020-2025 followed by exclamation or question mark"
 
 The mask generation feature uses a local Ollama server running an OpenAI-compatible chat
 endpoint. By default, it connects to `http://localhost:11434` and uses the model
-`devstral-small-2:24b`. These can be configured via environment variables or CLI flags:
+`gemma3:27b` (see below). These can be configured via environment variables
+or CLI flags:
 
 ```bash
 # Using environment variables
@@ -171,37 +172,46 @@ hashcat-rosetta --mask "your description" --ollama-host http://custom.host:11434
 cloud provider. The OpenAI SDK is used purely as an HTTP client against that endpoint;
 no data or API key is ever transmitted to `api.openai.com`.
 
-#### Why `devstral-small-2:24b`?
+#### Why `gemma3:27b`?
 
-The default is chosen by `scripts/benchmark_mask_models.py`, which runs 7 fixed
-`--mask`-style prompts against every locally-installed candidate model and grades each
-response two ways:
+The default is chosen by `scripts/benchmark_mask_models.py`, which runs a fixed set of
+14 `--mask`-style prompts — including custom-charset back-references and category-recall
+prompts (Bible books, Bible verse references, European capital cities) — against every
+locally-installed candidate model and grades each response three ways:
 
 - **Deterministic gate.** Each prompt has a hand-written checker (correct keyspace, correct
   token counts, no duplicate suggestions, etc). A **hard fail** means the model's response
   couldn't even be parsed into a valid mask (bad JSON, an unresponsive server); a **soft
   fail** means it parsed fine but didn't satisfy the request (wrong digit count, non-vowel
   custom charset, ...). Soft-failed prompts still get judged, not silently excluded.
-- **LLM judge.** A larger model (`qwen3-coder:latest`) scores every response 1-5 for how
-  well it satisfies the original request.
+- **Keyspace cross-check.** Every validated suggestion's keyspace is independently
+  verified against hashcat-utils' `mp64` (maskprocessor), when installed — this is the
+  same check `generate_masks()` itself runs on every suggestion in production, so a
+  benchmark hard fail here also means real `--mask` usage would have rejected it.
+- **LLM judge.** A model on a separate host (`gemma3:12b` on a second machine, chosen
+  specifically because it isn't itself a candidate — avoids self-grading bias) scores
+  every response 1-5 for how well it satisfies the original request. Requests are sent
+  with thinking enabled, since a slow model already costs the round-trip time either way.
 
 The recommended default is the **smallest model with zero hard fails and a mean judge
-score ≥ 4** across all 7 prompts. From the last full 29-candidate sweep:
+score ≥ 4**. The three finalists carried forward from earlier rounds, re-run against the
+full 14-prompt set:
 
-| model | size | hard fails | mean score |
-|---|---|---|---|
-| `devstral-small-2:24b` | 14.1 GB | 0 | **5.0** |
-| `qwen3-coder:latest` | 17.3 GB | 0 | 4.3 |
-| `mistral-small:24b` | 13.3 GB | 0 | 3.9 (below bar) |
-| `gemma4:latest` | 8.9 GB | 0 | 3.6 (below bar) |
-| everything ≤ 9 GB | 0.4-9 GB | 1-7 | below bar |
+| model | size | hard fails | mean score | time |
+|---|---|---|---|---|
+| `gemma3:27b` | 16.2 GB | **0** | 4.1 | 180s |
+| `dengcao/Qwen3-30B-A3B-Instruct-2507:latest` | 17.4 GB | 1 | 4.5 | 176s |
+| `laguna-xs-2.1:latest` | 18.9 GB | 2 | 4.7 | 730s |
 
-`devstral-small-2:24b` was the smallest model to clear the bar, with a perfect mean and
-minimum score. The prior default, `qwen3.6:35b-a3b`, was replaced because it's a
-hybrid-reasoning model whose "thinking" mode isn't disabled via Ollama's OpenAI-compatible
-endpoint — it repeatedly burned its response budget on hidden reasoning tokens and either
-hung or timed out (see `CHANGELOG.md`). Several other Qwen3-family models in the sweep
-(`qwen3:8b/30b/32b`, `qwen3.5:9b/27b`) showed the same failure mode.
+`gemma3:27b` is the only one of the three with zero hard fails, so it's the pick despite
+not having the highest raw score — `dengcao` and `laguna-xs-2.1:latest` scored higher but
+each failed at least one prompt outright (and `laguna-xs-2.1:latest` is also far slower,
+730s vs ~180s, driven by its own very large native context window).
+
+Several Qwen3-family models in earlier sweep rounds (`qwen3:8b/30b/32b`, `qwen3.5:9b/27b`)
+showed a distinct failure mode: hidden "thinking" tokens plus a huge native context window
+causing multi-minute-to-30-minute hangs on `--mask`-scale hardware. The prior default,
+`qwen3.6:35b-a3b`, was replaced for the same reason (see `CHANGELOG.md`).
 
 Re-run the sweep yourself with `uv run python scripts/benchmark_mask_models.py` — it pulls
 any missing candidates and prints an updated recommendation.
