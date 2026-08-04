@@ -178,6 +178,25 @@ class TestGenerateMasksHappyPath:
 
         assert completions.calls[0].kwargs["model"] == "env-model:latest"
 
+    def test_extra_options_merged_into_extra_body(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks("six digit pin", client=client, extra_options={"num_ctx": 8192})
+
+        extra_body = completions.calls[0].kwargs["extra_body"]
+        assert extra_body["think"] is True
+        assert extra_body["options"] == {"num_ctx": 8192}
+
+    def test_no_options_key_when_extra_options_omitted(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks("six digit pin", client=client)
+
+        extra_body = completions.calls[0].kwargs["extra_body"]
+        assert "options" not in extra_body
+
 
 class TestGenerateMasksRetry:
     def test_invalid_then_valid_triggers_exactly_one_retry(self):

@@ -526,6 +526,7 @@ def generate_masks(
     temperature: float = 0.0,
     client: Any = None,
     debug: bool = False,
+    extra_options: dict[str, Any] | None = None,
 ) -> list[MaskSuggestion]:
     """Generate hcmask suggestions for an English description via a local LLM.
 
@@ -557,6 +558,11 @@ def generate_masks(
             constructed against the resolved base URL.
         debug: When True, print the model's reasoning trace (if any) to
             stderr for each request made (initial and retry).
+        extra_options: Optional Ollama ``options`` (e.g. ``{"num_ctx": 8192}``)
+            merged into every request's ``extra_body``, for callers that need
+            to cap context length to keep a model fully on GPU under a
+            service-wide context setting that would otherwise force CPU
+            spillover. ``None`` (the default) sends no ``options`` at all.
 
     Returns:
         A list of validated :class:`MaskSuggestion` objects.
@@ -596,6 +602,10 @@ def generate_masks(
         },
     }
 
+    extra_body: dict[str, Any] = {"think": True}
+    if extra_options:
+        extra_body["options"] = extra_options
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": description},
@@ -607,7 +617,7 @@ def generate_masks(
             temperature=temperature,
             messages=messages,
             response_format=response_format,
-            extra_body={"think": True},
+            extra_body=extra_body,
         )
     except (APIConnectionError, APIStatusError) as exc:
         raise MaskGenerationError(f"could not reach Ollama at {base_url}: {exc}") from exc
@@ -646,7 +656,7 @@ def generate_masks(
             temperature=temperature,
             messages=messages,
             response_format=response_format,
-            extra_body={"think": True},
+            extra_body=extra_body,
         )
     except (APIConnectionError, APIStatusError) as exc:
         raise MaskGenerationError(f"could not reach Ollama at {base_url}: {exc}") from exc
