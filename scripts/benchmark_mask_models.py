@@ -140,7 +140,19 @@ JUDGE_SYSTEM_PROMPT = (
     "specific rewording of the generator's system prompt that would have "
     "prevented this exact mistake — not generic advice like 'be more "
     "careful' or 'follow instructions better'. If score is 5, "
-    "`prompt_fix_suggestion` must be an empty string."
+    "`prompt_fix_suggestion` must be an empty string.\n\n"
+    "Judge CORRECTNESS and QUANTITY separately, and never let a quantity "
+    "complaint drag down a correctness score: a single suggestion that "
+    "exactly and precisely matches the request is still fully correct even "
+    "if the request implied several variants would be welcome — that is a "
+    "quantity shortfall, not an error, and must not be described as "
+    "'incorrect' in the `reason` field. Score purely on whether each given "
+    "suggestion, taken on its own, satisfies the pattern described. Before "
+    "concluding a custom-charset mask (a comma-separated hcmask line, e.g. "
+    "'aeiou,?1?1?1?1?d?d') is wrong, re-read the custom-charset definitions "
+    "given alongside it — a mask defining exactly the right charset content "
+    "and referencing it correctly is correct syntax, not an error, even "
+    "though it looks different from a mask using only builtin tokens."
 )
 
 
@@ -214,10 +226,27 @@ class BenchmarkPrompt:
 
 
 def _build_judge_prompt(prompt: BenchmarkPrompt, suggestions: list[MaskSuggestion]) -> str:
-    lines = [f"Original request: {prompt.description}", "", "Candidate's suggestions:"]
+    lines = [
+        f"Original request: {prompt.description}",
+        "",
+        "hcmask line format: comma-separated fields, where every field except "
+        "the last is a custom charset definition (in order, defining ?1, ?2, "
+        "?3, ...), and the last field is the mask itself, which may reference "
+        "those charsets as ?1-?8. E.g. 'aeiou,?1?1?1?1?d?d' defines custom "
+        "charset ?1 as the literal characters a/e/i/o/u, then the mask is "
+        "?1?1?1?1?d?d (four vowels, then two digits) -- this is CORRECT syntax "
+        "for 'a vowel repeated four times, then two digits', not an error.",
+        "",
+        "Candidate's suggestions:",
+    ]
     for s in suggestions:
         full_line = format_hcmask_line(s.custom_charsets, s.mask)
         lines.append(f"- mask: {full_line}")
+        if s.custom_charsets:
+            charset_desc = ", ".join(
+                f"?{i}={c!r}" for i, c in enumerate(s.custom_charsets, start=1)
+            )
+            lines.append(f"  custom charsets: {charset_desc}")
         lines.append(f"  description: {describe(s.line)}")
         lines.append(f"  why: {s.why}")
     return "\n".join(lines)
