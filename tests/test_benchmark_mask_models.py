@@ -1098,6 +1098,9 @@ class TestMain:
             )
 
         monkeypatch.setattr(benchmark_mask_models, "benchmark_model", fake_benchmark_model)
+        monkeypatch.setattr(
+            benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True
+        )
 
         benchmark_mask_models.main()
 
