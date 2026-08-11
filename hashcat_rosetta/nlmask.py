@@ -35,21 +35,27 @@ from .mask import (
 # Default model used when neither the ``model`` argument nor the
 # ``OLLAMA_MODEL`` environment variable is set.
 #
-# Full 20-prompt scripts/benchmark_mask_models.py sweep after SYSTEM_PROMPT
-# changed to fix the '[...]' bracket hallucination, the arbitrary "always
-# pick 6" category cap (now up to 15, real category size permitting), and
-# the '?u??literal' word-decomposition bug:
-#   gemma3:27b                           — 0 hard fails, 6 soft, mean 4.2, 234s  <- this pick
-#   dengcao/Qwen3-30B-A3B-Instruct-2507   — 2 hard fails, 4 soft, mean 4.4, 170s
-#   laguna-xs-2.1:latest                  — 5 hard fails, 3 soft, mean 4.2, 781s
-# gemma3:27b is the only candidate with zero hard fails, matching the
-# benchmark's own recommendation criteria — it stays the default. dengcao is
-# faster and scores marginally higher on mean judge score, but its 2 hard
-# fails (both a dangling-'?' custom-charset error when a symbol set
-# includes a literal '?' without escaping it as '??' — a real gap, not a
-# quirk of this sweep) rule it out as a default despite an earlier 2-prompt
-# spot-check missing that failure mode.
-_DEFAULT_MODEL = "gemma3:27b"
+# Full 20-prompt, 18-candidate scripts/benchmark_mask_models.py sweep (every
+# non-tiny model on the candidate host, judged by gpt-oss:20b) after
+# SYSTEM_PROMPT's full round of fixes this session (bracket-hallucination,
+# category-enumeration cap, word-decomposition, generic-vs-specific charset
+# rule, 8-custom-charset support). Every candidate with 0 hard fails, by
+# soft-fail count:
+#   devstral-small-2:24b                  — 0 hard, 1 soft, mean 2.9, 179s  <- this pick
+#   gemma4:31b                            — 0 hard, 1 soft, mean 3.0, 1045s
+#   llama3.3:70b                          — 0 hard, 1 soft, mean 2.7, 356s
+#   qwen3:30b                             — 0 hard, 2 soft, mean 3.1, 712s
+#   gemma3:27b (prior pick)               — 0 hard, 7 soft, mean 2.4, 220s
+#   dengcao/Qwen3-30B-A3B-Instruct-2507   — 0 hard, 8 soft, mean 2.6, 155s
+#   mistral-small:24b                     — 0 hard, 10 soft, mean 2.6, 192s
+# No candidate reaches the benchmark's own "mean >= 4" bar under this judge
+# (every one of the 18 candidates scored between 1.0 and 3.1 — gpt-oss:20b
+# grades markedly harsher than the gemma3:12b judge earlier sweeps used, so
+# that threshold is stale for this judge, not a sign nothing works).
+# devstral-small-2:24b ties for the fewest soft fails at the smallest size
+# and among the fastest — reverting gemma3:27b, which this same fuller sweep
+# now shows has 7x the soft-fail rate at a larger size.
+_DEFAULT_MODEL = "devstral-small-2:24b"
 
 # Default Ollama base URL when neither ``host`` nor ``OLLAMA_HOST`` is set.
 _DEFAULT_BASE_URL = "http://localhost:11434/v1"
