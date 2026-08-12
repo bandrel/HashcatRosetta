@@ -342,6 +342,19 @@ def _strip_json_fence(text: str) -> str:
     return stripped
 
 
+def _strip_think_block(text: str) -> str:
+    """Strip a leaked chain-of-thought preamble ending in ``</think>``.
+
+    Some thinking models (observed on nemotron-3.5-lightning) put their
+    reasoning in ``content`` instead of the SDK's separate ``reasoning``
+    field, terminated by a literal ``</think>`` tag, with the actual JSON
+    answer appended right after it on the same line. If no ``</think>`` tag
+    is present, the text is returned unchanged.
+    """
+    _, sep, after = text.rpartition("</think>")
+    return after.strip() if sep else text
+
+
 def _parse_response_json(content: str | None) -> tuple[dict[str, Any] | None, str | None]:
     """Parse model response content as JSON.
 
@@ -357,13 +370,18 @@ def _parse_response_json(content: str | None) -> tuple[dict[str, Any] | None, st
 
     decoded: Any = None
     decode_error: str | None = None
-    try:
-        decoded = json.loads(content)
-    except json.JSONDecodeError:
+    for candidate in (
+        content,
+        _strip_json_fence(content),
+        _strip_json_fence(_strip_think_block(content)),
+    ):
         try:
-            decoded = json.loads(_strip_json_fence(content))
+            decoded = json.loads(candidate)
+            decode_error = None
+            break
         except json.JSONDecodeError as exc:
-            decode_error = f"could not parse model response as JSON: {exc}"
+            if decode_error is None:
+                decode_error = f"could not parse model response as JSON: {exc}"
 
     if decode_error is not None:
         return None, decode_error

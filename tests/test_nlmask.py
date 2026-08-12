@@ -267,6 +267,26 @@ class TestGenerateMasksRetry:
         assert len(completions.calls) == 1
         assert result[0].mask == "?d?d?d?d?d?d"
 
+    def test_json_after_leaked_think_block_parses_on_first_try(self):
+        leaked = f"Here's a thinking process:\n1. Do the thing.</think>{VALID_JSON}"
+        completions = FakeCompletions([leaked])
+        client = FakeClient(completions)
+
+        result = generate_masks("something", client=client)
+
+        assert len(completions.calls) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+
+    def test_json_after_two_leaked_think_blocks_parses_on_first_try(self):
+        leaked = f"Thinking...</think>Reconsidering...</think>{VALID_JSON}"
+        completions = FakeCompletions([leaked])
+        client = FakeClient(completions)
+
+        result = generate_masks("something", client=client)
+
+        assert len(completions.calls) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+
 
 NON_DICT_TOP_LEVEL_JSON = json.dumps([{"mask": "?d", "custom_charsets": [], "why": "x"}])
 
