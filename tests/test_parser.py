@@ -177,6 +177,13 @@ class TestDetectModeMajorityVote:
         assert entries[0]["wordlist"] == "rockyou.txt"
 
     def test_majority_mode_four_stays_mode_four(self):
+        """The odd line out is read on its own terms, not the file's.
+
+        The file is mode 4 by majority, but the last line carries a
+        wordlist-like trailing field, so it is a mode-5 record and is parsed
+        as one. Forcing the file's mode onto it would glue the candidate to
+        the rule (``c:Weird``) and hand the wordlist back as the candidate.
+        """
         lines = [
             "password:c:Password",
             "admin:c:Admin",
@@ -185,7 +192,66 @@ class TestDetectModeMajorityVote:
         ]
         parser = DebugLogParser()
         entries = parser.parse_debug_lines(lines)
-        assert all(e["wordlist"] is None for e in entries)
+        assert [e["wordlist"] for e in entries] == [None, None, None, "rockyou.txt"]
+        assert [e["rule"] for e in entries] == ["c", "c", "c", "c"]
+        assert entries[3]["candidate"] == "Weird"
+
+
+class TestMixedModeFile:
+    """One log can hold both modes: hashcat appends, and hate_crack switched
+    from --debug-mode 4 to 5 mid-life, so old and new records share a file."""
+
+    def test_mode_five_records_in_a_mode_four_file_keep_their_rule(self):
+        lines = ["a:c:A", "b:c:B", "c:c:C"] + ["password:$1 $2:password12:/wordlists/rockyou.txt"]
+        parser = DebugLogParser()
+        entry = parser.parse_debug_lines(lines)[3]
+        assert entry["rule"] == "$1 $2"
+        assert entry["candidate"] == "password12"
+        assert entry["wordlist"] == "/wordlists/rockyou.txt"
+
+    def test_mode_four_records_in_a_mode_five_file_are_kept(self):
+        """These used to be dropped with a warning, losing real cracks."""
+        lines = [
+            "password:c:Password:rockyou.txt",
+            "admin:c:Admin:rockyou.txt",
+            "letmein:c:Letmein",
+        ]
+        parser = DebugLogParser()
+        entries = parser.parse_debug_lines(lines)
+        assert len(entries) == 3
+        assert entries[2]["rule"] == "c"
+        assert entries[2]["candidate"] == "Letmein"
+        assert entries[2]["wordlist"] is None
+
+    def test_no_derived_rule_contains_a_wordlist_path(self):
+        """The reported symptom: rules.rule lines hashcat rejects."""
+        lines = ["a:c:A", "b:c:B"] + [
+            f"word{i}:$x $y:word{i}x:/Users/me/lists/rockyou.txt" for i in range(5)
+        ]
+        parser = DebugLogParser()
+        rules = {e["rule"] for e in parser.parse_debug_lines(lines)}
+        assert not [r for r in rules if "/" in r], rules
+
+    def test_colon_bearing_rule_still_wins_over_the_wordlist_guess(self):
+        """A rule containing a colon must not be mistaken for a mode boundary.
+
+        ``$:`` appends a colon, so this mode-4 record has three separators.
+        Its trailing field is the hex-encoded candidate, not wordlist-like, so
+        the line stays mode 4. Captured from hashcat 7.1.2 cracking
+        md5("abc:") with the rule ``$:``.
+        """
+        parser = DebugLogParser()
+        entries = parser.parse_debug_lines(["abc:$::$HEX[6162633a]", "def:c:Def", "ghi:c:Ghi"])
+        assert entries[0]["rule"] == "$:"
+        assert entries[0]["candidate"] == "$HEX[6162633a]"
+        assert entries[0]["wordlist"] is None
+
+    def test_explicit_mode_is_still_obeyed_literally(self):
+        """A forced mode is an instruction, not a hint: no per-line rescue."""
+        parser = DebugLogParser(debug_mode=4)
+        entries = parser.parse_debug_lines(["password:c:Password:rockyou.txt"])
+        assert entries[0]["rule"] == "c:Password"
+        assert entries[0]["wordlist"] is None
 
 
 class TestParseDebugFile:
