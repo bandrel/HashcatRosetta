@@ -12,6 +12,16 @@ for exact timing.
 
 ### Added
 
+- **`generate_masks()` gains `think` and `extra_request_body` keyword-only
+  parameters**, both defaulting to today's behaviour. Ollama's `think` toggle
+  was previously hardcoded on, which breaks non-Ollama OpenAI-compatible
+  servers running a reasoning parser (the model's whole structured response
+  lands in `message.reasoning` instead of `message.content`, and the JSON
+  parse gets nothing). `think=False` omits the `think` field entirely rather
+  than sending `False`, and `extra_request_body` merges caller-supplied
+  provider-specific fields (e.g. `{"chat_template_kwargs": {"thinking":
+  False}}`) into `extra_body`. Both parameters apply to the retry request as
+  well as the initial one.
 - **`DebugLogParser.parse_debug_files()` / `DebugAnalyzer.analyze_debug_files()`**
   parse a list of debug files independently and merge their entries, instead
   of requiring callers to concatenate raw lines and hand them to

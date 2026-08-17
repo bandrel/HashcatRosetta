@@ -557,6 +557,8 @@ def generate_masks(
     client: Any = None,
     debug: bool = False,
     extra_options: dict[str, Any] | None = None,
+    think: bool = True,
+    extra_request_body: dict[str, Any] | None = None,
 ) -> list[MaskSuggestion]:
     """Generate hcmask suggestions for an English description via a local LLM.
 
@@ -569,12 +571,16 @@ def generate_masks(
     response. If validation still fails after the retry, raises
     :class:`MaskGenerationError`.
 
-    Requests are sent with ``think`` enabled — since a slow/hybrid-reasoning
-    model already costs the full round-trip time either way, letting it think
-    tends to improve suggestion quality instead of wasting that time. Ollama
-    isolates reasoning into a separate ``reasoning`` field rather than folding
-    it into ``content``, so this doesn't interfere with the structured JSON
-    response.
+    By default, requests are sent with ``think`` enabled — since a
+    slow/hybrid-reasoning model already costs the full round-trip time either
+    way, letting it think tends to improve suggestion quality instead of
+    wasting that time. Ollama isolates reasoning into a separate
+    ``reasoning`` field rather than folding it into ``content``, so this
+    doesn't interfere with the structured JSON response. Set ``think=False``
+    for non-Ollama OpenAI-compatible servers (e.g. vLLM with a reasoning
+    parser active), where requesting thinking routes the whole structured
+    response into ``message.reasoning`` and leaves ``message.content`` empty,
+    breaking this function's JSON parse.
 
     Args:
         description: An English description of the passwords to target.
@@ -593,6 +599,24 @@ def generate_masks(
             to cap context length to keep a model fully on GPU under a
             service-wide context setting that would otherwise force CPU
             spillover. ``None`` (the default) sends no ``options`` at all.
+        think: When True (the default), send Ollama's ``think`` toggle as
+            ``True`` on every request. When False, the ``think`` field is
+            omitted entirely rather than sent as ``False`` — a server that
+            has never heard of the field should not receive it at all, and
+            Ollama's own default applies when it's absent.
+        extra_request_body: Optional dict merged into every request's
+            ``extra_body``, alongside (and after) the ``think``/``options``
+            handling above, for callers driving a non-Ollama OpenAI-compatible
+            server that needs its own provider-specific fields (e.g.
+            ``{"chat_template_kwargs": {"thinking": False}}``). ``None`` (the
+            default) adds nothing. If a key here collides with one this
+            function sets (``think`` or ``options``), the caller's value
+            wins. The OpenAI SDK merges ``extra_body`` into the top-level
+            request JSON, not a sandboxed sub-object — a key that collides
+            with a parameter this function relies on (``response_format``,
+            ``messages``, ``model``) will override it on the wire and break
+            mask generation, surfacing as a JSON-parse failure that looks
+            like the model misbehaving rather than a request-shape problem.
 
     Returns:
         A list of validated :class:`MaskSuggestion` objects.
@@ -632,9 +656,13 @@ def generate_masks(
         },
     }
 
-    extra_body: dict[str, Any] = {"think": True}
+    extra_body: dict[str, Any] = {}
+    if think:
+        extra_body["think"] = True
     if extra_options:
         extra_body["options"] = extra_options
+    if extra_request_body:
+        extra_body.update(extra_request_body)
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
