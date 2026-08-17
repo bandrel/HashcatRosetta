@@ -610,7 +610,13 @@ def generate_masks(
             server that needs its own provider-specific fields (e.g.
             ``{"chat_template_kwargs": {"thinking": False}}``). ``None`` (the
             default) adds nothing. If a key here collides with one this
-            function sets (``think`` or ``options``), the caller's value wins.
+            function sets (``think`` or ``options``), the caller's value
+            wins. The OpenAI SDK merges ``extra_body`` into the top-level
+            request JSON, not a sandboxed sub-object — a key that collides
+            with a parameter this function relies on (``response_format``,
+            ``messages``, ``model``) will override it on the wire and break
+            mask generation, surfacing as a JSON-parse failure that looks
+            like the model misbehaving rather than a request-shape problem.
 
     Returns:
         A list of validated :class:`MaskSuggestion` objects.

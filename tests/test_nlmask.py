@@ -3,6 +3,7 @@
 Uses a fake OpenAI-shaped client so no real network access is required.
 """
 
+import copy
 import json
 import subprocess
 import sys
@@ -45,7 +46,13 @@ class FakeCompletions:
         self.calls: list[_Call] = []
 
     def create(self, **kwargs):
-        self.calls.append(_Call(kwargs=kwargs))
+        # Deep-copy before storing: nlmask.py currently passes the same
+        # extra_body dict object to both the initial and retry calls. If a
+        # future change started mutating that dict between calls instead of
+        # rebuilding it, a shallow/by-reference capture here would silently
+        # show call 0's *mutated* extra_body when inspected after the fact,
+        # masking the regression instead of catching it.
+        self.calls.append(_Call(kwargs=copy.deepcopy(kwargs)))
         if not self._responses:
             raise AssertionError("FakeCompletions.create called more times than responses queued")
         content = self._responses.pop(0)
@@ -204,7 +211,10 @@ class TestGenerateMasksHappyPath:
         generate_masks("six digit pin", client=client)
 
         extra_body = completions.calls[0].kwargs["extra_body"]
-        assert extra_body["think"] is True
+        # Exact-equality, not just a value check on "think": pins the
+        # default request body to contain nothing else, so a stray third
+        # key added later wouldn't slip by unnoticed.
+        assert extra_body == {"think": True}
 
     def test_think_false_omits_think_key_entirely(self):
         completions = FakeCompletions([VALID_JSON])
@@ -243,6 +253,20 @@ class TestGenerateMasksHappyPath:
 
         extra_body = completions.calls[0].kwargs["extra_body"]
         assert extra_body["think"] is False
+
+    def test_extra_request_body_collision_with_options_wins(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks(
+            "six digit pin",
+            client=client,
+            extra_options={"num_ctx": 8192},
+            extra_request_body={"options": {"num_ctx": 4096}},
+        )
+
+        extra_body = completions.calls[0].kwargs["extra_body"]
+        assert extra_body["options"] == {"num_ctx": 4096}
 
 
 class TestGenerateMasksRetry:
@@ -290,6 +314,24 @@ class TestGenerateMasksRetry:
         for call in completions.calls:
             extra_body = call.kwargs["extra_body"]
             assert "think" not in extra_body
+            assert extra_body["chat_template_kwargs"] == {"thinking": False}
+
+    def test_extra_request_body_honoured_on_retry_with_think_left_at_default(self):
+        completions = FakeCompletions([INVALID_JSON_UNKNOWN_TOKEN, VALID_JSON])
+        client = FakeClient(completions)
+
+        result = generate_masks(
+            "something",
+            client=client,
+            extra_request_body={"chat_template_kwargs": {"thinking": False}},
+        )
+
+        assert len(completions.calls) == 2
+        assert len(result) == 1
+
+        for call in completions.calls:
+            extra_body = call.kwargs["extra_body"]
+            assert extra_body["think"] is True
             assert extra_body["chat_template_kwargs"] == {"thinking": False}
 
     def test_invalid_twice_raises(self):
