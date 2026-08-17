@@ -361,12 +361,39 @@ class DebugLogParser:
             return rest, ""
         return rule, candidate
 
+    def _line_mode(self, line: str) -> int:
+        """Decide mode 4 vs mode 5 for one auto-detected line.
+
+        A single log routinely holds both: hashcat appends to the debug file
+        it is given, so a file outlives the ``--debug-mode`` it was started
+        with. Applying the file's majority mode to every line corrupts the
+        minority -- a mode-5 record read as mode 4 hands back the wordlist as
+        the candidate and glues the real candidate onto the rule, producing
+        rule strings like ``$1 $2:password12`` that hashcat rejects outright.
+
+        The file-level vote still sets the default, so an ambiguous line
+        follows its neighbours; only a line that positively disagrees with the
+        file -- a wordlist-shaped trailing field in a mode-4 file, or no
+        wordlist field at all in a mode-5 file -- is read on its own terms.
+        """
+        if line.count(":") < 3:
+            # No room for a wordlist field, whatever the rest of the file does.
+            return 4
+        if self._mode == 5:
+            return 5
+        return 5 if self._looks_like_wordlist(line.rsplit(":", 1)[1]) else 4
+
     def _parse_colon_line(self, line: str) -> dict | None:
         """Parse a colon-separated debug line (mode 4 or mode 5)."""
         if ":" not in line:
             return None
 
-        mode = self.debug_mode if self.debug_mode is not None else self._mode
+        if self.debug_mode is not None:
+            # An explicit override is an instruction, not a hint: honour it
+            # literally, including skipping lines that do not fit.
+            mode = self.debug_mode
+        else:
+            mode = self._line_mode(line)
 
         if mode == 5:
             if line.count(":") < 3:

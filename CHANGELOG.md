@@ -19,6 +19,21 @@ for exact timing.
 
 ### Fixed
 
+- **A single log holding both mode-4 and mode-5 records now parses each record
+  on its own terms, instead of forcing the file's majority mode onto every
+  line.** hashcat appends to whatever debug file it is handed, so one file
+  outlives the `--debug-mode` it was started with — a hate_crack log written
+  across a 4-to-5 switch routinely holds thousands of one and hundreds of the
+  other. Reading a mode-5 record as mode 4 returned the wordlist as the
+  candidate and glued the real candidate onto the rule, yielding rule strings
+  like `$1 $2:password12` (or worse, ones ending in a filesystem path) that
+  hashcat rejects on sight; the reverse case dropped mode-4 records with a
+  "malformed mode-5" warning. Detection still votes per file, so an ambiguous
+  line follows its neighbours — only a line that positively disagrees with the
+  file is re-read. An explicit `debug_mode=` remains literal, with no per-line
+  rescue. On a real 12,326-entry hate_crack capture this took the derived rule
+  file from 111 rules hashcat refused down to two, neither of them a mis-split:
+  an empty line and one rule this hashcat build does not implement.
 - **A batch mixing mode-4 and mode-5 debug logs misparsed whichever file
   didn't drive detection, logging its lines as "malformed mode-5" and
   dropping them.** Callers combining multiple debug files (e.g. a capture
