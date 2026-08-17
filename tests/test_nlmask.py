@@ -197,6 +197,53 @@ class TestGenerateMasksHappyPath:
         extra_body = completions.calls[0].kwargs["extra_body"]
         assert "options" not in extra_body
 
+    def test_think_defaults_to_true_in_extra_body(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks("six digit pin", client=client)
+
+        extra_body = completions.calls[0].kwargs["extra_body"]
+        assert extra_body["think"] is True
+
+    def test_think_false_omits_think_key_entirely(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks("six digit pin", client=client, think=False)
+
+        extra_body = completions.calls[0].kwargs["extra_body"]
+        assert "think" not in extra_body
+
+    def test_extra_request_body_merged_and_coexists_with_options(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks(
+            "six digit pin",
+            client=client,
+            extra_options={"num_ctx": 8192},
+            extra_request_body={"chat_template_kwargs": {"thinking": False}},
+        )
+
+        extra_body = completions.calls[0].kwargs["extra_body"]
+        assert extra_body["options"] == {"num_ctx": 8192}
+        assert extra_body["chat_template_kwargs"] == {"thinking": False}
+
+    def test_extra_request_body_collision_with_think_wins(self):
+        completions = FakeCompletions([VALID_JSON])
+        client = FakeClient(completions)
+
+        generate_masks(
+            "six digit pin",
+            client=client,
+            think=True,
+            extra_request_body={"think": False},
+        )
+
+        extra_body = completions.calls[0].kwargs["extra_body"]
+        assert extra_body["think"] is False
+
 
 class TestGenerateMasksRetry:
     def test_invalid_then_valid_triggers_exactly_one_retry(self):
@@ -225,6 +272,25 @@ class TestGenerateMasksRetry:
         assert retry_messages[3]["role"] == "user"
         assert "?z?d?d" in retry_messages[3]["content"]
         assert "unknown token" in retry_messages[3]["content"]
+
+    def test_think_and_extra_request_body_honoured_on_retry_too(self):
+        completions = FakeCompletions([INVALID_JSON_UNKNOWN_TOKEN, VALID_JSON])
+        client = FakeClient(completions)
+
+        result = generate_masks(
+            "something",
+            client=client,
+            think=False,
+            extra_request_body={"chat_template_kwargs": {"thinking": False}},
+        )
+
+        assert len(completions.calls) == 2
+        assert len(result) == 1
+
+        for call in completions.calls:
+            extra_body = call.kwargs["extra_body"]
+            assert "think" not in extra_body
+            assert extra_body["chat_template_kwargs"] == {"thinking": False}
 
     def test_invalid_twice_raises(self):
         completions = FakeCompletions([INVALID_JSON_UNKNOWN_TOKEN, INVALID_JSON_UNKNOWN_TOKEN])
