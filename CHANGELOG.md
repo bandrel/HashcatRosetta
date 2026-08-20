@@ -12,6 +12,25 @@ for exact timing.
 
 ### Added
 
+- **`audit_hcmask_file()` and a `--verify-masks` CLI flag validate an existing
+  `.hcmask` file line-by-line and total its keyspace.** Until now the mask
+  support only ran one direction: `--mask` could generate and validate new
+  lines, but there was no way to point the tool at a mask file you already had
+  and ask whether hashcat would accept it. The audit reports each line as valid
+  (with its description and keyspace) or invalid (with the parse error and line
+  number), sums the keyspace of the valid lines, and exits non-zero if any line
+  would be rejected — one bad line no longer hides the rest of the file.
+  Skip rules deliberately match hashcat's own hcmask reader
+  (`src/mpsp.c:1661-1667`) rather than this project's rule-file conventions: a
+  zero-length line is skipped and `#` is a comment *only* as the first byte, so
+  `"  #x"` is a mask of two spaces, a literal `#` and an `x`. Agreeing with
+  hashcat matters more than internal consistency here — an audit must never
+  bless a file hashcat would read differently. Files are read as latin-1 so
+  raw bytes >= 0x80 from `$HEX[...]`-decoded plaintexts survive, and no
+  maskprocessor cross-check runs inside the audit, since mp64 supports only
+  four custom charsets and its 64-bit counter overflows on the large keyspaces
+  this is most useful for.
+
 - **`generate_masks()` gains `think` and `extra_request_body` keyword-only
   parameters**, both defaulting to today's behaviour. Ollama's `think` toggle
   was previously hardcoded on, which breaks non-Ollama OpenAI-compatible
@@ -29,6 +48,21 @@ for exact timing.
 
 ### Fixed
 
+- **`describe()` now names all eight custom charset slots instead of echoing
+  `?5`-`?8` as raw tokens.** The description table stopped at `?1`-`?4`, so a
+  mask using the upper slots read "then `?5`" where it should have read "then
+  custom charset 5". All eight are real: hashcat declares
+  `custom_charset_1`..`_8` (`include/types.h`) and reads eight charset fields
+  from an hcmask line (`src/mpsp.c:2424`), and `validate_mask()` has always
+  accepted `?1`-`?8`. Display-only — keyspace was already correct — but it is
+  live for anything generating masks with more than four distinct charsets.
+- **Documented that `format_hcmask_line()` does not validate.** It is a pure
+  string builder: hand it nine charsets, a bad token or an unescaped literal
+  and it returns a malformed line rather than raising, because
+  `parse_hcmask_line()` is the gate. That asymmetry was undocumented, which
+  makes the format-then-parse pairing in downstream callers (hate_crack's
+  `hcatSmartMask`) look like a redundant sanity check when it is the only thing
+  catching bad output. Pinned with tests so it cannot be "optimized" away.
 - **A single log holding both mode-4 and mode-5 records now parses each record
   on its own terms, instead of forcing the file's majority mode onto every
   line.** hashcat appends to whatever debug file it is handed, so one file

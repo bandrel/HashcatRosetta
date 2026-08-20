@@ -8,7 +8,17 @@ from .debug_analyzer import DebugAnalyzer
 from .parser import DebugLogParser, RuleParser
 from typing import TYPE_CHECKING, Any
 
-from .mask import HcmaskLine, MaskError, describe, format_hcmask_line, keyspace, parse_hcmask_line
+from .mask import (
+    HcmaskFileAudit,
+    HcmaskFileEntry,
+    HcmaskLine,
+    MaskError,
+    audit_hcmask_file,
+    describe,
+    format_hcmask_line,
+    keyspace,
+    parse_hcmask_line,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from .nlmask import MaskGenerationError, MaskSuggestion, generate_masks
@@ -40,7 +50,10 @@ __all__ = [
     "DebugLogParser",
     "DebugAnalyzer",
     "HcmaskLine",
+    "HcmaskFileAudit",
+    "HcmaskFileEntry",
     "MaskError",
+    "audit_hcmask_file",
     "parse_hcmask_line",
     "keyspace",
     "describe",

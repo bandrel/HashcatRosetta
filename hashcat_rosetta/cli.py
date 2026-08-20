@@ -10,7 +10,7 @@ import click
 from ._opcodes import ONE_ARG_OPCODES, THREE_ARG_OPCODES, TWO_ARG_OPCODES
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
-from .mask import describe, format_hcmask_line
+from .mask import audit_hcmask_file, describe, format_hcmask_line
 from .parser import decode_hex_escapes, find_rule_issues
 
 # NOTE: hashcat_rosetta.nlmask is deliberately NOT imported here. It pulls in
@@ -1120,6 +1120,12 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     help="Analyze rule file opcodes (FILE should be a rule file, not debug output)",
 )
 @click.option(
+    "--verify-masks",
+    is_flag=True,
+    help="Validate every mask line in an .hcmask file and total its keyspace "
+    "(FILE should be an .hcmask file)",
+)
+@click.option(
     "--debug-mode",
     type=click.Choice(["auto", "4", "5"]),
     default="auto",
@@ -1174,6 +1180,7 @@ def main(
     min_occurrences,
     detail,
     analyze_rules,
+    verify_masks,
     debug_mode,
     mask,
     mask_out,
@@ -1209,6 +1216,9 @@ def main(
     Generate masks:
         hashcat-rosetta --mask "The word 'Summer' followed by six digits."
         hashcat-rosetta --mask "a season and a year" -o seasons.hcmask
+
+    Verify mask files:
+        hashcat-rosetta masks.hcmask --verify-masks
     """
 
     # Show the banner (to stderr so it never pollutes piped/exported stdout)
@@ -1351,6 +1361,46 @@ def main(
         click.echo("Error: FILE is required (unless using --explain)\n")
         click.echo(ctx.get_help())
         sys.exit(1)
+
+    # Handle hcmask file verification
+    if verify_masks:
+        try:
+            audit = audit_hcmask_file(file)
+        except OSError as e:
+            click.echo(f"Error: could not read {file}: {e}", err=True)
+            sys.exit(1)
+
+        click.echo(f"\nMask File Verification: '{audit.path}'")
+        click.echo("=" * 70)
+        for entry in audit.entries:
+            if entry.error is not None:
+                click.echo(f"\nLine {entry.lineno}: {_escape_bytes(entry.raw)}")
+                click.echo(f"  [!] invalid: {entry.error}")
+            else:
+                click.echo(f"\nLine {entry.lineno}: {_escape_bytes(entry.raw)}")
+                assert entry.line is not None  # narrowed by entry.error is None
+                # describe() is printed unescaped, as on the --mask path: its
+                # own multiplication sign is U+00D7, which _escape_bytes would
+                # render as "\xd7". The escaped raw line directly above
+                # already gives the exact bytes of any high-byte literal.
+                click.echo(f"  {describe(entry.line)}")
+
+        click.echo(f"\n{'-' * 70}")
+        click.echo(f"Valid lines:     {len(audit.valid)}")
+        click.echo(f"Invalid lines:   {len(audit.invalid)}")
+        skipped = audit.skipped_blank + audit.skipped_comment
+        click.echo(
+            f"Skipped lines:   {skipped} "
+            f"({audit.skipped_blank} blank, {audit.skipped_comment} comment)"
+        )
+        click.echo(f"Total keyspace:  {audit.total_keyspace:,} candidates")
+        if audit.invalid:
+            click.echo(
+                "\n[!] hashcat would reject this file's invalid line(s).",
+                err=True,
+            )
+            sys.exit(1)
+        return
 
     # Handle rule opcode analysis
     if analyze_rules:
