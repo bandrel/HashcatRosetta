@@ -33,9 +33,22 @@ Usage:
         BENCHMARK_JUDGE_HOST=http://other-host:11434 \\
         uv run python scripts/benchmark_mask_models.py
 
+Set BENCHMARK_SKIP_JUDGE=1 to skip the model judge entirely: the
+deterministic checkers still run and every suggestion is written to
+SUGGESTIONS_LOG_PATH, but scoring is left to whoever reads that log (a
+human, or the agent driving the sweep). Judge scores in the report are then
+all N/A. Use this when judge calibration is itself in question — a swapped
+judge model silently shifts every score and breaks comparison across sweeps.
+
+Set BENCHMARK_THINK=both to sweep each candidate twice, once with
+generate_masks(think=True) (the shipped default) and once with think=False;
+`true` (default) or `false` runs just that one setting. The report's `think`
+column distinguishes the two runs of the same model.
+
 Requires: running Ollama servers at CANDIDATE_HOST and JUDGE_HOST; `ollama`
 on PATH locally to pull missing models (pulls are pinned to the relevant
-host regardless of the local OLLAMA_HOST setting).
+host regardless of the local OLLAMA_HOST setting). Only CANDIDATE_HOST is
+needed when BENCHMARK_SKIP_JUDGE is set.
 """
 
 from __future__ import annotations
@@ -77,28 +90,75 @@ JUDGE_HOST = os.environ.get("BENCHMARK_JUDGE_HOST", "http://localhost:11434")
 # generic-vs-specific charset rule, category cap, bracket-avoidance,
 # duplicate suppression) — prior per-model results are not comparable,
 # every candidate here needs a fresh run.
+# Ordered most- to least-decision-relevant rather than by size: the sweep
+# writes BENCHMARK_RESULTS_PATH incrementally, so a run cut short still
+# answers "should _DEFAULT_MODEL change?" Incumbent default first, then the
+# newest-generation models on the host, then prior 0-hard-fail finishers,
+# then the rest.
+#
+# Scoped to models that could plausibly ship as _DEFAULT_MODEL: <=20GB, so
+# they fit one GPU alongside a working cracking session. The 26-52GB tier on
+# the candidate host (mixtral:8x7b, llama3.3:70b, qwen2.5:72b, hermes3:70b,
+# deepseek-r1:70b, qwen3-coder-next:Q4_K_M) is deliberately excluded, not
+# overlooked: the prior sweep's best 70B tied devstral-small-2:24b on quality
+# at 2.8x the size, so it can't win a tie broken by size. Re-add that tier
+# only to answer "what's the ceiling", not "what should we default to".
+#
+# qwen3.5:27b excluded on measured latency, not quality: in this sweep it
+# averaged ~4-5 minutes per prompt against devstral-small-2:24b's ~25s (and
+# timed out entirely on its first, cold-load request), which both disqualifies
+# it as an interactive default and consumes ~3h of sweep wall clock on its
+# own. Re-test it only if the latency changes.
 CANDIDATES: list[str] = [
-    "laguna-xs-2.1:latest",
-    "dengcao/Qwen3-30B-A3B-Instruct-2507:latest",
-    "gemma3:27b",
-    "qwen3-coder-next:Q4_K_M",
-    "qwen2.5:72b",
-    "llama3.3:70b",
-    "deepseek-r1:70b",
-    "hermes3:70b",
-    "mixtral:8x7b",
-    "qwen3:32b",
-    "gemma4:31b",
-    "glm-4.7-flash:latest",
-    "qwen3-coder:latest",
-    "qwen3:30b",
-    "qwen3.5:27b",
     "devstral-small-2:24b",
+    "hf.co/daway845/Qwen3.8-27B-Abliterated-GGUF:Q4_K_M",
+    "gemma4:31b",
+    "qwen3:30b",
+    "gemma3:27b",
+    "dengcao/Qwen3-30B-A3B-Instruct-2507:latest",
     "mistral-small:24b",
+    "qwen3.5:9b",
     "phi4:14b",
 ]
 
+# BENCHMARK_CANDIDATES overrides the list above with a comma-separated set of
+# model names, for re-testing one candidate without editing this file. Useful
+# when a result needs confirming rather than discovering: a model that hard
+# failed under GPU contention looks identical in the report to one that is
+# genuinely broken, and only a clean re-run tells them apart.
+_CANDIDATES_ENV = os.environ.get("BENCHMARK_CANDIDATES", "").strip()
+if _CANDIDATES_ENV:
+    CANDIDATES = [name.strip() for name in _CANDIDATES_ENV.split(",") if name.strip()]
+
 JUDGE_MODEL = "gpt-oss:20b"
+
+# Set BENCHMARK_SKIP_JUDGE=1 to run the deterministic checkers only and leave
+# scoring to whoever reads SUGGESTIONS_LOG_PATH. JUDGE_MODEL is then never
+# contacted or pulled.
+SKIP_JUDGE = os.environ.get("BENCHMARK_SKIP_JUDGE", "") not in ("", "0")
+
+# Give up on a candidate after this many consecutive hard fails — see
+# benchmark_model(). One is enough to disqualify it; the rest is wall clock
+# spent re-proving that. Set above 1 so a single transient blip (a cold model
+# load racing the SDK timeout) doesn't end an otherwise fine candidate's run.
+MAX_CONSECUTIVE_HARD_FAILS = 3
+
+# Which values of nlmask.generate_masks()'s `think` toggle to sweep, set via
+# BENCHMARK_THINK={true,false,both}. `think` is a real quality/latency axis,
+# not an implementation detail: for a hybrid-reasoning model it changes both
+# the answer and the wall clock, and "true" (the shipped default) is not
+# automatically the better setting for a task whose output is a short
+# grammar-constrained JSON object. Defaults to the shipped default alone, so
+# a plain run still measures production behavior.
+_THINK_ENV = os.environ.get("BENCHMARK_THINK", "true").strip().lower()
+if _THINK_ENV == "both":
+    THINK_SETTINGS: list[bool] = [True, False]
+elif _THINK_ENV in ("false", "0", "no"):
+    THINK_SETTINGS = [False]
+elif _THINK_ENV in ("true", "1", "yes"):
+    THINK_SETTINGS = [True]
+else:
+    raise SystemExit(f"BENCHMARK_THINK must be true, false, or both — got {_THINK_ENV!r}")
 
 # The judge host may have a small/shared GPU with other concurrent consumers
 # and a service-wide context-length setting that reserves a KV cache large
@@ -371,6 +431,7 @@ class ModelReport:
     model: str
     disk_size_gb: float | None
     prompt_results: list[PromptResult]
+    think: bool = True
 
     @property
     def hard_fail_count(self) -> int:
@@ -926,6 +987,7 @@ def _log_suggestions_for_manual_review(
     judge_score: int | None,
     judge_reason: str | None,
     prompt_fix_suggestion: str | None,
+    think: bool = True,
 ) -> None:
     """Append raw suggestions to SUGGESTIONS_LOG_PATH for spot-checking.
 
@@ -944,6 +1006,7 @@ def _log_suggestions_for_manual_review(
             json.dumps(
                 {
                     "model": model,
+                    "think": think,
                     "prompt": prompt.name,
                     "description": prompt.description,
                     "soft_fail_reason": soft_fail_reason,
@@ -951,7 +1014,11 @@ def _log_suggestions_for_manual_review(
                     "judge_reason": judge_reason,
                     "prompt_fix_suggestion": prompt_fix_suggestion,
                     "suggestions": [
-                        {"mask": format_hcmask_line(s.custom_charsets, s.mask), "why": s.why}
+                        {
+                            "mask": format_hcmask_line(s.custom_charsets, s.mask),
+                            "why": s.why,
+                            "keyspace": keyspace(s.line),
+                        }
                         for s in suggestions
                     ],
                 }
@@ -967,6 +1034,7 @@ def run_prompt_for_model(
     *,
     candidate_host: str = CANDIDATE_HOST,
     judge_host: str = JUDGE_HOST,
+    think: bool = True,
 ) -> PromptResult:
     start = time.monotonic()
     try:
@@ -977,7 +1045,9 @@ def run_prompt_for_model(
         # surfaces here as a MaskGenerationError, same as any other
         # validation failure, so there's nothing extra to do in this
         # benchmark script for that check.
-        suggestions = generate_masks(prompt.description, model=model, host=candidate_host)
+        suggestions = generate_masks(
+            prompt.description, model=model, host=candidate_host, think=think
+        )
     except MaskGenerationError as exc:
         elapsed = time.monotonic() - start
         reason = f"generate_masks raised: {exc}"
@@ -989,19 +1059,27 @@ def run_prompt_for_model(
     if soft_fail_reason is not None:
         print(f"  soft fail {model}/{prompt.name}: {soft_fail_reason}", file=sys.stderr)
 
-    try:
-        verdict = judge_score(prompt, suggestions, host=judge_host)
-        score, judge_reason, fix_suggestion = (
-            verdict.score,
-            verdict.reason,
-            verdict.prompt_fix_suggestion,
-        )
-    except JudgeError as exc:
-        print(f"  warning: judge failed for {model}/{prompt.name}: {exc}", file=sys.stderr)
+    if SKIP_JUDGE:
+        # No model judge: the deterministic checkers still run, and every
+        # suggestion goes to SUGGESTIONS_LOG_PATH for an external reviewer
+        # (a human, or the agent running the sweep) to score instead. Avoids
+        # the judge-calibration problem where a swapped judge model silently
+        # shifts every score and invalidates cross-sweep comparison.
         score, judge_reason, fix_suggestion = None, None, None
+    else:
+        try:
+            verdict = judge_score(prompt, suggestions, host=judge_host)
+            score, judge_reason, fix_suggestion = (
+                verdict.score,
+                verdict.reason,
+                verdict.prompt_fix_suggestion,
+            )
+        except JudgeError as exc:
+            print(f"  warning: judge failed for {model}/{prompt.name}: {exc}", file=sys.stderr)
+            score, judge_reason, fix_suggestion = None, None, None
 
     _log_suggestions_for_manual_review(
-        model, prompt, suggestions, soft_fail_reason, score, judge_reason, fix_suggestion
+        model, prompt, suggestions, soft_fail_reason, score, judge_reason, fix_suggestion, think
     )
 
     return PromptResult(
@@ -1017,32 +1095,68 @@ def run_prompt_for_model(
 
 
 def benchmark_model(
-    model: str, *, candidate_host: str = CANDIDATE_HOST, judge_host: str = JUDGE_HOST
+    model: str,
+    *,
+    candidate_host: str = CANDIDATE_HOST,
+    judge_host: str = JUDGE_HOST,
+    think: bool = True,
 ) -> ModelReport:
-    print(f"Benchmarking {model}...", file=sys.stderr)
+    print(f"Benchmarking {model} (think={think})...", file=sys.stderr)
 
     try:
         pulled = ensure_model_pulled(model, host=candidate_host)
         models = list_local_models(candidate_host)
     except Exception as exc:  # noqa: BLE001 - infra failures must not crash the sweep
         results = [PromptResult(p.name, 0.0, f"infrastructure error: {exc}", None) for p in PROMPTS]
-        return ModelReport(model, None, results)
+        return ModelReport(model, None, results, think)
 
     if not pulled or model not in models:
         results = [PromptResult(p.name, 0.0, "model could not be pulled", None) for p in PROMPTS]
-        return ModelReport(model, None, results)
+        return ModelReport(model, None, results, think)
 
     disk_size_gb = models[model] / (1024**3)
-    results = [
-        run_prompt_for_model(model, p, candidate_host=candidate_host, judge_host=judge_host)
-        for p in PROMPTS
-    ]
-    return ModelReport(model, disk_size_gb, results)
+    results = []
+    consecutive_hard_fails = 0
+    for i, p in enumerate(PROMPTS):
+        result = run_prompt_for_model(
+            model, p, candidate_host=candidate_host, judge_host=judge_host, think=think
+        )
+        results.append(result)
+
+        # A model that can't answer at all (unreachable, or every request
+        # hitting the 600s SDK timeout) would otherwise burn
+        # len(PROMPTS) x 600s of wall clock proving the same thing repeatedly.
+        # Bail out after MAX_CONSECUTIVE_HARD_FAILS and record the remainder
+        # as skipped — the model is already disqualified by any hard fail, so
+        # nothing decision-relevant is lost. Logged explicitly rather than
+        # silently truncated.
+        consecutive_hard_fails = (
+            consecutive_hard_fails + 1 if result.hard_fail_reason is not None else 0
+        )
+        if consecutive_hard_fails >= MAX_CONSECUTIVE_HARD_FAILS:
+            remaining = PROMPTS[i + 1 :]
+            print(
+                f"  ABORT {model}: {consecutive_hard_fails} consecutive hard fails, "
+                f"skipping {len(remaining)} remaining prompts",
+                file=sys.stderr,
+            )
+            results.extend(
+                PromptResult(
+                    r.name,
+                    0.0,
+                    f"skipped after {consecutive_hard_fails} consecutive hard fails",
+                    None,
+                )
+                for r in remaining
+            )
+            break
+
+    return ModelReport(model, disk_size_gb, results, think)
 
 
 def format_report(reports: list[ModelReport]) -> str:
     header = (
-        f"{'model':<24}{'size(GB)':>10}{'hard_fails':>12}{'soft_fails':>12}"
+        f"{'model':<24}{'think':>7}{'size(GB)':>10}{'hard_fails':>12}{'soft_fails':>12}"
         f"{'mean_score':>12}{'min_score':>11}{'avg_sugg':>10}{'time(s)':>10}"
     )
     lines = [header, "-" * len(header)]
@@ -1059,8 +1173,9 @@ def format_report(reports: list[ModelReport]) -> str:
             f"{r.mean_suggestion_count:.1f}" if r.mean_suggestion_count is not None else "N/A"
         )
         lines.append(
-            f"{r.model:<24}{size_str:>10}{r.hard_fail_count:>12}{r.soft_fail_count:>12}"
-            f"{mean_str:>12}{min_str:>11}{sugg_str:>10}{r.total_seconds:>10.1f}"
+            f"{r.model:<24}{str(r.think):>7}{size_str:>10}{r.hard_fail_count:>12}"
+            f"{r.soft_fail_count:>12}{mean_str:>12}{min_str:>11}{sugg_str:>10}"
+            f"{r.total_seconds:>10.1f}"
         )
 
     passing = [
@@ -1110,21 +1225,28 @@ def format_report(reports: list[ModelReport]) -> str:
 
 
 def main() -> None:
-    if not ensure_model_pulled(JUDGE_MODEL, host=JUDGE_HOST):
+    if SKIP_JUDGE:
+        print(
+            "BENCHMARK_SKIP_JUDGE set: deterministic checks only, no model judge", file=sys.stderr
+        )
+    elif not ensure_model_pulled(JUDGE_MODEL, host=JUDGE_HOST):
         print(f"FATAL: judge model {JUDGE_MODEL!r} could not be pulled/found", file=sys.stderr)
         sys.exit(1)
 
     results_path = os.environ.get("BENCHMARK_RESULTS_PATH")
     reports = []
-    for m in CANDIDATES:
-        report = benchmark_model(m)
-        reports.append(report)
-        if results_path:
+    for think in THINK_SETTINGS:
+        for m in CANDIDATES:
+            report = benchmark_model(m, think=think)
+            reports.append(report)
+            if not results_path:
+                continue
             with open(results_path, "a") as f:
                 f.write(
                     json.dumps(
                         {
                             "model": report.model,
+                            "think": report.think,
                             "disk_size_gb": report.disk_size_gb,
                             "hard_fail_count": report.hard_fail_count,
                             "soft_fail_count": report.soft_fail_count,

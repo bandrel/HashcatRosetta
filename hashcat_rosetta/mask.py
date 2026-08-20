@@ -66,18 +66,17 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
             reference, etc.)
     """
     raw_line = line
-    # Split on unescaped commas
-    fields = _split_unescaped_commas(line)
+    # One pass splits fields and strips escapes, as hashcat does -- unescaping
+    # must precede tokenizing, or "\?d" reads as a literal backslash plus a
+    # digit token rather than the digit token hashcat actually runs.
+    fields = _split_and_unescape_fields(line)
 
     # Last field is the mask; all others are custom charsets
-    mask = _unescape_field(fields[-1])
-    custom_fields = fields[:-1]
+    mask = fields[-1]
+    custom = fields[:-1]
 
-    if len(custom_fields) > 8:
-        raise MaskError(f"at most 8 custom charsets allowed, got {len(custom_fields)}")
-
-    # Unescape each custom charset field
-    custom = [_unescape_field(f) for f in custom_fields]
+    if len(custom) > 8:
+        raise MaskError(f"at most 8 custom charsets allowed, got {len(custom)}")
 
     # Validate the mask against the custom charsets
     validate_mask(mask, custom)
@@ -85,39 +84,51 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
     return HcmaskLine(custom=custom, mask=mask, raw=raw_line)
 
 
-def _split_unescaped_commas(line: str) -> list[str]:
-    """Split a line on unescaped commas.
+def _split_and_unescape_fields(line: str) -> list[str]:
+    r"""Split an hcmask line into fields, removing escapes as hashcat does.
 
-    A comma preceded by a backslash is escaped and not a separator.
-    The backslash is not removed here; it is removed by _unescape_field().
+    A faithful port of hashcat's ``mask_ctx_parse_maskfile``
+    (``src/mpsp.c``), which splits fields and unescapes in one pass over a
+    single ``escaped`` flag. Three consequences, all verified against
+    ``hashcat --stdout -a 3``, and none of them what a comma-only reading of
+    the format would predict:
+
+    - **A backslash escapes whatever follows it, not just a comma**, and is
+      itself dropped. ``\#`` is ``#`` -- which is how a mask beginning with
+      ``#`` is expressed at all, since hashcat's comment test looks at the
+      raw first byte. ``\?d`` is the *token* ``?d``, not a literal backslash
+      followed by a digit: hashcat unescapes before it interprets ``?``, so
+      the line ``\?d`` enumerates ``0``-``9``, not ``\0``-``\9``.
+    - **The escape state is tracked, so an escaped backslash does not escape
+      the next character.** In ``a\\,?1?1`` the ``\\`` is a literal
+      backslash and the comma that follows is a real separator, giving the
+      charset ``a\`` and the mask ``?1?1``. Testing "is the previous
+      character a backslash" instead of carrying the flag reads that line as
+      one field and rejects a valid file.
+    - **A trailing lone backslash escapes nothing and simply vanishes**,
+      because hashcat's loop ends with the flag still set and never copies
+      it.
+
+    Unescaping therefore has to happen *before* tokenizing, exactly as it
+    does upstream -- doing it after, or only for commas, changes which
+    candidates the line is understood to enumerate.
     """
-    fields = []
-    current = []
-    i = 0
-    while i < len(line):
-        if i > 0 and line[i] == "," and line[i - 1] == "\\":
-            # Escaped comma — include it in the current field
-            current.append(",")
-            i += 1
-        elif line[i] == ",":
-            # Unescaped comma — field separator
+    fields: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in line:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ",":
             fields.append("".join(current))
             current = []
-            i += 1
         else:
-            current.append(line[i])
-            i += 1
+            current.append(char)
     fields.append("".join(current))
     return fields
-
-
-def _unescape_field(field: str) -> str:
-    """Remove escape sequences from a field.
-
-    Replaces ``\\,`` with ``,``. Other backslashes are left alone
-    (hashcat behavior).
-    """
-    return field.replace("\\,", ",")
 
 
 def _expand_charset(field: str, prior_expanded: list[str], position: int) -> str:
@@ -507,8 +518,11 @@ def _describe_token(token: str) -> str:
     if token in descriptions:
         return descriptions[token]
 
-    # Custom charset reference
-    if token in ("?1", "?2", "?3", "?4"):
+    # Custom charset reference. All eight of hashcat's slots, not just the
+    # first four -- hashcat declares custom_charset_1..8 (include/types.h) and
+    # reads up to eight charset fields from an hcmask line (src/mpsp.c), and
+    # validate_mask accepts ?1-?8 accordingly.
+    if len(token) == 2 and token[0] == "?" and token[1] in "12345678":
         return f"custom charset {token[1]}"
 
     return token
@@ -520,25 +534,39 @@ def format_hcmask_line(custom: list[str], mask: str) -> str:
     Escapes any literal commas in custom charset fields as ``\\,`` and
     joins all fields with commas.
 
+    **This function does not validate.** It is a pure string builder: given
+    more than eight charsets, an empty mask, or an unknown ``?x`` token it
+    returns a malformed line rather than raising. :func:`parse_hcmask_line`
+    (and :func:`validate_mask` beneath it) is the gate -- callers that build
+    a line and then hand it to hashcat must parse it back to check it, and
+    that parse is load-bearing, not a redundant sanity check. See
+    ``hcatSmartMask`` in hate_crack for the intended format-then-parse
+    pairing.
+
     Args:
-        custom: List of custom charset strings (0-8 items).
+        custom: List of custom charset strings (0-8 items; not enforced here).
         mask: The mask string.
 
     Returns:
-        A formatted hcmask line string.
+        A formatted hcmask line string, valid only if the inputs were.
     """
-    fields = []
-
-    # Escape custom charsets
-    for charset in custom:
-        escaped = charset.replace(",", "\\,")
-        fields.append(escaped)
-
-    # Escape mask field (commas must be escaped as \,)
-    escaped_mask = mask.replace(",", "\\,")
-    fields.append(escaped_mask)
+    # A backslash must be escaped before a comma is, and it must be escaped at
+    # all: hashcat's field parser drops any backslash and takes the next
+    # character literally, so an unescaped "\" in a charset or mask would eat
+    # the character after it (and a trailing one would vanish). Doing commas
+    # first would then re-escape the backslash this step just added.
+    fields = [_escape_field(charset) for charset in custom]
+    fields.append(_escape_field(mask))
 
     return ",".join(fields)
+
+
+def _escape_field(field: str) -> str:
+    r"""Escape a single hcmask field: ``\`` -> ``\\``, then ``,`` -> ``\,``.
+
+    The inverse of one field's worth of :func:`_split_and_unescape_fields`.
+    """
+    return field.replace("\\", "\\\\").replace(",", "\\,")
 
 
 # hashcat-utils' maskprocessor binary, used as an independent ground-truth
@@ -606,6 +634,111 @@ def _maskprocessor_keyspace(custom_charsets: list[str], mask: str) -> int | None
         return int(result.stdout.strip())
     except ValueError:
         return None
+
+
+@dataclass
+class HcmaskFileEntry:
+    """One non-skipped line of an audited hcmask file.
+
+    Exactly one of ``line`` / ``error`` is set: ``line`` for a mask that
+    parsed, ``error`` for the ``MaskError`` message it failed with.
+    """
+
+    lineno: int
+    raw: str
+    line: HcmaskLine | None = None
+    error: str | None = None
+    keyspace: int = 0
+
+
+@dataclass
+class HcmaskFileAudit:
+    """Result of auditing an hcmask file.
+
+    ``total_keyspace`` sums only the entries that parsed, so a file with
+    errors still reports the keyspace of its valid lines.
+    """
+
+    path: str
+    entries: list[HcmaskFileEntry]
+    skipped_blank: int
+    skipped_comment: int
+
+    @property
+    def valid(self) -> list[HcmaskFileEntry]:
+        return [e for e in self.entries if e.error is None]
+
+    @property
+    def invalid(self) -> list[HcmaskFileEntry]:
+        return [e for e in self.entries if e.error is not None]
+
+    @property
+    def total_keyspace(self) -> int:
+        return sum(e.keyspace for e in self.valid)
+
+    @property
+    def ok(self) -> bool:
+        return not self.invalid
+
+
+def audit_hcmask_file(path: str) -> HcmaskFileAudit:
+    """Parse and validate every mask line in an hcmask file.
+
+    Skip rules match hashcat's own hcmask reader (``src/mpsp.c``): a
+    zero-length line is skipped, and a line is a comment only when ``#`` is
+    its *first* byte. hashcat has no inline comments and does not strip
+    leading whitespace before the ``#`` test, so ``"  #x"`` is a mask (of
+    two spaces, a literal ``#`` and an ``x``), not a comment -- this
+    function agrees, deliberately, so an audit never blesses a file hashcat
+    would read differently.
+
+    Read as latin-1 so each byte maps to exactly one character: hcmask files
+    written from ``$HEX[...]``-decoded plaintexts carry raw bytes >= 0x80
+    that UTF-8 decoding would reject outright.
+
+    Args:
+        path: Path to the .hcmask file.
+
+    Returns:
+        An HcmaskFileAudit. Individual bad lines are recorded as entries with
+        ``error`` set rather than raising, so one typo does not hide the rest
+        of the file.
+
+    Raises:
+        OSError: If the file cannot be read.
+    """
+    entries: list[HcmaskFileEntry] = []
+    skipped_blank = 0
+    skipped_comment = 0
+
+    with open(path, encoding="latin-1") as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            # fgetl strips the trailing newline before hashcat's length and
+            # '#' tests, so strip exactly that and nothing else.
+            raw = raw_line.rstrip("\n").rstrip("\r")
+            if not raw:
+                skipped_blank += 1
+                continue
+            if raw[0] == "#":
+                skipped_comment += 1
+                continue
+
+            try:
+                parsed = parse_hcmask_line(raw)
+            except MaskError as exc:
+                entries.append(HcmaskFileEntry(lineno=lineno, raw=raw, error=str(exc)))
+                continue
+
+            entries.append(
+                HcmaskFileEntry(lineno=lineno, raw=raw, line=parsed, keyspace=keyspace(parsed))
+            )
+
+    return HcmaskFileAudit(
+        path=path,
+        entries=entries,
+        skipped_blank=skipped_blank,
+        skipped_comment=skipped_comment,
+    )
 
 
 def verify_keyspace_with_maskprocessor(line: HcmaskLine) -> str | None:

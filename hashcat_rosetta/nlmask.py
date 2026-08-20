@@ -285,7 +285,26 @@ as-is, e.g. "Summer" in "Summer?d?d?d?d?d?d" is a literal prefix.
   reasoning or "thinking out loud". Do not explain your reasoning process,
   just state the rationale in a few words.
 
-Return your answer as JSON matching the provided schema."""
+## Output format
+
+Return a single JSON object and nothing else — no prose, no markdown fence, no
+commentary before or after it. It has exactly one key, "masks", holding an array
+of one or more suggestion objects. Each suggestion object has exactly these
+three keys, and no others:
+
+{
+  "masks": [
+    {
+      "mask": "<the mask field, as described above>",
+      "custom_charsets": ["<charset string>", "<charset string>"],
+      "why": "<one short clause>"
+    }
+  ]
+}
+
+The angle-bracket placeholders above describe what goes in each field; they are
+not literal values to copy. "custom_charsets" is always present, and is an
+empty array when the mask references no ?1-?8 charsets."""
 
 
 def resolve_base_url(host: str | None) -> str:

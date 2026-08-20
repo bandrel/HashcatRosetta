@@ -40,12 +40,12 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 - **`debug_analyzer.py`** - `DebugAnalyzer` wraps `DebugLogParser` and computes rule/baseword statistics (frequency, unique basewords per rule, unique candidates), plus per-wordlist statistics for mode-5 files. Accepts an optional `debug_mode=` override. This is the main entry point for debug file analysis.
 - **`analyzer.py`** - `RuleAnalyzer` wraps `RuleParser` for static rule analysis (complexity, efficiency scoring, characteristics extraction). Does not require debug output - analyzes rules in isolation.
 - **`formatting.py`** - Rule opcode descriptions and display formatting for the `analyze-rules` CLI command.
-- **`mask.py`** - Deterministic hcmask grammar parsing, validation, and keyspace computation. No networking; pure unit-testable functions for `parse_hcmask_line()`, `validate_mask()`, `tokens()`, `keyspace()`, `describe()`, and `format_hcmask_line()`.
+- **`mask.py`** - Deterministic hcmask grammar parsing, validation, and keyspace computation. No networking; pure unit-testable functions for `parse_hcmask_line()`, `validate_mask()`, `tokens()`, `keyspace()`, `describe()`, and `format_hcmask_line()`. `audit_hcmask_file()` validates a whole `.hcmask` file line-by-line and totals its keyspace, matching hashcat's own skip rules (`src/mpsp.c`): blank lines skipped, `#` a comment only as the first byte. Note the asymmetry: `format_hcmask_line()` is a pure string builder that does **not** validate, so `parse_hcmask_line()` is the only gate -- callers that build a line for hashcat must parse it back.
 - **`nlmask.py`** - The LLM boundary: calls a local Ollama server via the OpenAI-compatible API to turn a natural-language description into validated hcmask lines. The only module that imports `openai`. Validates all generated masks through `mask.py` before returning them. Raises `MaskGenerationError` on failures.
-- **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--wordlists`, `--export`, `--explain`, `--analyze-rules`, `--mask`) plus `--debug-mode {auto,4,5}` to force/auto-detect the debug format (debug-file analysis only, not `--analyze-rules`). `--wordlists` shows top wordlists (mode 5 only; honors `--top`, and `--detail` adds per-wordlist unique basewords/candidates/rules). The `--mask` flag generates masks via `nlmask.generate_masks()`, with `-o`/`--mask-out` writing to a file, and `--model`/`--ollama-host` configuring the LLM endpoint. Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `hashcat-rosetta` in pyproject.toml.
+- **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--wordlists`, `--export`, `--explain`, `--analyze-rules`, `--mask`, `--verify-masks`) plus `--debug-mode {auto,4,5}` to force/auto-detect the debug format (debug-file analysis only, not `--analyze-rules`). `--wordlists` shows top wordlists (mode 5 only; honors `--top`, and `--detail` adds per-wordlist unique basewords/candidates/rules). The `--mask` flag generates masks via `nlmask.generate_masks()`, with `-o`/`--mask-out` writing to a file, and `--model`/`--ollama-host` configuring the LLM endpoint. `--verify-masks` goes the other direction, auditing an existing `.hcmask` file via `mask.audit_hcmask_file()` and exiting non-zero if any line is one hashcat would reject. Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `hashcat-rosetta` in pyproject.toml.
 - **`scripts/sweep_opcodes.py`** - Systematic per-opcode correctness sweep. Generates ~230 rules covering every opcode in `_DEFAULT_IMPLEMENTED` against a canonical arg grid, runs them via `_verify.verify_corpus`, and emits a per-opcode matrix to `reports/opcode-sweep.md`. CI job `opcode-sweep` runs this on every PR; mismatches outside `KNOWN_LATENT` fail the build.
 
-The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, `DebugAnalyzer`, plus mask-generation types (`HcmaskLine`, `MaskError`, `parse_hcmask_line`, `keyspace`, `describe`, `format_hcmask_line`, `generate_masks`, `MaskGenerationError`, `MaskSuggestion`) from `__init__.py`.
+The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, `DebugAnalyzer`, plus mask types (`HcmaskLine`, `MaskError`, `parse_hcmask_line`, `keyspace`, `describe`, `format_hcmask_line`, `audit_hcmask_file`, `HcmaskFileAudit`, `HcmaskFileEntry`, `generate_masks`, `MaskGenerationError`, `MaskSuggestion`) from `__init__.py`.
 
 ## Opcode Semantics and Oracle Routing
 
@@ -57,6 +57,15 @@ are routed per opcode, never interchanged: the GPU/OpenCL engine (`hashcat --std
 everything valid in a `-r` rule file, and the CPU engine (`hashcat --stdout -j`,
 `src/rp_cpu.c`) for the thirteen opcodes hashcat refuses to compile into a `-r` file in any
 mode: `M X ! < > % ( ) = 4 6 Q a`.
+
+- **The memory buffer starts empty, and memory ops reject before it is set.** `src/rp_cpu.c:1168`
+  declares `int mem_len = 0`; only `M` assigns a length (`mem_len = out_len`, rp_cpu.c:1490).
+  `X` (1463), `4` (1474), and `6` (1481) each open with
+  `if (mem_len < 1) return (RULE_RC_REJECT_ERROR)`, so a bare `4`, `6`, or `X` **rejects the
+  word** — `hashcat --stdout -j '4'` emits zero bytes. It does not append a zero-filled
+  buffer: `mem` is uninitialized stack and can read as NULs, but `mem_len == 0` means the
+  reject fires before any read. Simulating the NUL-fill instead was the single cause of all
+  three `4`/`6`/`X` opcode-sweep regressions and all 119 accuracy-smoke mismatches.
 
 - **`a` is a no-op.** hashcat declares it as `RULE_OP_MANGLE_TOGGLECASE_REC`, but the upstream
   implementation is an explicit `/* todo */ break;` stub, so it never mutates the word. This
@@ -88,4 +97,5 @@ hashcat-rosetta --explain "c$1" --baseword admin  # explain a rule
 hashcat-rosetta --mask "The word 'Summer' followed by six digits."  # generate mask
 hashcat-rosetta --mask "description here" -o masks.hcmask           # save to file
 hashcat-rosetta rules.txt --analyze-rules        # analyze rule file opcodes
+hashcat-rosetta masks.hcmask --verify-masks       # validate mask file, total keyspace
 ```

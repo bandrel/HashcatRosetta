@@ -865,9 +865,34 @@ class TestRunPromptForModel:
         entry = json.loads(lines[0])
         assert entry["model"] == "some-model"
         assert entry["prompt"] == benchmark_mask_models.PROMPTS[0].name
-        assert entry["suggestions"] == [{"mask": "Summer?d?d?d?d?d?d", "why": "test"}]
+        assert entry["suggestions"] == [
+            {"mask": "Summer?d?d?d?d?d?d", "why": "test", "keyspace": 1_000_000}
+        ]
         assert entry["judge_score"] == 5
         assert entry["judge_reason"] == "fully satisfies the request"
+        # The log is the sole record when BENCHMARK_SKIP_JUDGE leaves scoring
+        # to an external reviewer, so it must say which think setting produced
+        # the output — otherwise the two passes of a `both` sweep are
+        # indistinguishable in the log.
+        assert entry["think"] is True
+
+    def test_logged_think_setting_follows_the_request(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+        log_path = tmp_path / "suggestions.jsonl"
+        monkeypatch.setenv("SUGGESTIONS_LOG_PATH", str(log_path))
+
+        benchmark_mask_models.run_prompt_for_model(
+            "some-model", benchmark_mask_models.PROMPTS[0], think=False
+        )
+
+        entry = json.loads(log_path.read_text().splitlines()[0])
+        assert entry["think"] is False
+        assert entry["judge_score"] is None
 
 
 class TestHostAlwaysLocal:
@@ -1087,7 +1112,7 @@ class TestFormatReport:
 
 class TestMain:
     def test_main_wires_candidates_through_to_printed_report(self, monkeypatch, capsys):
-        def fake_benchmark_model(model: str):
+        def fake_benchmark_model(model: str, *, think: bool = True):
             return benchmark_mask_models.ModelReport(
                 model,
                 1.0,
@@ -1095,6 +1120,7 @@ class TestMain:
                     benchmark_mask_models.PromptResult(p.name, 1.0, None, 5)
                     for p in benchmark_mask_models.PROMPTS
                 ],
+                think,
             )
 
         monkeypatch.setattr(benchmark_mask_models, "benchmark_model", fake_benchmark_model)
@@ -1107,3 +1133,108 @@ class TestMain:
         captured = capsys.readouterr()
         assert benchmark_mask_models.CANDIDATES[0] in captured.out
         assert "Recommendation:" in captured.out
+
+    def test_main_sweeps_every_think_setting(self, monkeypatch, capsys):
+        """BENCHMARK_THINK=both must run each candidate under both settings —
+        a silently single-pass sweep would report half the data as if it were
+        the whole comparison."""
+        calls: list[tuple[str, bool]] = []
+
+        def fake_benchmark_model(model: str, *, think: bool = True):
+            calls.append((model, think))
+            return benchmark_mask_models.ModelReport(model, 1.0, [], think)
+
+        monkeypatch.setattr(benchmark_mask_models, "benchmark_model", fake_benchmark_model)
+        monkeypatch.setattr(benchmark_mask_models, "THINK_SETTINGS", [True, False])
+        monkeypatch.setattr(benchmark_mask_models, "CANDIDATES", ["m1", "m2"])
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+
+        benchmark_mask_models.main()
+
+        assert calls == [("m1", True), ("m2", True), ("m1", False), ("m2", False)]
+
+
+class TestCandidateOverride:
+    """BENCHMARK_CANDIDATES is read at import time, so these reload the module
+    under a set env rather than monkeypatching the constant."""
+
+    def _load(self, monkeypatch, env_value: str | None):
+        if env_value is None:
+            monkeypatch.delenv("BENCHMARK_CANDIDATES", raising=False)
+        else:
+            monkeypatch.setenv("BENCHMARK_CANDIDATES", env_value)
+        spec = importlib.util.spec_from_file_location("bm_reload", _SCRIPT_PATH)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["bm_reload"] = module
+        try:
+            spec.loader.exec_module(module)
+            return module
+        finally:
+            sys.modules.pop("bm_reload", None)
+
+    def test_unset_keeps_the_curated_list(self, monkeypatch):
+        assert len(self._load(monkeypatch, None).CANDIDATES) > 1
+
+    def test_single_model_override(self, monkeypatch):
+        assert self._load(monkeypatch, "qwen3.5:9b").CANDIDATES == ["qwen3.5:9b"]
+
+    def test_strips_whitespace_and_empty_entries(self, monkeypatch):
+        assert self._load(monkeypatch, " a:1 , b:2 ,, ").CANDIDATES == ["a:1", "b:2"]
+
+    def test_blank_value_is_not_an_empty_candidate_list(self, monkeypatch):
+        """A blank env var must fall back to the curated list — an empty
+        CANDIDATES would make the sweep exit reporting nothing, which reads
+        like 'no model qualified' rather than 'nothing ran'."""
+        assert len(self._load(monkeypatch, "   ").CANDIDATES) > 1
+
+
+class TestEarlyAbort:
+    """A model that cannot answer must not burn len(PROMPTS) x 600s proving
+    it: benchmark_model gives up after MAX_CONSECUTIVE_HARD_FAILS."""
+
+    def _stub_host(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "ensure_model_pulled", lambda m, **k: True)
+        monkeypatch.setattr(
+            benchmark_mask_models, "list_local_models", lambda host: {"dead-model": 1024**3}
+        )
+
+    def test_aborts_after_consecutive_hard_fails(self, monkeypatch):
+        self._stub_host(monkeypatch)
+        attempts = []
+
+        def always_hard_fail(model, prompt, **kwargs):
+            attempts.append(prompt.name)
+            return benchmark_mask_models.PromptResult(prompt.name, 1.0, "timed out", None)
+
+        monkeypatch.setattr(benchmark_mask_models, "run_prompt_for_model", always_hard_fail)
+
+        report = benchmark_mask_models.benchmark_model("dead-model")
+
+        assert len(attempts) == benchmark_mask_models.MAX_CONSECUTIVE_HARD_FAILS
+        # Every prompt is still accounted for in the report, so the skipped
+        # ones can't be mistaken for passes.
+        assert len(report.prompt_results) == len(benchmark_mask_models.PROMPTS)
+        assert report.hard_fail_count == len(benchmark_mask_models.PROMPTS)
+        skipped = [r for r in report.prompt_results if "skipped" in (r.hard_fail_reason or "")]
+        assert len(skipped) == len(benchmark_mask_models.PROMPTS) - len(attempts)
+
+    def test_a_success_resets_the_streak(self, monkeypatch):
+        """A cold-load blip mid-run must not end an otherwise healthy
+        candidate — only *consecutive* failures abort."""
+        self._stub_host(monkeypatch)
+        seen = []
+
+        def alternating(model, prompt, **kwargs):
+            seen.append(prompt.name)
+            failed = len(seen) % 2 == 1
+            return benchmark_mask_models.PromptResult(
+                prompt.name, 1.0, "timed out" if failed else None, None
+            )
+
+        monkeypatch.setattr(benchmark_mask_models, "run_prompt_for_model", alternating)
+
+        report = benchmark_mask_models.benchmark_model("dead-model")
+
+        assert len(seen) == len(benchmark_mask_models.PROMPTS)
+        assert not any("skipped" in (r.hard_fail_reason or "") for r in report.prompt_results)

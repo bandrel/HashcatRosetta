@@ -227,9 +227,19 @@ class TestExplainFlag:
         assert "Rule File Explanation" in result.output
 
     def test_explain_unknown_rule(self, runner):
+        """An unknown opcode invalidates the whole rule, so --explain rejects
+        it and exits non-zero.
+
+        This replaces the previous contract (exit 0 plus "Unknown rule"), which
+        is the behavior docs/superpowers/plans/reject-invalid-rules-in-explain.md
+        set out to fix: `W` is one of the legacy opcodes modern hashcat refuses
+        to compile, so reporting it as merely "unknown" while exiting 0 told a
+        caller the rule was usable.
+        """
         result = runner.invoke(main, ["--explain", "W"])
-        assert result.exit_code == 0
-        assert "Unknown rule" in result.output
+        assert result.exit_code != 0
+        assert "Invalid rule" in result.output
+        assert "unknown opcode 'W'" in result.output
 
     def test_explain_high_byte_rule_file_overwrite(self, runner, high_byte_rule_file):
         """A raw 0xBA byte in the rule file must not raise UnicodeDecodeError."""
@@ -799,3 +809,62 @@ class TestMaskGeneration:
         lines = out_path.read_text().splitlines()
         assert lines[1] == "\\#?d?d?d?d"
         assert "starts with '#'" in result.output
+
+
+class TestVerifyMasksFlag:
+    """--verify-masks audits an .hcmask file: per-line validation, a totalled
+    keyspace, and a non-zero exit when hashcat would reject a line."""
+
+    def _hcmask(self, tmp_path, text):
+        path = tmp_path / "masks.hcmask"
+        path.write_text(text, encoding="latin-1")
+        return str(path)
+
+    def test_all_valid_exits_zero(self, runner, tmp_path):
+        path = self._hcmask(tmp_path, "Summer?d?d?d?d\n?l?l\n")
+        result = runner.invoke(main, [path, "--verify-masks"])
+        assert result.exit_code == 0
+        assert "Valid lines:     2" in result.output
+        assert "Invalid lines:   0" in result.output
+
+    def test_totals_keyspace(self, runner, tmp_path):
+        path = self._hcmask(tmp_path, "?d?d\n?l?l\n")
+        result = runner.invoke(main, [path, "--verify-masks"])
+        assert "Total keyspace:  776 candidates" in result.output
+
+    def test_invalid_line_reported_and_exits_nonzero(self, runner, tmp_path):
+        path = self._hcmask(tmp_path, "?d?d\n?z?z\n")
+        result = runner.invoke(main, [path, "--verify-masks"])
+        assert result.exit_code == 1
+        assert "Line 2" in result.output
+        assert "unknown token" in result.output
+        # The valid line's keyspace is still reported.
+        assert "Total keyspace:  100 candidates" in result.output
+
+    def test_skipped_lines_counted(self, runner, tmp_path):
+        path = self._hcmask(tmp_path, "# header\n\n?d?d\n")
+        result = runner.invoke(main, [path, "--verify-masks"])
+        assert result.exit_code == 0
+        assert "Skipped lines:   2 (1 blank, 1 comment)" in result.output
+
+    def test_description_keeps_multiplication_sign(self, runner, tmp_path):
+        # describe()'s U+00D7 must not be mangled into "\xd7" by _escape_bytes.
+        path = self._hcmask(tmp_path, "?d?d?d?d\n")
+        result = runner.invoke(main, [path, "--verify-masks"])
+        assert "4 × digit" in result.output
+        assert "\\xd7" not in result.output
+
+    def test_high_byte_literal_is_escaped_in_raw_line(self, runner, tmp_path):
+        path = tmp_path / "masks.hcmask"
+        path.write_bytes(b"\xff?d\n")
+        result = runner.invoke(main, [str(path), "--verify-masks"])
+        assert result.exit_code == 0
+        assert "\\xff" in result.output
+
+    def test_missing_file_errors(self, runner, tmp_path):
+        result = runner.invoke(main, [str(tmp_path / "nope.hcmask"), "--verify-masks"])
+        assert result.exit_code != 0
+
+    def test_listed_in_help(self, runner):
+        result = runner.invoke(main, ["--help"])
+        assert "--verify-masks" in result.output

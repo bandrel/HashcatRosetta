@@ -535,6 +535,26 @@ class TestModuleConstants:
         assert "?d" in SYSTEM_PROMPT
         assert "why" in SYSTEM_PROMPT
 
+    def test_system_prompt_states_the_response_shape(self):
+        """Ollama's json_schema response_format constrains decoding but does
+        not show the schema to the model, so SYSTEM_PROMPT must spell the
+        response shape out itself rather than deferring to a schema the model
+        never sees."""
+        assert "provided schema" not in SYSTEM_PROMPT
+
+        for key in MASK_SCHEMA["required"]:
+            assert f'"{key}"' in SYSTEM_PROMPT, f"top-level key {key!r} not shown in prompt"
+        for key in MASK_SCHEMA["properties"]["masks"]["items"]["required"]:
+            assert f'"{key}"' in SYSTEM_PROMPT, f"item key {key!r} not shown in prompt"
+
+    def test_system_prompt_shape_example_holds_no_copyable_mask(self):
+        """The shape block uses angle-bracket placeholders, not a real mask, so
+        a model that regurgitates it fails validation loudly instead of
+        returning a plausible-but-unrelated mask."""
+        shape = SYSTEM_PROMPT.split("## Output format", 1)[1]
+        assert '"mask": "<' in shape
+        assert "?d?d" not in shape
+
 
 NON_STRING_MASK_JSON = json.dumps(
     {"masks": [{"mask": 123, "custom_charsets": [], "why": "a number, not a mask"}]}
