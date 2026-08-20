@@ -7,10 +7,11 @@ import sys
 
 import click
 
+from ._opcodes import ONE_ARG_OPCODES, THREE_ARG_OPCODES, TWO_ARG_OPCODES
 from .debug_analyzer import DebugAnalyzer
 from .formatting import display_rule_opcodes_summary
 from .mask import describe, format_hcmask_line
-from .parser import decode_hex_escapes
+from .parser import decode_hex_escapes, find_rule_issues
 
 # NOTE: hashcat_rosetta.nlmask is deliberately NOT imported here. It pulls in
 # the ``openai`` SDK, which costs ~450ms of import time that every non-LLM
@@ -114,6 +115,23 @@ def _ascii_swapcase(s: str) -> str:
         else:
             out.append(c)
     return "".join(out)
+
+
+def _token_length(op: str) -> int:
+    """Length of a whole rule token: the opcode plus its declared arguments.
+
+    Uses the shared arity tables so there is only one copy of that knowledge.
+    Advancing by this amount after a failed argument parse is what keeps an
+    argument character from being re-read as an opcode of its own (which is how
+    ``Zq`` used to grow a bogus ``q: Duplicate every char`` step).
+    """
+    if op in THREE_ARG_OPCODES:
+        return 4
+    if op in TWO_ARG_OPCODES:
+        return 3
+    if op in ONE_ARG_OPCODES:
+        return 2
+    return 1
 
 
 # hashcat's cshift_lookup, transcribed from OpenCL/inc_rp_common.cl:42.
@@ -327,7 +345,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 3
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "s" and i + 2 < len(rule_str):
             # Substitute: sXY where X is source char, Y is replacement
@@ -349,7 +369,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"p{n_char}: Append duplicated word {n} times → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "D" and i + 1 < len(rule_str):
             # Delete: DX where X is position
@@ -362,7 +384,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"D{pos_char}: Delete at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "T" and i + 1 < len(rule_str):
             # Toggle at position: TX
@@ -375,7 +399,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"T{pos_char}: Toggle case at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "O" and i + 2 < len(rule_str):
             # Omit M characters starting at position N
@@ -392,7 +418,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 3
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "y" and i + 1 < len(rule_str):
             # Duplicate first N characters (prepend)
@@ -405,7 +433,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"y{n_char}: Duplicate first {n} chars → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "Y" and i + 1 < len(rule_str):
             # Duplicate last N characters (append)
@@ -421,7 +451,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"Y{n_char}: Duplicate last {n} chars → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "z" and i + 1 < len(rule_str):
             # Duplicate first character N times
@@ -434,7 +466,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"z{n_char}: Duplicate first char {n} times → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "Z" and i + 1 < len(rule_str):
             # Duplicate last character N times
@@ -447,7 +481,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"Z{n_char}: Duplicate last char {n} times → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "@" and i + 1 < len(rule_str):
             # Purge all instances of char X
@@ -477,7 +513,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             try:
                 n = _hashcat_pos(n_char)
             except ValueError:
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
                 continue
             if len(current) < n:
                 steps.append(f"{REJECT_SENTINEL_PREFIX}>{n_char}: word length {len(current)} < {n}")
@@ -493,7 +531,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             try:
                 n = _hashcat_pos(n_char)
             except ValueError:
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
                 continue
             if len(current) > n:
                 steps.append(f"{REJECT_SENTINEL_PREFIX}<{n_char}: word length {len(current)} > {n}")
@@ -513,7 +553,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"'{pos_char}: Truncate at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "+" and i + 1 < len(rule_str):
             # Increment character at position N by 1 (ASCII value)
@@ -528,7 +570,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"+{pos_char}: Increment ASCII at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "-" and i + 1 < len(rule_str):
             # Decrement character at position N by 1 (ASCII value)
@@ -543,7 +587,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"-{pos_char}: Decrement ASCII at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "." and i + 1 < len(rule_str):
             # Replace char at pos N with char at pos N+1
@@ -558,7 +604,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "," and i + 1 < len(rule_str):
             # Replace char at pos N with char at pos N-1
@@ -573,7 +621,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "%" and i + 2 < len(rule_str):
             # hashcat %NX: reject unless `current` contains X at least N times
@@ -582,7 +632,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             try:
                 n = _hashcat_pos(n_char)
             except ValueError:
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
                 continue
             if current.count(check_char) < n:
                 steps.append(
@@ -608,7 +660,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"R{pos_char}: Bitwise shift right at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "L" and i + 1 < len(rule_str):
             # Bitwise shift left character at position N
@@ -623,7 +677,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 steps.append(f"L{pos_char}: Bitwise shift left at pos {pos} → {prev} → {current}")
                 i += 2
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "o" and i + 2 < len(rule_str):
             # Overwrite character at position X with character Y
@@ -640,7 +696,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 3
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "x" and i + 2 < len(rule_str):
             # Extract N characters starting at position M
@@ -658,7 +716,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 3
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "*" and i + 2 < len(rule_str):
             # Swap characters at positions X and Y
@@ -677,7 +737,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 3
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "a":
             # RULE_OP_MANGLE_TOGGLECASE_REC. hashcat declares the opcode but
@@ -751,7 +813,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 4
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "4":
             # RULE_OP_MANGLE_APPEND_MEMORY (src/rp_cpu.c): hashcat rejects the
@@ -793,7 +857,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             try:
                 pos = _hashcat_pos(pos_char)
             except ValueError:
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
                 continue
             if pos >= len(current) or current[pos] != check_char:
                 if pos >= len(current):
@@ -846,7 +912,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
             try:
                 n = _hashcat_pos(n_char)
             except ValueError:
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
                 continue
             prev = current
             if n > 0:
@@ -907,7 +975,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 3
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "3" and i + 2 < len(rule_str):
             # 3NX: toggle the case of the character immediately after the Nth
@@ -937,7 +1007,9 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
                 )
                 i += 3
             except (ValueError, IndexError):
-                i += 1
+                # Argument unparseable: skip the whole token, never re-read an
+                # argument char as an opcode.
+                i += _token_length(char)
 
         elif char == "h":
             prev = current
@@ -1201,6 +1273,16 @@ def main(
                     stripped = rule_line.strip()
                     if not stripped or stripped.startswith("#"):
                         continue
+                    # A bad line is reported and skipped, not fatal: one
+                    # unusable rule in a large file shouldn't stop the rest
+                    # from being explained.
+                    issues = find_rule_issues(rule_line)
+                    if issues:
+                        click.echo(f"\nLine {line_number}: {rule_line}")
+                        click.echo("  [!] Invalid rule, not simulated:")
+                        for issue in issues:
+                            click.echo(f"      {issue}")
+                        continue
                     explanations = explain_rule(rule_line, baseword)
                     if explanations:
                         click.echo(f"\nLine {line_number}: {_escape_bytes(rule_line)}")
@@ -1212,6 +1294,16 @@ def main(
             click.echo("\nNote: Each character is a rule operation applied sequentially.")
             click.echo("      Complex rules combine multiple operations from left to right.")
         else:
+            # Validate before simulating: explain_rule() happily walks a rule
+            # hashcat itself refuses to compile, which fabricates a plausible
+            # step-by-step transcript for a rule that can never run. Reject
+            # instead, and exit non-zero so scripts can tell the difference.
+            issues = find_rule_issues(explain)
+            if issues:
+                click.echo(f"[!] Invalid rule: '{explain}'")
+                for issue in issues:
+                    click.echo(f"    {issue}")
+                sys.exit(1)
             explanations = explain_rule(explain, baseword)
             if explanations:
                 click.echo(f"\nRule Explanation: '{explain}' applied to '{baseword}'")

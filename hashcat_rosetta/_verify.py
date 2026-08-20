@@ -19,6 +19,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from hashcat_rosetta._opcodes import (
+    ALL_KNOWN_OPCODES,
+    ONE_ARG_OPCODES,
+    THREE_ARG_OPCODES,
+    TWO_ARG_OPCODES,
+    ZERO_ARG_OPCODES,
+)
 from hashcat_rosetta.cli import REJECT_SENTINEL_PREFIX, _simulate_rule, explain_rule
 from hashcat_rosetta.parser import RuleParser, decode_hex_escapes
 
@@ -76,12 +83,16 @@ def decide_rejection_status(
     return "needs_string_compare"
 
 
-# Mirrors verify_rules.py - keep in sync if hashcat adds opcodes.
-_THREE_ARG_OPCODES: set[str] = set("X")
-_TWO_ARG_OPCODES: set[str] = set("soix*=vOB3%")
-_ONE_ARG_OPCODES: set[str] = set("TDpyYezZ^$@!><'+-.,LR()")
-_ZERO_ARG_OPCODES: set[str] = set(":culdrt[]{}fkKqCEMahHS46Q")
-_ALL_KNOWN_OPCODES = _THREE_ARG_OPCODES | _TWO_ARG_OPCODES | _ONE_ARG_OPCODES | _ZERO_ARG_OPCODES
+# Opcode arity tables live in _opcodes.py so parser.py can share them without
+# importing this module (which would be a circular import). Re-exported here
+# under their historical private names for verify_rules.py and sweep_opcodes.py.
+# The sets are byte-identical to the literals that used to sit here — see
+# test_opcode_tables_match_verify_literals.
+_THREE_ARG_OPCODES = THREE_ARG_OPCODES
+_TWO_ARG_OPCODES = TWO_ARG_OPCODES
+_ONE_ARG_OPCODES = ONE_ARG_OPCODES
+_ZERO_ARG_OPCODES = ZERO_ARG_OPCODES
+_ALL_KNOWN_OPCODES = ALL_KNOWN_OPCODES
 
 # Opcodes hashcat refuses to compile into a `-r` rule file, in every mode
 # (verified: `hashcat -m 0 -a 0 -r <(echo '>4 $1')` returns "No valid rules

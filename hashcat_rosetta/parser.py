@@ -3,6 +3,15 @@
 import logging
 import re
 
+from ._opcodes import (
+    ALL_KNOWN_OPCODES,
+    EXTRA_ZERO_ARG_OPCODES,
+    NUMERIC_ARG_CHARS,
+    OPCODE_ARG_KINDS,
+    SAVED_POS_ARG_CHAR,
+    UNVALIDATABLE_OPCODES,
+)
+
 logger = logging.getLogger(__name__)
 
 # hashcat decodes ``\xNN`` byte escapes in rule strings (e.g. ``s\x20_``
@@ -18,6 +27,85 @@ def decode_hex_escapes(rule_str: str) -> str:
     hex digits is left untouched (it is a literal character in hashcat).
     """
     return _HEX_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), rule_str)
+
+
+# Opcodes that take no argument, for validation purposes: everything with a
+# known arity that isn't argument-taking, plus the extras the arity tables miss.
+_VALIDATOR_ZERO_ARG_OPCODES = (
+    ALL_KNOWN_OPCODES - set(OPCODE_ARG_KINDS) - UNVALIDATABLE_OPCODES
+) | EXTRA_ZERO_ARG_OPCODES
+
+
+def find_rule_issues(rule_string: str) -> list[str]:
+    """Report syntax problems that make hashcat reject a rule outright.
+
+    Returns a list of human-readable problems; an empty list means no problem
+    was *detected* — not a guarantee of validity. This function is deliberately
+    conservative, because wrongly calling a valid rule invalid is worse than
+    staying quiet: it would break corpus-scale analysis. Only three things are
+    flagged, each confirmed against the hashcat binary:
+
+    1. an opcode hashcat does not know (this alone kills the whole rule),
+    2. an opcode truncated by the end of the rule (missing argument chars),
+    3. a numeric ("position") argument outside ``0-9``/``A-Z`` — hashcat parses
+       these with ``conv_ctoi`` and treats anything else as a syntax error.
+
+    Everything else stays silent, in particular the reject class
+    (``! / ( ) = % < > _ Q``) and the class-based ``~`` prefix, whose syntax
+    hashcat's ``--stdout`` mode cannot be used to verify; scanning stops at the
+    first one of those rather than risk walking out of step.
+    """
+    if not rule_string:
+        return []
+
+    # hashcat decodes \xNN escapes before dispatching on the opcode, so the
+    # validator must look at the same bytes it does.
+    rule = decode_hex_escapes(rule_string)
+
+    issues: list[str] = []
+    i = 0
+    while i < len(rule):
+        op = rule[i]
+
+        if op == " ":
+            # Spaces between operations are separators (hashcat skips them).
+            i += 1
+            continue
+
+        if op in UNVALIDATABLE_OPCODES:
+            break
+
+        arg_kinds = OPCODE_ARG_KINDS.get(op)
+
+        if arg_kinds is None:
+            if op in _VALIDATOR_ZERO_ARG_OPCODES:
+                i += 1
+                continue
+            issues.append(f"unknown opcode {op!r} at position {i} — hashcat rejects the whole rule")
+            # Arity unknown from here on; anything further would be guesswork.
+            break
+
+        args = rule[i + 1 : i + 1 + len(arg_kinds)]
+        if len(args) < len(arg_kinds):
+            issues.append(
+                f"opcode {op!r} at position {i} needs {len(arg_kinds)} argument"
+                f"{'s' if len(arg_kinds) > 1 else ''} but the rule ends after {len(args)}"
+            )
+            break
+
+        for offset, (kind, arg) in enumerate(zip(arg_kinds, args)):
+            if kind != "N":
+                continue
+            if arg in NUMERIC_ARG_CHARS or arg == SAVED_POS_ARG_CHAR:
+                continue
+            issues.append(
+                f"opcode {op!r} at position {i} has invalid position argument {arg!r} "
+                f"(argument {offset + 1}); hashcat accepts only 0-9 and A-Z"
+            )
+
+        i += 1 + len(arg_kinds)
+
+    return issues
 
 
 # Sentinel wordlist values hashcat emits when there is no real dict path.
@@ -604,7 +692,13 @@ class RuleParser:
                 tokens.append(char)
                 i += 1
             else:
-                # Unknown opcode, skip
+                # Unknown opcode. hashcat rejects the entire rule in this case;
+                # tokenizing continues (callers may still want the other
+                # tokens) but the drop is no longer silent.
+                logger.warning(
+                    f"Unknown opcode '{char}' at position {i} "
+                    f"in rule '{rule_string}' - hashcat would reject this rule, skipping"
+                )
                 i += 1
 
         return tokens
