@@ -227,9 +227,19 @@ class TestExplainFlag:
         assert "Rule File Explanation" in result.output
 
     def test_explain_unknown_rule(self, runner):
+        """An unknown opcode invalidates the whole rule, so --explain rejects
+        it and exits non-zero.
+
+        This replaces the previous contract (exit 0 plus "Unknown rule"), which
+        is the behavior docs/superpowers/plans/reject-invalid-rules-in-explain.md
+        set out to fix: `W` is one of the legacy opcodes modern hashcat refuses
+        to compile, so reporting it as merely "unknown" while exiting 0 told a
+        caller the rule was usable.
+        """
         result = runner.invoke(main, ["--explain", "W"])
-        assert result.exit_code == 0
-        assert "Unknown rule" in result.output
+        assert result.exit_code != 0
+        assert "Invalid rule" in result.output
+        assert "unknown opcode 'W'" in result.output
 
     def test_explain_high_byte_rule_file_overwrite(self, runner, high_byte_rule_file):
         """A raw 0xBA byte in the rule file must not raise UnicodeDecodeError."""
