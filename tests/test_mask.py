@@ -892,3 +892,112 @@ class TestAuditHcmaskFile:
         path = self._write(tmp_path, "?a" * 12 + "\n")
         audit = audit_hcmask_file(path)
         assert audit.total_keyspace == 95**12
+
+
+class TestBackslashEscapes:
+    r"""hashcat's hcmask field parser (``mask_ctx_parse_maskfile``,
+    src/mpsp.c) unescapes with a single ``escaped`` flag over one pass: a
+    backslash escapes whatever follows and is itself dropped, and it is
+    tracked so an escaped backslash cannot escape the next character.
+    Every expectation below was taken from ``hashcat --stdout -a 3``."""
+
+    def test_backslash_escapes_more_than_commas(self):
+        # \# is how a mask beginning with '#' is expressed at all: hashcat's
+        # comment test looks at the raw first byte of the line.
+        line = parse_hcmask_line("\\#?d")
+        assert line.mask == "#?d"
+        assert keyspace(line) == 10
+
+    def test_escaped_question_mark_becomes_a_token(self):
+        # Unescaping happens BEFORE '?' is interpreted, so "\?d" is the token
+        # ?d (candidates 0-9), not a literal backslash plus a digit (\0-\9).
+        line = parse_hcmask_line("\\?d")
+        assert line.mask == "?d"
+        assert keyspace(line) == 10
+
+    def test_escaped_backslash_does_not_escape_the_next_char(self):
+        # hashcat reads a\\,?1?1 as charset "a\" and mask ?1?1 -> 4 candidates
+        # (aa, a\, \a, \\). Checking "is the previous char a backslash" instead
+        # of carrying the flag reads this as one field and rejects a valid file.
+        line = parse_hcmask_line("a\\\\,?1?1")
+        assert line.custom == ["a\\"]
+        assert line.mask == "?1?1"
+        assert keyspace(line) == 4
+
+    def test_escaped_comma_still_works(self):
+        line = parse_hcmask_line("?d?d\\,test")
+        assert line.mask == "?d?d,test"
+        assert keyspace(line) == 100
+
+    def test_trailing_lone_backslash_vanishes(self):
+        # hashcat's loop ends with the flag set and never copies the backslash.
+        line = parse_hcmask_line("?d\\")
+        assert line.mask == "?d"
+        assert keyspace(line) == 10
+
+    def test_literal_backslash_needs_doubling(self):
+        line = parse_hcmask_line("\\\\?d")
+        assert line.mask == "\\?d"
+        assert keyspace(line) == 10
+
+    def test_format_escapes_backslashes(self):
+        # Round trip: a charset containing a backslash must survive.
+        formatted = format_hcmask_line(["a\\"], "?1?1")
+        assert formatted == "a\\\\,?1?1"
+        assert parse_hcmask_line(formatted).custom == ["a\\"]
+
+    def test_format_escapes_backslash_before_comma(self):
+        # Escaping commas first would re-escape the backslash just added.
+        formatted = format_hcmask_line(["a\\,b"], "?1")
+        assert parse_hcmask_line(formatted).custom == ["a\\,b"]
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["\\#?d", "\\?d", "a\\\\,?1?1", "?d?d\\,test", "\\\\?d", "?d\\"],
+    )
+    def test_round_trip_through_format(self, raw):
+        parsed = parse_hcmask_line(raw)
+        reformatted = format_hcmask_line(parsed.custom, parsed.mask)
+        again = parse_hcmask_line(reformatted)
+        assert (again.custom, again.mask) == (parsed.custom, parsed.mask)
+
+
+@pytest.mark.integration
+class TestBackslashEscapesAgainstHashcat:
+    """Differential test against the real binary: for each line, our keyspace
+    must equal the candidate count hashcat actually emits, and our understanding
+    of the mask must match the candidates themselves."""
+
+    HASHCAT = "hashcat"
+
+    def _hashcat_candidates(self, tmp_path, raw_line):
+        path = tmp_path / "m.hcmask"
+        path.write_text(raw_line + "\n", encoding="latin-1")
+        proc = subprocess.run(
+            [self.HASHCAT, "--stdout", "-a", "3", str(path)],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            pytest.skip(f"hashcat rejected {raw_line!r}: {proc.stderr.strip()}")
+        return sorted(proc.stdout.splitlines())
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["\\#?d", "\\?d", "a\\\\,?1?1", "?d?d\\,test", "\\\\?d", "X?d"],
+    )
+    def test_keyspace_matches_hashcat_candidate_count(self, tmp_path, raw):
+        candidates = self._hashcat_candidates(tmp_path, raw)
+        assert keyspace(parse_hcmask_line(raw)) == len(candidates)
+
+    def test_escaped_hash_produces_hash_prefixed_candidates(self, tmp_path):
+        assert self._hashcat_candidates(tmp_path, "\\#?d") == [f"#{d}" for d in range(10)]
+
+    def test_escaped_question_mark_produces_bare_digits(self, tmp_path):
+        # The case that proves unescaping precedes tokenizing.
+        assert self._hashcat_candidates(tmp_path, "\\?d") == [str(d) for d in range(10)]
+
+    def test_escaped_backslash_splits_the_field(self, tmp_path):
+        assert self._hashcat_candidates(tmp_path, "a\\\\,?1?1") == sorted(
+            ["aa", "a\\", "\\a", "\\\\"]
+        )

@@ -48,6 +48,35 @@ for exact timing.
 
 ### Fixed
 
+- **hcmask backslash escapes now follow hashcat instead of only handling
+  `\,`, which was misreading valid mask files.** `_unescape_field` replaced
+  `\,` with `,` and left every other backslash in place, documenting that as
+  "hashcat behavior"; it isn't. hashcat's `mask_ctx_parse_maskfile`
+  (`src/mpsp.c`) splits fields and unescapes in one pass over a single
+  `escaped` flag, so a backslash escapes *whatever* follows it and is itself
+  dropped. Two concrete misreadings followed, both confirmed against
+  `hashcat --stdout -a 3`:
+
+  - `\?d` was read as a literal backslash plus a digit token, i.e. `\0`-`\9`.
+    hashcat unescapes *before* it interprets `?`, so the line is the token
+    `?d` and enumerates `0`-`9`. The keyspace matched by coincidence — a
+    literal and a dropped backslash both contribute a factor of one — while
+    the candidate set was wrong.
+  - `a\\,?1?1` was rejected outright as "referenced ?1 but only 0 custom
+    charset(s) provided". The old splitter asked "is the previous character a
+    backslash" rather than carrying the escape flag, so it treated the comma
+    after an *escaped* backslash as escaped too and collapsed the line into a
+    single field. hashcat reads it as the charset `a\` and the mask `?1?1`,
+    four candidates. Rejecting a valid line is the worst failure mode for
+    `--verify-masks`, which exists to tell you whether hashcat will accept a
+    file.
+
+  The splitter is now a faithful port of the upstream loop, unescaping before
+  tokenizing, and `format_hcmask_line` escapes `\` as `\\` (before escaping
+  commas, so the new backslash is not itself re-escaped) — previously a
+  charset or mask containing a backslash could not survive a round trip.
+  Covered by unit tests plus an integration class that diffs our keyspace and
+  candidate understanding against the real binary.
 - **`describe()` now names all eight custom charset slots instead of echoing
   `?5`-`?8` as raw tokens.** The description table stopped at `?1`-`?4`, so a
   mask using the upper slots read "then `?5`" where it should have read "then
