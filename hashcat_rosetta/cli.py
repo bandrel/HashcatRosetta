@@ -300,11 +300,19 @@ def _simulate_rule(rule_str: str, baseword: str = "password") -> tuple[list[str]
 
     # Parse and apply rules sequentially
     current = baseword
-    # hashcat zero-fills the memory buffer to the plain's length rather than
-    # seeding it with the plain, so a memory op used without a preceding `M`
-    # reads NUL bytes. Verified against 7.1.2: bare `4` on "abcdef" yields
-    # "abcdef" + six NULs, and bare `X012` on "abc" yields "ab\0c".
-    memorized = "\x00" * len(baseword)
+    # The memory buffer starts EMPTY, not seeded with the plain and not
+    # zero-filled to the plain's length: src/rp_cpu.c:1168 declares
+    # `int mem_len = 0`, and only `M` ever sets a length (`mem_len = out_len`,
+    # rp_cpu.c:1490). Every memory-consuming opcode guards on `mem_len < 1` and
+    # returns RULE_RC_REJECT_ERROR — `X` at rp_cpu.c:1463, `4` at 1474, `6` at
+    # 1481 — so before any `M` they reject the word instead of reading the
+    # buffer. Confirmed against v7.1.2-484-g64e1bff93: `-j '4'` on "abcdef"
+    # emits zero bytes.
+    #
+    # This previously held `"\x00" * len(baseword)`, which made bare `4` yield
+    # "abcdef\0\0\0\0\0\0" where hashcat yields nothing. That was the whole of
+    # the opcode sweep's `4` / `6` / `X` regressions.
+    memorized = ""
     steps = []
     i = 0
 

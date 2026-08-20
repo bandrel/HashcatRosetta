@@ -66,18 +66,27 @@ class TestMemoryOpcodes:
         assert _final("Mc Q", "abc") == "Abc"
         assert _final("MuQ", "abc") == "ABC"
 
-    def test_4_without_M_appends_the_zeroed_buffer(self):
-        """hashcat: bare '4' on abc gives 'abc\\0\\0\\0'. This depends on the
-        memory buffer's zero-fill default, which Task 7b (not this task)
-        implements. If Task 7b has not landed yet, memorized == baseword, so
-        this specific assertion will fail until Task 7b lands — SKIP or
-        XFAIL this one test only if that's the case, do not weaken the
-        assertion itself. All other tests in this class must pass now."""
-        assert _final("4", "abc") == "abc\x00\x00\x00"
+    def test_4_without_M_rejects_the_word(self):
+        """A memory op with no preceding `M` rejects, it does not append a
+        zero-filled buffer.
 
-    def test_6_without_M_prepends_the_zeroed_buffer(self):
-        """Same caveat as test_4_without_M_appends_the_zeroed_buffer above."""
-        assert _final("6", "abc") == "\x00\x00\x00abc"
+        Ground truth is hashcat's own source: ``src/rp_cpu.c:1168`` declares
+        ``int mem_len = 0``, and ``RULE_OP_MANGLE_APPEND_MEMORY``
+        (``rp_cpu.c:1474``) opens with
+        ``if (mem_len < 1) return (RULE_RC_REJECT_ERROR)``. Confirmed against
+        the binary (v7.1.2-484-g64e1bff93): ``hashcat --stdout -j '4'`` on
+        ``abcdef`` emits zero bytes, not ``abcdef`` + six NULs.
+
+        This replaces an assertion that expected the NUL-fill. ``mem`` is
+        uninitialized stack memory, so reading it can look zero-filled, but
+        ``mem_len == 0`` means the reject fires before any read.
+        """
+        assert _final("4", "abc") is None
+
+    def test_6_without_M_rejects_the_word(self):
+        """Same as test_4_without_M_rejects_the_word; the prepend case rejects
+        at ``rp_cpu.c:1481``."""
+        assert _final("6", "abc") is None
 
     def test_step_is_emitted_even_when_nothing_changes(self):
         """A no-op must still produce a step, so a reader never mistakes a
@@ -91,20 +100,29 @@ class TestMemoryOpcodes:
 
 
 class TestMemoryInitialization:
-    """hashcat zero-fills the memory buffer to the plain's length. It does not
-    seed it with the plain. Verified with od -c against v7.1.2.
+    """The memory buffer starts empty (length 0), not seeded with the plain and
+    not zero-filled to the plain's length.
+
+    ``src/rp_cpu.c:1168``: ``int mem_len = 0``. Every memory-consuming opcode
+    guards on ``mem_len < 1`` and returns ``RULE_RC_REJECT_ERROR`` — ``X`` at
+    rp_cpu.c:1463, ``4`` at 1474, ``6`` at 1481 — so before any ``M`` they all
+    reject rather than reading the buffer. Only ``M`` sets a length
+    (``mem_len = out_len``, rp_cpu.c:1490).
+
+    Confirmed against v7.1.2-484-g64e1bff93: ``-j '4'`` on ``abcdef``,
+    ``-j '6'``, and ``-j 'X012'`` on ``abc`` each emit zero bytes.
     """
 
-    def test_X_without_M_reads_nul_bytes(self):
-        # hashcat: 'X012' on abc -> a b \0 c
-        assert _final("X012", "abc") == "ab\x00c"
+    def test_X_without_M_rejects(self):
+        assert _final("X012", "abc") is None
 
     def test_X_after_M_reads_the_memorized_word(self):
         assert _final("MX012", "abc") == "abac"
 
-    def test_buffer_length_tracks_the_baseword(self):
-        # hashcat: bare '4' on abcdef appends six NULs
-        assert _final("4", "abcdef") == "abcdef" + "\x00" * 6
+    def test_no_memory_op_reads_a_phantom_buffer(self):
+        assert _final("4", "abcdef") is None
+        assert _final("6", "abcdef") is None
+        assert _final("X012", "abcdef") is None
 
 
 class TestNoOpOpcode:
@@ -127,21 +145,29 @@ class TestNoOpOpcode:
 
 class TestChainedXMemoryMutation:
     """X mutates the memory buffer as a side effect (src/rp_cpu.c's
-    mangle_insert_multi). All four cases verified against hashcat v7.1.2
-    via `hashcat --stdout -a0 -j '<rule>' <(echo '<baseword>')`.
+    mangle_insert_multi).
+
+    Every case is prefixed with `M` because a bare `X` has nothing to read:
+    `mem_len` starts at 0 and rp_cpu.c:1463 rejects on `mem_len < 1` (see
+    TestMemoryInitialization). These previously asserted NUL-filled results for
+    bare `X`, which the binary does not produce — it emits nothing.
+
+    Values re-verified against v7.1.2-484-g64e1bff93 via
+    `hashcat --stdout -j '<rule>' <(echo '<baseword>')`; the spaced and
+    unspaced spellings (`MX011 X011` / `MX011X011`) agree.
     """
 
-    def test_X011_alone_unchanged_from_task_7b_model(self):
-        assert _final("X011", "abcdefgh") == "a\x00bcdefgh"
+    def test_single_X_after_M_inserts_from_memory(self):
+        assert _final("MX011", "abcdefgh") == "aabcdefgh"
 
     def test_chained_X011_X011_reads_the_mutated_buffer(self):
-        assert _final("X011 X011", "abcdefgh") == "a\x00\x00bcdefgh"
+        assert _final("MX011 X011", "abcdefgh") == "aaabcdefgh"
 
     def test_chained_X011_X021_reads_the_mutated_buffer(self):
-        assert _final("X011 X021", "abcdefgh") == "a\x00b\x00bcdefgh"
+        assert _final("MX011 X021", "abcdefgh") == "aababcdefgh"
 
     def test_chained_X334_X444_reads_the_mutated_buffer(self):
-        assert _final("X334 X444", "password") == "passord\x00\x00\x00\x00word"
+        assert _final("MX334 X444", "password") == "passorddswoword"
 
 
 class TestMFormatAndXBounds:
