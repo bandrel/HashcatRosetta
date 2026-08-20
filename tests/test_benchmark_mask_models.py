@@ -1154,6 +1154,41 @@ class TestMain:
         assert calls == [("m1", True), ("m2", True), ("m1", False), ("m2", False)]
 
 
+class TestCandidateOverride:
+    """BENCHMARK_CANDIDATES is read at import time, so these reload the module
+    under a set env rather than monkeypatching the constant."""
+
+    def _load(self, monkeypatch, env_value: str | None):
+        if env_value is None:
+            monkeypatch.delenv("BENCHMARK_CANDIDATES", raising=False)
+        else:
+            monkeypatch.setenv("BENCHMARK_CANDIDATES", env_value)
+        spec = importlib.util.spec_from_file_location("bm_reload", _SCRIPT_PATH)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["bm_reload"] = module
+        try:
+            spec.loader.exec_module(module)
+            return module
+        finally:
+            sys.modules.pop("bm_reload", None)
+
+    def test_unset_keeps_the_curated_list(self, monkeypatch):
+        assert len(self._load(monkeypatch, None).CANDIDATES) > 1
+
+    def test_single_model_override(self, monkeypatch):
+        assert self._load(monkeypatch, "qwen3.5:9b").CANDIDATES == ["qwen3.5:9b"]
+
+    def test_strips_whitespace_and_empty_entries(self, monkeypatch):
+        assert self._load(monkeypatch, " a:1 , b:2 ,, ").CANDIDATES == ["a:1", "b:2"]
+
+    def test_blank_value_is_not_an_empty_candidate_list(self, monkeypatch):
+        """A blank env var must fall back to the curated list — an empty
+        CANDIDATES would make the sweep exit reporting nothing, which reads
+        like 'no model qualified' rather than 'nothing ran'."""
+        assert len(self._load(monkeypatch, "   ").CANDIDATES) > 1
+
+
 class TestEarlyAbort:
     """A model that cannot answer must not burn len(PROMPTS) x 600s proving
     it: benchmark_model gives up after MAX_CONSECUTIVE_HARD_FAILS."""
