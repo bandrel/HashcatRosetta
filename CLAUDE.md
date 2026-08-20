@@ -58,6 +58,15 @@ everything valid in a `-r` rule file, and the CPU engine (`hashcat --stdout -j`,
 `src/rp_cpu.c`) for the thirteen opcodes hashcat refuses to compile into a `-r` file in any
 mode: `M X ! < > % ( ) = 4 6 Q a`.
 
+- **The memory buffer starts empty, and memory ops reject before it is set.** `src/rp_cpu.c:1168`
+  declares `int mem_len = 0`; only `M` assigns a length (`mem_len = out_len`, rp_cpu.c:1490).
+  `X` (1463), `4` (1474), and `6` (1481) each open with
+  `if (mem_len < 1) return (RULE_RC_REJECT_ERROR)`, so a bare `4`, `6`, or `X` **rejects the
+  word** — `hashcat --stdout -j '4'` emits zero bytes. It does not append a zero-filled
+  buffer: `mem` is uninitialized stack and can read as NULs, but `mem_len == 0` means the
+  reject fires before any read. Simulating the NUL-fill instead was the single cause of all
+  three `4`/`6`/`X` opcode-sweep regressions and all 119 accuracy-smoke mismatches.
+
 - **`a` is a no-op.** hashcat declares it as `RULE_OP_MANGLE_TOGGLECASE_REC`, but the upstream
   implementation is an explicit `/* todo */ break;` stub, so it never mutates the word. This
   is oracle-comparable via `-j`, and the correct expected value is "unchanged" — not the
