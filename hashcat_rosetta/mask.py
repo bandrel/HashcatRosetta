@@ -66,18 +66,17 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
             reference, etc.)
     """
     raw_line = line
-    # Split on unescaped commas
-    fields = _split_unescaped_commas(line)
+    # One pass splits fields and strips escapes, as hashcat does -- unescaping
+    # must precede tokenizing, or "\?d" reads as a literal backslash plus a
+    # digit token rather than the digit token hashcat actually runs.
+    fields = _split_and_unescape_fields(line)
 
     # Last field is the mask; all others are custom charsets
-    mask = _unescape_field(fields[-1])
-    custom_fields = fields[:-1]
+    mask = fields[-1]
+    custom = fields[:-1]
 
-    if len(custom_fields) > 8:
-        raise MaskError(f"at most 8 custom charsets allowed, got {len(custom_fields)}")
-
-    # Unescape each custom charset field
-    custom = [_unescape_field(f) for f in custom_fields]
+    if len(custom) > 8:
+        raise MaskError(f"at most 8 custom charsets allowed, got {len(custom)}")
 
     # Validate the mask against the custom charsets
     validate_mask(mask, custom)
@@ -85,39 +84,51 @@ def parse_hcmask_line(line: str) -> HcmaskLine:
     return HcmaskLine(custom=custom, mask=mask, raw=raw_line)
 
 
-def _split_unescaped_commas(line: str) -> list[str]:
-    """Split a line on unescaped commas.
+def _split_and_unescape_fields(line: str) -> list[str]:
+    r"""Split an hcmask line into fields, removing escapes as hashcat does.
 
-    A comma preceded by a backslash is escaped and not a separator.
-    The backslash is not removed here; it is removed by _unescape_field().
+    A faithful port of hashcat's ``mask_ctx_parse_maskfile``
+    (``src/mpsp.c``), which splits fields and unescapes in one pass over a
+    single ``escaped`` flag. Three consequences, all verified against
+    ``hashcat --stdout -a 3``, and none of them what a comma-only reading of
+    the format would predict:
+
+    - **A backslash escapes whatever follows it, not just a comma**, and is
+      itself dropped. ``\#`` is ``#`` -- which is how a mask beginning with
+      ``#`` is expressed at all, since hashcat's comment test looks at the
+      raw first byte. ``\?d`` is the *token* ``?d``, not a literal backslash
+      followed by a digit: hashcat unescapes before it interprets ``?``, so
+      the line ``\?d`` enumerates ``0``-``9``, not ``\0``-``\9``.
+    - **The escape state is tracked, so an escaped backslash does not escape
+      the next character.** In ``a\\,?1?1`` the ``\\`` is a literal
+      backslash and the comma that follows is a real separator, giving the
+      charset ``a\`` and the mask ``?1?1``. Testing "is the previous
+      character a backslash" instead of carrying the flag reads that line as
+      one field and rejects a valid file.
+    - **A trailing lone backslash escapes nothing and simply vanishes**,
+      because hashcat's loop ends with the flag still set and never copies
+      it.
+
+    Unescaping therefore has to happen *before* tokenizing, exactly as it
+    does upstream -- doing it after, or only for commas, changes which
+    candidates the line is understood to enumerate.
     """
-    fields = []
-    current = []
-    i = 0
-    while i < len(line):
-        if i > 0 and line[i] == "," and line[i - 1] == "\\":
-            # Escaped comma — include it in the current field
-            current.append(",")
-            i += 1
-        elif line[i] == ",":
-            # Unescaped comma — field separator
+    fields: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in line:
+        if escaped:
+            current.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ",":
             fields.append("".join(current))
             current = []
-            i += 1
         else:
-            current.append(line[i])
-            i += 1
+            current.append(char)
     fields.append("".join(current))
     return fields
-
-
-def _unescape_field(field: str) -> str:
-    """Remove escape sequences from a field.
-
-    Replaces ``\\,`` with ``,``. Other backslashes are left alone
-    (hashcat behavior).
-    """
-    return field.replace("\\,", ",")
 
 
 def _expand_charset(field: str, prior_expanded: list[str], position: int) -> str:
@@ -539,18 +550,23 @@ def format_hcmask_line(custom: list[str], mask: str) -> str:
     Returns:
         A formatted hcmask line string, valid only if the inputs were.
     """
-    fields = []
-
-    # Escape custom charsets
-    for charset in custom:
-        escaped = charset.replace(",", "\\,")
-        fields.append(escaped)
-
-    # Escape mask field (commas must be escaped as \,)
-    escaped_mask = mask.replace(",", "\\,")
-    fields.append(escaped_mask)
+    # A backslash must be escaped before a comma is, and it must be escaped at
+    # all: hashcat's field parser drops any backslash and takes the next
+    # character literally, so an unescaped "\" in a charset or mask would eat
+    # the character after it (and a trailing one would vanish). Doing commas
+    # first would then re-escape the backslash this step just added.
+    fields = [_escape_field(charset) for charset in custom]
+    fields.append(_escape_field(mask))
 
     return ",".join(fields)
+
+
+def _escape_field(field: str) -> str:
+    r"""Escape a single hcmask field: ``\`` -> ``\\``, then ``,`` -> ``\,``.
+
+    The inverse of one field's worth of :func:`_split_and_unescape_fields`.
+    """
+    return field.replace("\\", "\\\\").replace(",", "\\,")
 
 
 # hashcat-utils' maskprocessor binary, used as an independent ground-truth
