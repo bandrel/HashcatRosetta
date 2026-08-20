@@ -121,6 +121,15 @@ CANDIDATES: list[str] = [
     "phi4:14b",
 ]
 
+# BENCHMARK_CANDIDATES overrides the list above with a comma-separated set of
+# model names, for re-testing one candidate without editing this file. Useful
+# when a result needs confirming rather than discovering: a model that hard
+# failed under GPU contention looks identical in the report to one that is
+# genuinely broken, and only a clean re-run tells them apart.
+_CANDIDATES_ENV = os.environ.get("BENCHMARK_CANDIDATES", "").strip()
+if _CANDIDATES_ENV:
+    CANDIDATES = [name.strip() for name in _CANDIDATES_ENV.split(",") if name.strip()]
+
 JUDGE_MODEL = "gpt-oss:20b"
 
 # Set BENCHMARK_SKIP_JUDGE=1 to run the deterministic checkers only and leave
