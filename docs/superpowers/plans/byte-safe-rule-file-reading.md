@@ -6,11 +6,11 @@
 real-world rule files. Reproducer:
 
 ```
-uv run hashcat-rosetta --explain ~/projects/hashcat/rules/BARRAGE.rule
+uv run hashcat-rosetta --explain "$HASHCAT_ROSETTA_RULE_CORPUS"
 UnicodeDecodeError: 'utf-8' codec can't decode byte 0xba in position 124
 ```
 
-33,262 of BARRAGE.rule's 32.4M lines are not valid UTF-8. They are not
+33,262 of the corpus's 32.4M lines are not valid UTF-8. They are not
 corrupt. Hashcat rule files are byte-oriented: any byte 0x00-0xFF is a legal
 literal argument to an opcode. Line 513,683 is `o1\xba` — "overwrite position
 1 with byte 0xBA".
@@ -84,9 +84,9 @@ saying exactly that.
 Fixture content, in this order, as bytes:
 
 ```
-b"o1\xba\n"           # BARRAGE line 513683: overwrite pos 1 with byte 0xBA
+b"o1\xba\n"           # corpus line 513683: overwrite pos 1 with byte 0xBA
 b"$ \n"               # append a literal space - a legal argument
-b"i0\xd0 i1\xbc\n"    # BARRAGE line 1119716: two high-byte args
+b"i0\xd0 i1\xbc\n"    # corpus line 1119716: two high-byte args
 b"# comment\n"
 b"\n"
 b"c\n"                # a plain ASCII rule, as a control
@@ -153,7 +153,7 @@ a real finding — report it, do not re-add `errors="ignore"`.
 ## Task 3: regression test against the real corpus
 
 Add an integration test, marked `@pytest.mark.integration`, that
-`pytest.skip`s when `~/projects/hashcat/rules/BARRAGE.rule` is absent (it is
+`pytest.skip`s when `"$HASHCAT_ROSETTA_RULE_CORPUS"` is absent (it is
 not in the repo and must never be added — it is 32.4M lines).
 
 The test reads the whole file as latin-1 and asserts:
