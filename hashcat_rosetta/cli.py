@@ -1238,10 +1238,8 @@ def main(
         from . import nlmask
 
         try:
-            think = True if not no_think else False
-            extra_request_body = (
-                None if not no_think else {"chat_template_kwargs": {"thinking": False}}
-            )
+            think = not no_think
+            extra_request_body = {"chat_template_kwargs": {"thinking": False}} if no_think else None
             suggestions = nlmask.generate_masks(
                 mask,
                 model=model,
