@@ -862,6 +862,7 @@ class TestGenerateMasksReasoningFallback:
         result = generate_masks("six digit pin", client=client)
         assert len(result) == 1
         assert result[0].mask == "?d?d?d?d?d?d"
+        assert len(completions.calls) == 1
 
     def test_both_content_and_reasoning_absent_raises(self):
         """When both content and reasoning are absent, raise MaskGenerationError."""

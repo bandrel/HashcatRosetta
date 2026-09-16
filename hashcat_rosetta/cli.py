@@ -1238,11 +1238,18 @@ def main(
         from . import nlmask
 
         try:
-            kwargs = {"model": model, "host": ollama_host, "debug": debug}
-            if no_think:
-                kwargs["think"] = False
-                kwargs["extra_request_body"] = {"chat_template_kwargs": {"thinking": False}}
-            suggestions = nlmask.generate_masks(mask, **kwargs)
+            think = True if not no_think else False
+            extra_request_body = (
+                None if not no_think else {"chat_template_kwargs": {"thinking": False}}
+            )
+            suggestions = nlmask.generate_masks(
+                mask,
+                model=model,
+                host=ollama_host,
+                debug=debug,
+                think=think,
+                extra_request_body=extra_request_body,
+            )
         except nlmask.MaskGenerationError as e:
             click.echo(f"[!] {e}", err=True)
             sys.exit(1)

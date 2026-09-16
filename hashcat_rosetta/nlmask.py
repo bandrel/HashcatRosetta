@@ -586,8 +586,9 @@ def _message_text(message: Any) -> str | None:
         if neither is a non-empty string.
     """
     # Prefer content if it's a non-empty string
-    if isinstance(message.content, str) and message.content:
-        return message.content
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content:
+        return content
 
     # Fall back to reasoning, trying both as an attribute and in model_extra
     reasoning = getattr(message, "reasoning", None) or (

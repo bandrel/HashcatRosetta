@@ -814,10 +814,9 @@ class TestMaskGeneration:
         assert result.exit_code == 0
         assert len(calls) == 1
         description, kwargs = calls[0]
-        # think should not be passed at all (or should be the default)
-        assert "think" not in kwargs or kwargs.get("think") is True
-        # extra_request_body should not be passed (or should be None)
-        assert "extra_request_body" not in kwargs or kwargs.get("extra_request_body") is None
+        # Default behavior: think is True, extra_request_body is None
+        assert kwargs["think"] is True
+        assert kwargs["extra_request_body"] is None
 
     def test_mask_out_unwritable_path_exits_cleanly(self, runner, monkeypatch, tmp_path):
         suggestion = self._suggestion()
