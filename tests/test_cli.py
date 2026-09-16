@@ -774,6 +774,51 @@ class TestMaskGeneration:
         assert kwargs["model"] == "somemodel"
         assert kwargs["host"] == "http://somehost:1234"
 
+    def test_no_think_flag_passes_think_false_and_extra_request_body(self, runner, monkeypatch):
+        calls = []
+
+        def _record(description, **kwargs):
+            calls.append((description, kwargs))
+            return [self._suggestion()]
+
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", _record)
+        result = runner.invoke(
+            main,
+            [
+                "--mask",
+                "Summer followed by six digits",
+                "--no-think",
+            ],
+        )
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        description, kwargs = calls[0]
+        assert kwargs["think"] is False
+        assert kwargs["extra_request_body"] == {"chat_template_kwargs": {"thinking": False}}
+
+    def test_mask_without_no_think_omits_think_false(self, runner, monkeypatch):
+        calls = []
+
+        def _record(description, **kwargs):
+            calls.append((description, kwargs))
+            return [self._suggestion()]
+
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", _record)
+        result = runner.invoke(
+            main,
+            [
+                "--mask",
+                "Summer followed by six digits",
+            ],
+        )
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        description, kwargs = calls[0]
+        # think should not be passed at all (or should be the default)
+        assert "think" not in kwargs or kwargs.get("think") is True
+        # extra_request_body should not be passed (or should be None)
+        assert "extra_request_body" not in kwargs or kwargs.get("extra_request_body") is None
+
     def test_mask_out_unwritable_path_exits_cleanly(self, runner, monkeypatch, tmp_path):
         suggestion = self._suggestion()
         monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", lambda *a, **k: [suggestion])

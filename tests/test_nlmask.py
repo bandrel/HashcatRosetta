@@ -22,7 +22,7 @@ from hashcat_rosetta.nlmask import (
     generate_masks,
     resolve_base_url,
 )
-from hashcat_rosetta.nlmask import _build_retry_message, _validate_items
+from hashcat_rosetta.nlmask import _build_retry_message, _message_text, _validate_items
 
 
 def _make_response(content: str) -> SimpleNamespace:
@@ -703,3 +703,185 @@ class TestCategoryDescriptionsAgainstLiveOllama:
                 f"expected a literal baseword prefix in {suggestion.mask!r}, "
                 "got a pattern with no basewords"
             )
+
+
+class TestMessageText:
+    """Test the _message_text helper for extracting content vs reasoning."""
+
+    def test_content_present_returns_content(self):
+        """When content is present and non-empty, it wins."""
+        message = SimpleNamespace(content="content text")
+        assert _message_text(message) == "content text"
+
+    def test_content_and_reasoning_present_content_wins(self):
+        """When both content and reasoning are present, content is preferred."""
+        message = SimpleNamespace(
+            content="content text", reasoning="reasoning text", model_extra=None
+        )
+        assert _message_text(message) == "content text"
+
+    def test_content_none_reasoning_present_via_attribute(self):
+        """When content is None and reasoning is accessible as an attribute."""
+        message = SimpleNamespace(content=None, reasoning="reasoning text", model_extra=None)
+        assert _message_text(message) == "reasoning text"
+
+    def test_content_none_reasoning_present_via_model_extra(self):
+        """When content is None and reasoning is in model_extra."""
+        message = SimpleNamespace(content=None, model_extra={"reasoning": "reasoning text"})
+        # getattr should not fail when reasoning is not an attribute
+        result = _message_text(message)
+        assert result == "reasoning text"
+
+    def test_content_empty_string_reasoning_present(self):
+        """When content is empty string, reasoning is used as fallback."""
+        message = SimpleNamespace(content="", reasoning="reasoning text", model_extra=None)
+        assert _message_text(message) == "reasoning text"
+
+    def test_both_absent_returns_none(self):
+        """When both content and reasoning are absent/empty, return None."""
+        message = SimpleNamespace(content=None, model_extra=None)
+        assert _message_text(message) is None
+
+    def test_reasoning_attribute_missing_model_extra_absent(self):
+        """Handle missing reasoning attribute and absent model_extra."""
+        message = SimpleNamespace(content=None)
+        assert _message_text(message) is None
+
+    def test_model_extra_absent_doesnt_fail(self):
+        """Robustly handle absence of model_extra attribute."""
+        message = SimpleNamespace(content=None, reasoning=None)
+        assert _message_text(message) is None
+
+
+class TestGenerateMasksReasoningFallback:
+    """Test reasoning fallback in generate_masks for vLLM compatibility."""
+
+    def test_reasoning_fallback_on_initial_response(self):
+        """When initial response has content=None but reasoning has valid JSON."""
+        reasoning_json = json.dumps(
+            {
+                "masks": [
+                    {"mask": "?d?d?d?d?d?d", "custom_charsets": [], "why": "six digit pin"},
+                ]
+            }
+        )
+
+        class FakeCompletionsWithReasoning:
+            """Fake that returns None content with JSON in reasoning field."""
+
+            def __init__(self):
+                self.calls: list[_Call] = []
+
+            def create(self, **kwargs):
+                self.calls.append(_Call(kwargs=copy.deepcopy(kwargs)))
+                message = SimpleNamespace(content=None, reasoning=reasoning_json, model_extra=None)
+                choice = SimpleNamespace(message=message)
+                return SimpleNamespace(choices=[choice])
+
+        completions = FakeCompletionsWithReasoning()
+        client = FakeClient(completions)
+
+        result = generate_masks("six digit pin", client=client)
+        assert len(result) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+        assert len(completions.calls) == 1
+
+    def test_content_none_reasoning_with_json_retries_on_invalid_mask(self):
+        """Reasoning JSON is used at retry; invalid first response triggers retry."""
+        # First response: content=None, reasoning has invalid mask
+        invalid_reasoning = json.dumps(
+            {
+                "masks": [
+                    {"mask": "?z?d?d", "custom_charsets": [], "why": "bogus token"},
+                ]
+            }
+        )
+        # Retry response: valid JSON in reasoning
+        retry_reasoning = json.dumps(
+            {
+                "masks": [
+                    {"mask": "?d?d?d?d?d?d", "custom_charsets": [], "why": "six digit pin"},
+                ]
+            }
+        )
+
+        call_count = [0]
+
+        class FakeCompletionsWithReasoningRetry:
+            """Fake that serves reasoning in both calls."""
+
+            def __init__(self):
+                self.calls: list[_Call] = []
+
+            def create(self, **kwargs):
+                self.calls.append(_Call(kwargs=copy.deepcopy(kwargs)))
+                if call_count[0] == 0:
+                    # First call: invalid mask in reasoning
+                    reasoning = invalid_reasoning
+                else:
+                    # Retry: valid mask in reasoning
+                    reasoning = retry_reasoning
+                call_count[0] += 1
+                message = SimpleNamespace(content=None, reasoning=reasoning, model_extra=None)
+                choice = SimpleNamespace(message=message)
+                return SimpleNamespace(choices=[choice])
+
+        completions = FakeCompletionsWithReasoningRetry()
+        client = FakeClient(completions)
+
+        result = generate_masks("six digit pin", client=client)
+        assert len(result) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+        assert len(completions.calls) == 2
+
+    def test_content_empty_string_reasoning_with_valid_json(self):
+        """Empty string content falls back to reasoning with valid JSON."""
+        valid_reasoning = json.dumps(
+            {
+                "masks": [
+                    {"mask": "?d?d?d?d?d?d", "custom_charsets": [], "why": "six digit pin"},
+                ]
+            }
+        )
+
+        class FakeCompletionsWithEmptyContent:
+            """Fake that returns empty string content with JSON in reasoning."""
+
+            def __init__(self):
+                self.calls: list[_Call] = []
+
+            def create(self, **kwargs):
+                self.calls.append(_Call(kwargs=copy.deepcopy(kwargs)))
+                message = SimpleNamespace(content="", reasoning=valid_reasoning, model_extra=None)
+                choice = SimpleNamespace(message=message)
+                return SimpleNamespace(choices=[choice])
+
+        completions = FakeCompletionsWithEmptyContent()
+        client = FakeClient(completions)
+
+        result = generate_masks("six digit pin", client=client)
+        assert len(result) == 1
+        assert result[0].mask == "?d?d?d?d?d?d"
+
+    def test_both_content_and_reasoning_absent_raises(self):
+        """When both content and reasoning are absent, raise MaskGenerationError."""
+
+        class FakeCompletionsNoContent:
+            """Fake that returns no content and no reasoning."""
+
+            def __init__(self):
+                self.calls: list[_Call] = []
+
+            def create(self, **kwargs):
+                self.calls.append(_Call(kwargs=copy.deepcopy(kwargs)))
+                message = SimpleNamespace(content=None, reasoning=None, model_extra=None)
+                choice = SimpleNamespace(message=message)
+                return SimpleNamespace(choices=[choice])
+
+        completions = FakeCompletionsNoContent()
+        client = FakeClient(completions)
+
+        with pytest.raises(MaskGenerationError) as exc_info:
+            generate_masks("six digit pin", client=client)
+
+        assert "model response had no content" in str(exc_info.value)

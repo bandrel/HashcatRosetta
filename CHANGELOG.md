@@ -40,7 +40,14 @@ for exact timing.
   than sending `False`, and `extra_request_body` merges caller-supplied
   provider-specific fields (e.g. `{"chat_template_kwargs": {"thinking":
   False}}`) into `extra_body`. Both parameters apply to the retry request as
-  well as the initial one.
+  well as the initial one. Additionally, `generate_masks()` now falls back to
+  `message.reasoning` when `message.content` is absent or empty, allowing
+  vLLM servers with reasoning parsers to work transparently.
+
+- **`--no-think` CLI flag disables reasoning mode for `--mask`.** Needed for
+  non-Ollama OpenAI-compatible servers (e.g. vLLM with a reasoning parser active)
+  where requesting thinking routes the whole structured JSON response into
+  `message.reasoning` and leaves `message.content` empty.
 - **`DebugLogParser.parse_debug_files()` / `DebugAnalyzer.analyze_debug_files()`**
   parse a list of debug files independently and merge their entries, instead
   of requiring callers to concatenate raw lines and hand them to
