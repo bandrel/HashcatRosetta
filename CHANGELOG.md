@@ -124,9 +124,9 @@ for exact timing.
   format and mode per file instead.
 - **`--explain` no longer crashes on rule files containing high-byte opcode
   arguments.** Rule files are byte-oriented, not text, and hashcat rules
-  legitimately carry high-byte arguments (33,262 lines in `BARRAGE.rule`
-  alone). Reading them as UTF-8 raised `UnicodeDecodeError`; they are now read
-  byte-faithfully as latin-1.
+  legitimately carry high-byte arguments (33,262 lines in a single large
+  third-party rule file alone). Reading them as UTF-8 raised
+  `UnicodeDecodeError`; they are now read byte-faithfully as latin-1.
 - **`--analyze-rules` and `--explain` no longer silently drop leading/trailing
   whitespace opcode arguments or miscount indented comments.** A rule whose
   argument is a literal space (e.g. `$ `) had that space stripped before
@@ -218,12 +218,24 @@ for exact timing.
 
 ## [0.4.0] - 2026-07-29
 
-The headline is accuracy. A full byte-for-byte comparison against hashcat 7.1.2
-over all 32.4M rules in `BARRAGE.rule` now reports **0 mismatches across
-32,331,257 oracle-comparable rules**, and the per-opcode sweep is at 0
-regressions. Getting there took a stack of engine fixes, most of which were
-cases where `explain_rule()` was confidently describing a transformation
-hashcat does not perform.
+The headline is accuracy. Every opcode `explain_rule()` implements is compared
+against a live hashcat process, and the per-opcode sweep is at 0 regressions.
+Getting there took a stack of engine fixes, most of which were cases where
+`explain_rule()` was confidently describing a transformation hashcat does not
+perform.
+
+> **Correction (2026-08-25).** This entry originally claimed "a full byte-for-byte
+> comparison against hashcat 7.1.2 over all 32.4M rules" of a large third-party
+> rule file, reporting **0 mismatches across 32,331,257 oracle-comparable
+> rules**. That figure is not reproducible and the claim has been withdrawn.
+> `scripts/verify_rules.py` has never accepted a rule file as input — it
+> generates its own rules via `generate-rules.bin` — and no committed tool feeds
+> an existing rule file through the oracle one rule at a time. A live per-rule
+> oracle sweep at that scale is not feasible here in any case: the oracle shells
+> out to `hashcat` per rule, which is multiple days of wall-clock for a corpus
+> that size even fully parallel. What *was* run over that corpus is static
+> parsing, not oracle comparison. See `reports/` for the accuracy numbers that
+> are backed by an actual run.
 
 ### Changed
 
@@ -267,12 +279,12 @@ hashcat does not perform.
   a hashcat-encoded position. Verified empirically against 7.1.2 by sweeping
   `B0X` over `A`.
 - **The `3NX` opcode is implemented** — toggle the case of the character after
-  the Nth (0-indexed) occurrence of separator `X`. Roughly 25K rules in
-  BARRAGE use it.
+  the Nth (0-indexed) occurrence of separator `X`. Roughly 25K rules in one large
+  third-party rule file use it.
 - **`\xNN` hex escape decoding.** Rules are decoded before application, mirroring
-  hashcat, so `s\x20_` substitutes a literal space. About 572K BARRAGE rules
+  hashcat, so `s\x20_` substitutes a literal space. About 572K rules in that same file
   use hex escapes. With this and `3NX` landed, unimplemented-opcode hits across
-  the BARRAGE sweep dropped from 48,428 to 4.
+  a static parse of that corpus dropped from 48,428 to 4.
 - **Per-opcode correctness sweep.** A deterministic rule generator crossed with
   an argument grid, aggregated by leading opcode, with markdown and JSON
   renderers, exit-code wiring, and a CI job. `KNOWN_LATENT` marks opcodes whose
@@ -300,9 +312,9 @@ hashcat does not perform.
   at byte 0x00 that had been silently dropping the step. (#31)
 - **Tokenizer arity was wrong for `3`, `X`, and `a`**, producing false
   "Incomplete opcode" warnings on valid rules during `--analyze-rules`
-  (surfaced by `BARRAGE.rule`). `3` is 2-arg and was 0-arg; `X` is 3-arg and
+  (surfaced by a large third-party rule file). `3` is 2-arg and was 0-arg; `X` is 3-arg and
   was 2-arg; `a` is a 0-arg legacy op, and as 1-arg it swallowed the following
-  opcode. After the fix, sampling 150 distinct warned rules from BARRAGE,
+  opcode. After the fix, sampling 150 distinct warned rules from that corpus,
   hashcat rejects 150/150 as genuinely malformed — the remaining warnings are
   true positives.
 - **`Y0` duplicated the entire word.** `current[-0:]` is `current[0:]`, so it

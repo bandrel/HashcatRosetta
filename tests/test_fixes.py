@@ -368,7 +368,7 @@ class TestTokenizerOpcodes:
         assert result["components"] == ["a", "$1"]
 
     def test_space_separated_rule_no_false_incomplete_warning(self, caplog):
-        """BARRAGE-style space-separated rule tokenizes cleanly (regression).
+        """Space-separated rule tokenizes cleanly (regression).
 
         hashcat accepts 'd ] ] ] 31e eE 31s' and produces output; the tokenizer
         previously emitted a false 'Incomplete 2-arg opcode' warning for the

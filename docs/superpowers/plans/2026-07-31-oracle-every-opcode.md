@@ -1057,7 +1057,7 @@ without a preceding M. Found only because M and X were finally oracled."
 
 ### Task 7c: Fix `M`'s step-format bug and `X`'s missing OOB check
 
-**Added mid-execution.** Task 2's sweep surfaced these two the moment `M`/`X` were routed to the CPU oracle for the first time (they were in the old `_HASHCAT_STDOUT_UNSUPPORTED` skip set, so they had never been compared before). Confirmed real by direct read of `cli.py` during Task 2's review. Neither is in `KNOWN_LATENT`. They must be fixed before Task 9, which requires 0 mismatches on the full BARRAGE sweep.
+**Added mid-execution.** Task 2's sweep surfaced these two the moment `M`/`X` were routed to the CPU oracle for the first time (they were in the old `_HASHCAT_STDOUT_UNSUPPORTED` skip set, so they had never been compared before). Confirmed real by direct read of `cli.py` during Task 2's review. Neither is in `KNOWN_LATENT`. They must be fixed before Task 9, which requires 0 mismatches on the full corpus sweep.
 
 **Files:**
 - Modify: `hashcat_rosetta/cli.py:532-536` (`M` branch), `:538-559` (`X` branch)
@@ -1406,10 +1406,10 @@ issue-citing excuse."
 
 ---
 
-### Task 9: Re-run the full BARRAGE sweep and correct the published numbers
+### Task 9: Re-run the full corpus sweep and correct the published numbers
 
 **Files:**
-- Modify: `CHANGELOG.md`, `docs/unimplemented-opcodes.md`, `README.md:177,183`, `reports/barrage-opcode-report.json`
+- Modify: `CHANGELOG.md`, `docs/unimplemented-opcodes.md`, `README.md:177,183`, `reports/opcode-accuracy-report.json`
 - Test: none. This task is measurement and documentation.
 
 **Interfaces:**
@@ -1419,8 +1419,8 @@ issue-citing excuse."
 - [ ] **Step 1: Re-run the full sweep**
 
 ```bash
-uv run python scripts/verify_rules.py --rules ~/projects/hashcat/rules/BARRAGE.rule \
-  --report reports/barrage-opcode-report.md --json reports/barrage-opcode-report.json
+uv run python scripts/verify_rules.py --rules "$HASHCAT_ROSETTA_RULE_CORPUS" \
+  --report reports/opcode-accuracy-report.md --json reports/opcode-accuracy-report.json
 ```
 
 Expected: `0 mismatches`. The oracle-comparable count must rise: the previous run compared 32,331,257 of 32,467,184 rules, a gap of 135,927, and the thirteen newly-routed opcodes plus `S`/`h`/`H` live in that gap. Record the new numbers. If mismatches appear, stop and treat each as a bug in Tasks 3 through 7 rather than editing the number to match. Tasks 7a and 7b in particular change already-published behavior, so expect the count to move for `X` rules too.

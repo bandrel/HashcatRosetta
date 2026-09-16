@@ -547,7 +547,7 @@ class TestExplainRuleEdgeCases:
 class TestAsciiOnlyCasing:
     """hashcat case ops (l u c C t E e T 3) only affect ASCII A-Z/a-z; they
     leave high bytes (0x80-0xFF) untouched. Python str casing does not, which
-    diverged after L/R/B/+/- produced accented bytes (issue: BARRAGE 'L6 l')."""
+    diverged after L/R/B/+/- produced accented bytes (issue: 'L6 l')."""
 
     def _f(self, rule, bw):
         s = explain_rule(rule, bw)
@@ -605,7 +605,7 @@ class TestExplainToggleAtSep:
 
 class TestHexEscapeDecoding:
     """hashcat decodes \\xNN byte escapes in rules; explain_rule must too, so
-    its output matches hashcat for BARRAGE rules that use them."""
+    its output matches hashcat for real-world rules that use them."""
 
     def test_substitute_space_via_hex_escape(self):
         # s\x20X = substitute space -> X. hashcat 'a b' -> 'aXb'.

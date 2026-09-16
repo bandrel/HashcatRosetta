@@ -1,10 +1,10 @@
-"""Regression test against the real 32.4M-line BARRAGE.rule corpus.
+"""Regression test against a large real-world rule corpus.
 
 Marked integration; skipped without the corpus. The corpus itself (466 MB,
 32.4M lines) must never be committed to the repo.
 
 Reading the corpus as strict UTF-8 (the pre-fix behavior) raises
-UnicodeDecodeError partway through, because BARRAGE.rule contains thousands
+UnicodeDecodeError partway through, because the corpus contains thousands
 of non-UTF-8 byte sequences (proven in task-3-report.md via a scratch
 script: it crashes after ~513k of 32.4M lines). Reading it as latin-1 never
 raises, since every byte value 0x00-0xFF maps to a code point in latin-1.
@@ -21,7 +21,7 @@ both real production readers against them:
 - `main` (`hashcat_rosetta.cli`) invoked with `--explain <file>` via
   `click.testing.CliRunner`, the `--explain <rule-file>` code path. This is
   the path where the original crash actually occurred
-  (`hashcat-rosetta --explain BARRAGE.rule` raised UnicodeDecodeError), so
+  (`hashcat-rosetta --explain <corpus>` raised UnicodeDecodeError), so
   it must be covered directly, not just `--analyze-rules`.
 
 See task-3-report.md for a mutation transcript proving both assertions
@@ -30,6 +30,7 @@ fail if their respective production fixes are reverted.
 
 from __future__ import annotations
 
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -40,12 +41,25 @@ from hashcat_rosetta.cli import _escape_bytes, explain_rule, main
 from hashcat_rosetta.formatting import extract_rule_opcodes
 from hashcat_rosetta.parser import RuleParser
 
-CORPUS_PATH = Path.home() / "projects" / "hashcat" / "rules" / "BARRAGE.rule"
+# The corpus is a large (hundreds of MB) real-world rule file, deliberately not
+# named or committed here: it is third-party content, it is far too big for the
+# repo, and nothing about this test depends on *which* file it is — only that
+# it is big and contains genuine non-UTF-8 opcode arguments. Point
+# $HASHCAT_ROSETTA_RULE_CORPUS at one to run this.
+#
+# This used to hardcode a path under $HOME. That silently rotted the moment the
+# file was renamed on disk: the test skipped, permanently and quietly, which is
+# the exact failure mode the rest of this suite exists to prevent.
+_CORPUS_ENV_VAR = "HASHCAT_ROSETTA_RULE_CORPUS"
+_corpus_env = os.environ.get(_CORPUS_ENV_VAR)
+CORPUS_PATH = Path(_corpus_env) if _corpus_env else None
+
+_MISSING_CORPUS_MESSAGE = f"set ${_CORPUS_ENV_VAR} to a large rule file to run this test"
 
 # A known non-UTF-8 line ("o1\xba", opcode 'o' at position 1 replacing with
 # byte 0xba) at this 1-indexed line number in the corpus, used to anchor the
 # --explain end-to-end subset below. Verified via:
-#   sed -n '513683p' ~/projects/hashcat/rules/BARRAGE.rule | xxd
+#   sed -n '513683p' "$HASHCAT_ROSETTA_RULE_CORPUS" | xxd
 EXPLAIN_ANCHOR_LINE_NUMBER = 513683
 EXPLAIN_ANCHOR_ESCAPED_BYTES = b"o1\\xba"
 
@@ -97,14 +111,18 @@ EXPECTED_SPACE_ARG_VULNERABLE_LINES = 69
 
 
 @pytest.mark.integration
-def test_barrage_corpus_is_byte_safe(tmp_path: Path) -> None:
+def test_large_corpus_is_byte_safe(tmp_path: Path) -> None:
     """Single pass over the real corpus to find byte-safety edge cases,
     pin their counts as ground truth, then run the production reader
     (extract_rule_opcodes) end-to-end against a distilled file containing
     only those edge-case lines.
     """
-    if not CORPUS_PATH.exists():
-        pytest.skip(f"BARRAGE.rule corpus not found at {CORPUS_PATH}")
+    corpus_path = CORPUS_PATH
+    if corpus_path is None or not corpus_path.exists():
+        pytest.skip(_MISSING_CORPUS_MESSAGE)
+    # pytest.skip() is NoReturn, but the pre-commit mypy runs without pytest
+    # installed and cannot know that, so state the invariant outright.
+    assert corpus_path is not None
 
     non_utf8_lines = 0
     space_arg_vulnerable_lines = 0
@@ -123,7 +141,7 @@ def test_barrage_corpus_is_byte_safe(tmp_path: Path) -> None:
     # (latin-1 never raises, so this also proves the corpus is fully
     # readable without the pre-fix utf-8 crash) instead of reading the
     # 466 MB file twice.
-    with open(CORPUS_PATH, "rb") as raw_file:
+    with open(corpus_path, "rb") as raw_file:
         for line_number, raw_bytes in enumerate(raw_file, 1):
             is_non_utf8 = False
             try:
@@ -207,7 +225,7 @@ def test_barrage_corpus_is_byte_safe(tmp_path: Path) -> None:
     # previously-crash-inducing corpus data - not a reimplementation of its
     # logic. It stays fast because the distilled file is ~33k lines, not
     # 32.4M.
-    distilled_path = tmp_path / "distilled_barrage.rule"
+    distilled_path = tmp_path / "distilled_corpus.rule"
     with open(distilled_path, "wb") as distilled_file:
         distilled_file.writelines(distilled_lines)
 
@@ -226,7 +244,7 @@ def test_barrage_corpus_is_byte_safe(tmp_path: Path) -> None:
     # Second end-to-end check: the real --explain <rule-file> code path
     # (cli.py's `main`, via CliRunner), which is where the original crash
     # this whole task exists to guard against actually happened
-    # (`hashcat-rosetta --explain BARRAGE.rule` raised UnicodeDecodeError).
+    # (`hashcat-rosetta --explain <corpus>` raised UnicodeDecodeError).
     # Driven over a small subset (see EXPLAIN_SUBSET_LINE_CAP) rather than
     # the full ~33k-line distilled corpus-property file, since --explain
     # produces multiple lines of output per rule and doing so over the full
@@ -235,7 +253,7 @@ def test_barrage_corpus_is_byte_safe(tmp_path: Path) -> None:
     # trailing-space rule argument. The corpus-property assertions above
     # (33,262 / 79) already cover the full corpus; only this CLI smoke
     # check is subset-limited.
-    explain_subset_path = tmp_path / "explain_subset_barrage.rule"
+    explain_subset_path = tmp_path / "explain_subset_corpus.rule"
     with open(explain_subset_path, "wb") as explain_subset_file:
         explain_subset_file.writelines(explain_subset_lines)
 

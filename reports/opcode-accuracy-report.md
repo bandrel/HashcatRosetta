@@ -1,12 +1,12 @@
-# BARRAGE Sweep Report
+# Opcode Accuracy Report
 
 **Generated:** 2026-08-01
-**Command:** `uv run python scripts/verify_rules.py --count 500 --rounds 1 --seed 1 --basewords tests/data/basewords.json --workers 16 --report reports/barrage-opcode-report.json`
+**Command:** `uv run python scripts/verify_rules.py --count 500 --rounds 1 --seed 1 --basewords tests/data/basewords.json --workers 16 --report reports/opcode-accuracy-report.json`
 
 ## Methodology note
 
-Task 9 of the `oracle-every-opcode` plan called for re-running "the full BARRAGE
-sweep" against `~/projects/hashcat/rules/BARRAGE.rule` (32,467,620 lines,
+Task 9 of the `oracle-every-opcode` plan called for re-running "the full
+corpus sweep" against a large third-party rule file (32,467,620 lines,
 31,421,168 unique) via `scripts/verify_rules.py --rules <file> --json <file>`.
 That invocation does not exist: `scripts/verify_rules.py` has never accepted a
 `--rules` flag (confirmed back to the `v0.4.0` tag, `f92c099`) — it always
@@ -22,7 +22,7 @@ A batch/bulk oracle shortcut (loading all predicted candidates as target
 hashes and cracking them in one `hashcat -m0` run) was prototyped and rejected:
 hashcat stops trying further candidates against a digest once it is cracked,
 so when two different rule strings legitimately produce the same candidate
-(common in BARRAGE — a plain-Python classification pass over the 31.4M unique
+(common in that corpus — a plain-Python classification pass over the 31.4M unique
 lines found roughly 15M such candidate collisions), only the first-encountered
 rule for a shared candidate would actually be verified, silently understating
 coverage.
@@ -34,7 +34,7 @@ counted below was genuinely compared against a live `hashcat` process (GPU
 `-r` engine or CPU `-j` engine, routed per opcode) — there is no shortcut or
 simulation in this number itself, only in the scope (synthetic generated
 rules across the standard 24-baseword corpus, rather than the literal
-BARRAGE.rule file).
+corpus file).
 
 See `task-9-report.md` for the full accounting, including the historical
 32.4M-rule figure this could not exactly reproduce.
