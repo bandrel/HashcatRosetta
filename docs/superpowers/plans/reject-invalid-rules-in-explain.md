@@ -40,7 +40,7 @@ Two root causes:
 ## Design
 
 Keep `explain_rule`'s return contract exactly as-is — `hashcat_rosetta/_verify.py` consumes
-its step list and the 32.4M-rule BARRAGE corpus run depends on it. Add validation alongside
+its step list and the 32.4M-rule reference corpus run depends on it. Add validation alongside
 rather than rewiring the walk.
 
 ### Task 1 — `find_rule_issues()` in `parser.py`
@@ -58,7 +58,7 @@ Flag only what the oracle proved:
 - non-`[0-9A-Z]` argument for a **numeric-arg** opcode, excluding the reject class
 
 Be conservative: a false "invalid" verdict is worse than the current bug, since it would
-break BARRAGE-scale analysis. When unsure, stay silent.
+break corpus-scale analysis. When unsure, stay silent.
 
 Derive the numeric-arg opcode set from the oracle, not from
 `scripts/sweep_opcodes.py:102-103` — that file classifies `>` and `<` as char-arg, which is

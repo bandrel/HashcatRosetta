@@ -1164,6 +1164,12 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     default=False,
     help="Print the model's reasoning trace to stderr (used with --mask)",
 )
+@click.option(
+    "--no-think",
+    is_flag=True,
+    default=False,
+    help="Disable reasoning mode for --mask (needed for non-Ollama OpenAI-compatible servers)",
+)
 @click.pass_context
 def main(
     ctx,
@@ -1187,6 +1193,7 @@ def main(
     model,
     ollama_host,
     debug,
+    no_think,
 ):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
 
@@ -1231,7 +1238,16 @@ def main(
         from . import nlmask
 
         try:
-            suggestions = nlmask.generate_masks(mask, model=model, host=ollama_host, debug=debug)
+            think = not no_think
+            extra_request_body = {"chat_template_kwargs": {"thinking": False}} if no_think else None
+            suggestions = nlmask.generate_masks(
+                mask,
+                model=model,
+                host=ollama_host,
+                debug=debug,
+                think=think,
+                extra_request_body=extra_request_body,
+            )
         except nlmask.MaskGenerationError as e:
             click.echo(f"[!] {e}", err=True)
             sys.exit(1)

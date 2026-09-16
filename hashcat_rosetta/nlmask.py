@@ -567,6 +567,40 @@ def _print_reasoning(message: Any, label: str) -> None:
         print(f"--- {label} thinking ---\n{reasoning}\n--- end thinking ---", file=sys.stderr)
 
 
+def _message_text(message: Any) -> str | None:
+    """Extract text content from a message, falling back to reasoning if content is absent.
+
+    Servers running a reasoning parser (e.g. vLLM with deepseek-v4.1-flash) put
+    the whole structured JSON answer in ``message.reasoning`` and leave
+    ``message.content`` as ``None``. This function returns ``message.content``
+    when it's a non-empty string, otherwise returns the message's reasoning field
+    (which may be set as an attribute or via ``model_extra``, since different SDK
+    versions/test doubles vary). Returns ``None`` when neither yields a non-empty
+    string.
+
+    Args:
+        message: The response message object from the OpenAI SDK.
+
+    Returns:
+        The message text (content preferred, reasoning as fallback), or ``None``
+        if neither is a non-empty string.
+    """
+    # Prefer content if it's a non-empty string
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content:
+        return content
+
+    # Fall back to reasoning, trying both as an attribute and in model_extra
+    reasoning = getattr(message, "reasoning", None) or (
+        getattr(message, "model_extra", None) or {}
+    ).get("reasoning")
+
+    if isinstance(reasoning, str) and reasoning:
+        return reasoning
+
+    return None
+
+
 def generate_masks(
     description: str,
     *,
@@ -704,7 +738,7 @@ def generate_masks(
     if debug:
         _print_reasoning(response.choices[0].message, "initial")
 
-    assistant_content = response.choices[0].message.content
+    assistant_content = _message_text(response.choices[0].message)
     parsed, parse_error = _parse_response_json(assistant_content)
 
     failures: list[tuple[dict[str, Any], str]] = []
@@ -743,7 +777,7 @@ def generate_masks(
     if debug:
         _print_reasoning(retry_response.choices[0].message, "retry")
 
-    retry_content = retry_response.choices[0].message.content
+    retry_content = _message_text(retry_response.choices[0].message)
     retry_parsed, retry_parse_error = _parse_response_json(retry_content)
 
     if retry_parsed is None:

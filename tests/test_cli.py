@@ -547,7 +547,7 @@ class TestExplainRuleEdgeCases:
 class TestAsciiOnlyCasing:
     """hashcat case ops (l u c C t E e T 3) only affect ASCII A-Z/a-z; they
     leave high bytes (0x80-0xFF) untouched. Python str casing does not, which
-    diverged after L/R/B/+/- produced accented bytes (issue: BARRAGE 'L6 l')."""
+    diverged after L/R/B/+/- produced accented bytes (issue: 'L6 l')."""
 
     def _f(self, rule, bw):
         s = explain_rule(rule, bw)
@@ -605,7 +605,7 @@ class TestExplainToggleAtSep:
 
 class TestHexEscapeDecoding:
     """hashcat decodes \\xNN byte escapes in rules; explain_rule must too, so
-    its output matches hashcat for BARRAGE rules that use them."""
+    its output matches hashcat for real-world rules that use them."""
 
     def test_substitute_space_via_hex_escape(self):
         # s\x20X = substitute space -> X. hashcat 'a b' -> 'aXb'.
@@ -773,6 +773,50 @@ class TestMaskGeneration:
         assert description == "Summer followed by six digits"
         assert kwargs["model"] == "somemodel"
         assert kwargs["host"] == "http://somehost:1234"
+
+    def test_no_think_flag_passes_think_false_and_extra_request_body(self, runner, monkeypatch):
+        calls = []
+
+        def _record(description, **kwargs):
+            calls.append((description, kwargs))
+            return [self._suggestion()]
+
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", _record)
+        result = runner.invoke(
+            main,
+            [
+                "--mask",
+                "Summer followed by six digits",
+                "--no-think",
+            ],
+        )
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        description, kwargs = calls[0]
+        assert kwargs["think"] is False
+        assert kwargs["extra_request_body"] == {"chat_template_kwargs": {"thinking": False}}
+
+    def test_mask_without_no_think_omits_think_false(self, runner, monkeypatch):
+        calls = []
+
+        def _record(description, **kwargs):
+            calls.append((description, kwargs))
+            return [self._suggestion()]
+
+        monkeypatch.setattr("hashcat_rosetta.nlmask.generate_masks", _record)
+        result = runner.invoke(
+            main,
+            [
+                "--mask",
+                "Summer followed by six digits",
+            ],
+        )
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        description, kwargs = calls[0]
+        # Default behavior: think is True, extra_request_body is None
+        assert kwargs["think"] is True
+        assert kwargs["extra_request_body"] is None
 
     def test_mask_out_unwritable_path_exits_cleanly(self, runner, monkeypatch, tmp_path):
         suggestion = self._suggestion()
