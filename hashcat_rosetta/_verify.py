@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
@@ -398,6 +399,27 @@ def _unimplemented_opcodes(rule_str: str, implemented: set[str]) -> list[str]:
     )
 
 
+# Post-836f11de1 hashcat builds hex-encode a --stdout candidate whenever its
+# raw bytes aren't printable UTF-8 (need_hexify() in src/convert.c), the same
+# $HEX[...] wrapper used for on-disk outfiles/potfiles. Older builds wrote the
+# raw bytes unchanged. Both are valid hashcat behavior for the same candidate,
+# so unwrap it before comparing rather than string-comparing the wrapper text.
+_HASHCAT_HEX_OUTPUT_RE = re.compile(r"^\$HEX\[([0-9A-Fa-f]*)\]$")
+
+
+def _unwrap_hashcat_hex(output: str) -> str:
+    """Decode a hashcat $HEX[...] --stdout wrapper back to raw bytes.
+
+    Returns `output` unchanged if it isn't a $HEX[...] wrapper. The bytes are
+    decoded latin-1, one codepoint per byte, matching how the rest of the
+    verify harness represents raw candidate bytes (see _hashcat_output).
+    """
+    m = _HASHCAT_HEX_OUTPUT_RE.match(output)
+    if m is None:
+        return output
+    return bytes.fromhex(m.group(1)).decode("latin-1")
+
+
 def _hashcat_output(rule: str, baseword: str, engine: str = "gpu") -> tuple[str | None, bool]:
     """Run a rule through hashcat. Returns (stdout-or-None, hashcat_failed).
 
@@ -451,7 +473,12 @@ def _hashcat_output(rule: str, baseword: str, engine: str = "gpu") -> tuple[str 
         return None, True
     if result.returncode != 0:
         return None, True
-    return result.stdout.decode(errors="replace").rstrip("\n"), False
+    # latin-1 maps every byte 0x00-0xFF to its own codepoint, so this is a
+    # lossless round-trip -- unlike utf-8, which mangles non-UTF-8 candidate
+    # bytes into U+FFFD replacement chars and destroys the byte identity the
+    # rest of the harness (and explain_rule's own chr()-per-byte convention)
+    # relies on for comparison.
+    return result.stdout.decode("latin-1").rstrip("\n"), False
 
 
 def _extract_final(rule: str, baseword: str) -> str:
@@ -536,6 +563,8 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
     hashcat_out, hashcat_failed = _hashcat_output(rule, baseword, engine=engine)
     if hashcat_failed:
         return VerifyResult(status="skipped_hashcat", rule=rule, baseword=baseword)
+    if hashcat_out is not None:
+        hashcat_out = _unwrap_hashcat_hex(hashcat_out)
 
     hashcat_rejected = hashcat_out is None or hashcat_out == ""
 
@@ -551,10 +580,10 @@ def verify_rule(rule: str, baseword: str, implemented: set[str] | None = None) -
             hashcat=None if hashcat_rejected else hashcat_out,
         )
 
-    # decision == "needs_string_compare"
-    if hashcat_out is not None and not hashcat_out.isascii():
-        return VerifyResult(status="skipped_nonascii", rule=rule, baseword=baseword)
-
+    # decision == "needs_string_compare". hashcat_out is decoded latin-1 (one
+    # codepoint per raw byte) and any $HEX[...] wrapper already unwrapped, so
+    # it's directly comparable to our_final's own byte-per-char convention --
+    # no non-ASCII special-casing needed.
     if our_final == hashcat_out:
         return VerifyResult(status="match", rule=rule, baseword=baseword)
     return VerifyResult(
