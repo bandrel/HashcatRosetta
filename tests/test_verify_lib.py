@@ -209,6 +209,51 @@ class TestEmptyFinalRejectionParity:
         assert result.status == "match", f"got {result}"
 
 
+class TestHashcatHexWrappedOutput:
+    """Newer hashcat builds (post 836f11de1) hex-encode --stdout candidates
+    whenever the raw bytes aren't printable UTF-8 (need_hexify()), instead of
+    writing the raw bytes unchanged. The harness must decode that $HEX[...]
+    wrapper back to raw bytes before comparing against our simulated output,
+    rather than string-comparing the literal wrapper text (which is always
+    ASCII and so never gets caught by an ASCII-only skip check)."""
+
+    def test_hex_wrapped_output_matches_equivalent_raw_bytes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hashcat_rosetta import _verify as verify_mod
+        from hashcat_rosetta._verify import verify_rule
+
+        # "{ L1" on "aaaa": rotate left -> "aaaa" (unchanged), then bitwise
+        # shift-left the char at position 1: ord('a')=0x61, <<1 & 0xFF = 0xC2.
+        # Raw bytes would be b"a\xc2aa"; a hexify-aware hashcat build reports
+        # that as $HEX[61c26161] instead of the raw bytes.
+        monkeypatch.setattr(
+            verify_mod,
+            "_hashcat_output",
+            lambda r, b, engine="gpu": ("$HEX[61c26161]", False),
+        )
+
+        result = verify_rule("{ L1", "aaaa")
+        assert result.status == "match", f"got {result}"
+
+    def test_hex_wrapped_output_mismatch_still_detected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from hashcat_rosetta import _verify as verify_mod
+        from hashcat_rosetta._verify import verify_rule
+
+        # Decoded to something that does NOT match our simulated output ->
+        # must still be reported as a genuine mismatch, not silently skipped.
+        monkeypatch.setattr(
+            verify_mod,
+            "_hashcat_output",
+            lambda r, b, engine="gpu": ("$HEX[ffffffff]", False),
+        )
+
+        result = verify_rule("{ L1", "aaaa")
+        assert result.status == "mismatch", f"got {result}"
+
+
 class TestOOBPositionSkip:
     """Hashcat rejects rules where a positional arg exceeds the word length
     at that step. Our parser silently no-ops, producing spurious mismatches.
