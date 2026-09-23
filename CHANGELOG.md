@@ -55,6 +55,42 @@ for exact timing.
 
 ### Fixed
 
+- **`DebugLogParser` now decodes the `$HEX[...]` wrapper hashcat puts on the
+  debug file's RULE field, which was silently costing the Rosetta attack its
+  best rules.** Upstream `836f11de1` (2026-09-20, first in `v7.1.2-754`) renamed
+  `debugfile_format_plain` to `debugfile_format_field` and applied it to the
+  rule as well as the two word fields — a genuine fix, because a rule is
+  reconstructed in the debug file from its compiled form, turning `\xNN`
+  operands back into literal bytes, so `^\x0a` was splitting a record across two
+  lines. `need_hexify()` there fires on a byte `< 0x20`, `> 0x7f`, or a literal
+  `:`.
+
+  That inverted the assumption this parser's field split was documented against
+  ("Rules are not encoded and contain colons routinely"). The split itself
+  survived — all four fields still land correctly — but the rule *value* came
+  back as e.g. `$HEX[3a]` instead of `:`. Nothing failed loudly, because the
+  damage is downstream: hashcat decodes `$HEX[...]` in a wordlist but **not** in
+  a rule file, so a wrapped rule written back out is rejected and dropped with
+  empty stderr and exit 0. A hex-wrapped baseword or candidate round-trips on
+  its own, which is why the missing decode never mattered before.
+
+  The case that makes it bite is the bare `:` no-op: line 1 of `best64.rule`,
+  one byte `0x3a` so it always trips `need_hexify`, and in a log of real cracks
+  among the most frequent winning rules, since it means the baseword cracked
+  unmodified. So Rosetta's headline metric surfaced exactly the rule that was
+  then discarded on replay.
+
+  Decoding is to the `\xNN` form hashcat accepts in a rule file, not to raw
+  bytes: `$HEX[240a]` becomes `$\x0a`, because writing a literal LF back into a
+  rule file would split the rule and reintroduce the defect upstream hexified
+  the field to prevent. Bytes above `0x7e` are escaped too, so the emitted rule
+  file stays pure ASCII and cannot be corrupted by the writer's encoding.
+  Unwrapped fields are untouched, so logs from earlier hashcat keep parsing.
+
+  Every fixture in `TestHexEncodedRuleField` is a line captured from a real
+  `hashcat --debug-mode 5` run on `v7.1.2-754-g61d346f11`; a hand-written one
+  encoding the old assumption is what let this go unnoticed.
+
 - **hcmask backslash escapes now follow hashcat instead of only handling
   `\,`, which was misreading valid mask files.** `_unescape_field` replaced
   `\,` with `,` and left every other backslash in place, documenting that as
