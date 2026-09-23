@@ -342,3 +342,103 @@ class TestSpaceFormat:
         assert entries[0]["rule"] == "c"
         assert entries[0]["candidate"] == "Password"
         assert entries[0]["wordlist"] is None
+
+
+class TestHexEncodedRuleField:
+    """hashcat >= 7.1.2-754 hex-encodes the debug file's RULE field.
+
+    Upstream 836f11de1 (2026-09-20) renamed debugfile_format_plain to
+    debugfile_format_field and applied it to the rule as well as the two word
+    fields, because a rule reconstructed from its compiled form turns ``\\xNN``
+    operands back into literal bytes -- so ``^\\x0a`` used to split a debug
+    record across two lines. need_hexify() there fires on a byte < 0x20, > 0x7f,
+    or == ':'.
+
+    This inverts what the parser's field-splitting docstring relied on ("Rules
+    are not encoded and contain colons routinely"). The split itself survives,
+    but the rule VALUE arrives wrapped, and a wrapped rule written back into a
+    rule file is silently dropped by hashcat -- it decodes $HEX[...] in a
+    wordlist but not in a rule file.
+
+    Every line below was captured from a real
+    ``hashcat -m 0 -a 0 --debug-mode 5 --debug-file`` run on v7.1.2-754-g61d346f11,
+    not hand-written: a hand-written fixture is what let the old assumption
+    survive unnoticed in the first place.
+    """
+
+    def test_bare_noop_rule_round_trips(self):
+        """``:`` is line 1 of best64.rule and the likeliest rule to win, since
+        it means the baseword cracked unmodified. It is also exactly 0x3a, so
+        it always trips need_hexify. Captured cracking md5("abc")."""
+        entries = DebugLogParser().parse_debug_lines(["abc:$HEX[3a]:abc:w.txt"])
+        assert len(entries) == 1
+        assert entries[0]["rule"] == ":"
+        assert entries[0]["baseword"] == "abc"
+        assert entries[0]["candidate"] == "abc"
+        assert entries[0]["wordlist"] == "w.txt"
+
+    def test_colon_bearing_rule_round_trips(self):
+        """Captured cracking md5("abc:") with the rule ``$:``. The pre-836f11de1
+        form of this exact line is the worked example in DebugLogParser's own
+        docstring: ``abc:$::$HEX[6162633a]:words.txt``."""
+        entries = DebugLogParser().parse_debug_lines(["abc:$HEX[243a]:$HEX[6162633a]:w.txt"])
+        assert len(entries) == 1
+        assert entries[0]["rule"] == "$:"
+
+    def test_control_byte_in_rule_comes_back_escaped_not_raw(self):
+        """The reason a naive decode is wrong. ``$\\x0a`` is reconstructed in the
+        debug file as ``$`` plus a literal LF and hex-wrapped; decoded straight
+        to raw bytes it would be written back into a rule file as a line
+        break, splitting the rule -- the #304 defect, reintroduced by the fix
+        for it. It must come back in the ``\\xNN`` form hashcat accepts."""
+        entries = DebugLogParser().parse_debug_lines(["abc:$HEX[240a]:$HEX[6162630a]:w.txt"])
+        assert len(entries) == 1
+        assert entries[0]["rule"] == "$\\x0a"
+        assert "\n" not in entries[0]["rule"]
+
+    def test_high_byte_in_rule_comes_back_escaped(self):
+        """Escaped rather than left literal so the emitted rule file is pure
+        ASCII. hate_crack writes rules.rule with encoding="utf-8", which would
+        turn one 0xe9 byte into the two bytes of U+00E9 -- the double-encoding
+        bug that already bit rulegen once."""
+        entries = DebugLogParser().parse_debug_lines(["abc:$HEX[24e9]:abc:w.txt"])
+        assert entries[0]["rule"] == "$\\xe9"
+
+    def test_unwrapped_rule_is_left_alone(self):
+        """Older hashcat emits the rule raw, and both forms must parse. Pinning
+        only the new shape would break against every released version."""
+        entries = DebugLogParser().parse_debug_lines(["abc:$1:abc1:w.txt"])
+        assert entries[0]["rule"] == "$1"
+
+    def test_a_rule_that_merely_looks_wrapped_is_left_alone(self):
+        """hashcat double-wraps a field that is itself $HEX-shaped (need_hexify
+        calls is_hexify first), so one decode never yields a $HEX[...] literal
+        by accident. A malformed or partial wrapper stays verbatim rather than
+        raising."""
+        assert (
+            DebugLogParser().parse_debug_lines(["abc:$HEX[zz]:abc:w.txt"])[0]["rule"] == "$HEX[zz]"
+        )
+        assert DebugLogParser().parse_debug_lines(["abc:$HEX[41:abc:w.txt"])[0]["rule"] == "$HEX[41"
+        # Anchored at BOTH ends. A rule that merely starts with a wrapper is
+        # data, and decoding it would silently discard the trailing ops. Only
+        # the closing anchor catches this: re.match already pins the start, so
+        # the leading-junk case below cannot distinguish the two.
+        assert (
+            DebugLogParser().parse_debug_lines(["abc:$HEX[41]$1:abc:w.txt"])[0]["rule"]
+            == "$HEX[41]$1"
+        )
+        assert (
+            DebugLogParser().parse_debug_lines(["abc:x$HEX[41]:abc:w.txt"])[0]["rule"]
+            == "x$HEX[41]"
+        )
+
+    def test_empty_wrapper_decodes_to_an_empty_rule(self):
+        """``$HEX[]`` is well-formed and denotes zero bytes. Pinned alongside
+        the odd-length payload because those are the two inputs that could
+        raise rather than return."""
+        assert DebugLogParser().parse_debug_lines(["abc:$HEX[]:abc:w.txt"])[0]["rule"] == ""
+
+    def test_mode_four_rule_field_is_decoded_too(self):
+        """The change is in debugfile.c, so it applies to mode 4 as well."""
+        entries = DebugLogParser(debug_mode=4).parse_debug_lines(["abc:$HEX[3a]:abc"])
+        assert entries[0]["rule"] == ":"
