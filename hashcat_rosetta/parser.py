@@ -29,6 +29,51 @@ def decode_hex_escapes(rule_str: str) -> str:
     return _HEX_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), rule_str)
 
 
+# hashcat >= 7.1.2-754 (upstream 836f11de1, 2026-09-20) wraps a debug-file
+# field in ``$HEX[...]`` when need_hexify() fires -- a byte < 0x20, > 0x7f, or
+# a literal ``:``. Anchored: a field is wrapped or it is not, and a partial or
+# malformed wrapper is data.
+_HEX_FIELD_RE = re.compile(r"^\$HEX\[([0-9A-Fa-f]*)\]$")
+
+
+def decode_debug_rule_field(field: str) -> str:
+    r"""Undo the ``$HEX[...]`` wrapper on a debug file's rule field.
+
+    Returns a rule in the form hashcat accepts *in a rule file*, which is not
+    the same as the raw bytes. Two things make the distinction load-bearing:
+
+    * A rule is reconstructed in the debug file from its compiled form, which
+      turns ``\xNN`` operands back into literal bytes. Decoding ``$HEX[240a]``
+      straight to raw bytes yields ``$`` and a literal LF, and writing that
+      back into a rule file splits the rule across two lines -- reintroducing
+      the very defect (#304) that upstream hexified the field to prevent. Any
+      byte outside printable ASCII therefore goes back as ``\xNN``, which is
+      how hashcat spells it and how ``rulegen.derive()`` emits it.
+    * Escaping high bytes as well as control bytes keeps the emitted rule file
+      pure ASCII, so it cannot be corrupted by the writer's encoding. hate_crack
+      writes ``rules.rule`` with ``encoding="utf-8"``, which would turn one 0xe9
+      byte into the two bytes of U+00E9.
+
+    A colon is left literal: it is fine inside a rule file, and only the debug
+    log needed it encoded because it is that format's field separator.
+
+    An unwrapped field is returned unchanged, so logs from hashcat before this
+    change keep parsing. So is anything that only looks wrapped -- hashcat
+    double-wraps a field that is itself ``$HEX``-shaped, because need_hexify()
+    calls is_hexify() first, so one decode cannot produce such a literal.
+    """
+    match = _HEX_FIELD_RE.match(field)
+    if match is None:
+        return field
+    try:
+        raw = bytes.fromhex(match.group(1))
+    except ValueError:
+        # Odd-length payload: not something hashcat emits. Treat it as data
+        # rather than losing the field to an exception.
+        return field
+    return "".join(chr(b) if 0x20 <= b <= 0x7E else f"\\x{b:02x}" for b in raw)
+
+
 # Opcodes that take no argument, for validation purposes: everything with a
 # known arity that isn't argument-taking, plus the extras the arity tables miss.
 _VALIDATOR_ZERO_ARG_OPCODES = (
@@ -125,17 +170,33 @@ class DebugLogParser:
     ``baseword:rule:candidate:wordlist`` where wordlist is the dict path or one
     of the sentinels ``<stdin>``/``<generic>``/``<none>``.
 
-    Colon-in-data: hashcat does not escape colons, but it does hex-encode any
-    baseword or candidate containing one, emitting ``$HEX[...]``. Rules are not
-    encoded and contain colons routinely -- ``:`` (no-op), ``$:``, ``c $:``.
-    Captured from hashcat 7.1.2 cracking md5("abc:") with the rule ``$:``::
+    Colon-in-data: hashcat does not escape colons, it hex-encodes the field,
+    emitting ``$HEX[...]``. Fields are taken from the outside in: the baseword
+    up to the first colon, the wordlist after the last, the candidate after the
+    last remaining one, and whatever spans the middle is the rule. That holds
+    under both hashcat generations, and the rule is the only field that has
+    ever been able to span an interior colon.
 
-        abc:$::$HEX[6162633a]:words.txt
+    **Which fields get encoded changed, and the split now depends on it less,
+    not more.** Up to hashcat 7.1.2 only the baseword and candidate were
+    encoded; rules went out raw and contain colons routinely -- ``:`` (no-op),
+    ``$:``, ``c $:``. Upstream 836f11de1 (2026-09-20, first in v7.1.2-754)
+    renamed ``debugfile_format_plain`` to ``debugfile_format_field`` and applied
+    it to the rule as well, because a rule is reconstructed from its compiled
+    form -- turning ``\\xNN`` operands back into literal bytes -- so ``^\\x0a``
+    was splitting a record across two lines. Both captures are of the same
+    crack, md5("abc:") by the rule ``$:``::
 
-    So the RULE is the field that may contain colons, and baseword, candidate
-    and wordlist may not. Fields are therefore taken from the outside in: the
-    baseword up to the first colon, the wordlist after the last, the candidate
-    after the last remaining one, and whatever spans the middle is the rule.
+        abc:$::$HEX[6162633a]:words.txt        # 7.1.2 and earlier
+        abc:$HEX[243a]:$HEX[6162633a]:w.txt    # 7.1.2-754 and later
+
+    Only the rule field is decoded on the way out, by
+    ``decode_debug_rule_field``, and see its docstring for why the result is
+    ``\\xNN``-escaped rather than raw bytes. A wrapped **rule** is the one that
+    causes damage if left alone: hashcat decodes ``$HEX[...]`` in a wordlist but
+    not in a rule file, so a wrapped rule written back out is rejected and
+    silently dropped. A wrapped baseword or candidate round-trips on its own and
+    is left as it was found.
 
     Windows drive-letter wordlist paths (``C:\\...``) do contain a colon and
     remain a known limitation, mitigated by an explicit ``debug_mode`` override.
@@ -497,7 +558,7 @@ class DebugLogParser:
                 return None
             return {
                 "baseword": baseword,
-                "rule": rule,
+                "rule": decode_debug_rule_field(rule),
                 "candidate": candidate,
                 "wordlist": wordlist,
                 "matched": False,
@@ -511,7 +572,7 @@ class DebugLogParser:
             return None
         return {
             "baseword": baseword,
-            "rule": rule,
+            "rule": decode_debug_rule_field(rule),
             "candidate": candidate,
             "wordlist": None,
             "matched": False,
