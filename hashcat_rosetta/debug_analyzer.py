@@ -1,6 +1,7 @@
 """Analyzer module for hashcat debug files."""
 
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from .parser import DebugLogParser
@@ -88,7 +89,11 @@ class DebugAnalyzer:
         self.entries = self.parser.parse_debug_lines(lines)
         return self._compute_analysis()
 
-    def analyze_debug_files(self, filepaths: list[str]) -> dict:
+    def analyze_debug_files(
+        self,
+        filepaths: list[str],
+        on_error: Callable[[str, Exception], None] | None = None,
+    ) -> dict:
         """
         Analyze multiple debug files, detecting format/mode independently per file.
 
@@ -102,11 +107,14 @@ class DebugAnalyzer:
         Args:
             filepaths: Paths to the debug files, in the order to concatenate
                 their entries.
+            on_error: Optional ``on_error(filepath, exc)`` callback. Supplying
+                it skips files that fail to parse instead of aborting the
+                batch; see :meth:`DebugLogParser.parse_debug_files`.
 
         Returns:
             Dictionary containing analysis results
         """
-        self.entries = self.parser.parse_debug_files(filepaths)
+        self.entries = self.parser.parse_debug_files(filepaths, on_error=on_error)
         return self._compute_analysis()
 
     def _compute_analysis(self) -> dict:
