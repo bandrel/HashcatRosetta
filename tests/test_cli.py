@@ -912,3 +912,175 @@ class TestVerifyMasksFlag:
     def test_listed_in_help(self, runner):
         result = runner.invoke(main, ["--help"])
         assert "--verify-masks" in result.output
+
+
+# --- Directory input ---
+
+
+class TestDirectoryInput:
+    """FILE may be a directory of debug logs, analyzed as one aggregate."""
+
+    def test_directory_aggregates_entries(self, runner, tmp_path):
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.txt").write_text("password c Password\npassword u PASSWORD\n")
+        (d / "b.txt").write_text("admin c Admin\nadmin u ADMIN\n")
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code == 0
+        assert "Total Entries: 4" in result.output
+        assert "Unique Basewords: 2" in result.output
+
+    def test_directory_header_names_file_count(self, runner, tmp_path):
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.txt").write_text("password c Password\n")
+        (d / "b.txt").write_text("admin c Admin\n")
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code == 0
+        assert "2 files" in result.output
+
+    def test_directory_mixes_mode4_and_mode5(self, runner, tmp_path):
+        """Format/mode is detected per file, not once for the whole batch."""
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "mode4.txt").write_text("password c Password\npassword u PASSWORD\n")
+        (d / "mode5.txt").write_text("admin:c:Admin:rockyou.txt\nletmein:$1:letmein1:common.txt\n")
+        result = runner.invoke(main, [str(d), "--wordlists"])
+        assert result.exit_code == 0
+        assert "rockyou.txt" in result.output
+        assert "common.txt" in result.output
+
+    def test_unparseable_file_is_skipped_with_warning(self, runner, tmp_path):
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "good.txt").write_text("password c Password\npassword u PASSWORD\n")
+        (d / "junk.txt").write_text("singleword\n" * 5)
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code == 0
+        assert "junk.txt" in result.output
+        assert "skipping" in result.output
+        assert "Total Entries: 2" in result.output
+
+    def test_all_files_unparseable_exits_nonzero(self, runner, tmp_path):
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "junk1.txt").write_text("singleword\n" * 5)
+        (d / "junk2.txt").write_text("alsojunk\n" * 5)
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code != 0
+        assert "Error" in result.output
+
+    def test_empty_directory_exits_nonzero(self, runner, tmp_path):
+        d = tmp_path / "empty"
+        d.mkdir()
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code != 0
+        assert "no files" in result.output.lower()
+
+    def test_dotfiles_and_subdirectories_ignored(self, runner, tmp_path):
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "good.txt").write_text("password c Password\npassword u PASSWORD\n")
+        (d / ".hidden.txt").write_text("hidden c Hidden\n")
+        sub = d / "nested"
+        sub.mkdir()
+        (sub / "deep.txt").write_text("deep c Deep\n")
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code == 0
+        assert "Total Entries: 2" in result.output
+        assert "1 file" in result.output
+
+    def test_directory_export_uses_all_files(self, runner, tmp_path):
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.txt").write_text("password c Password\n")
+        (d / "b.txt").write_text("admin c Admin\n")
+        export_path = str(tmp_path / "report.json")
+        result = runner.invoke(main, [str(d), "--export", export_path])
+        assert result.exit_code == 0
+        with open(export_path) as f:
+            data = json.load(f)
+        assert data["summary"]["total_entries"] == 2
+
+    def test_analyze_rules_rejects_directory(self, runner, tmp_path):
+        d = tmp_path / "rules"
+        d.mkdir()
+        (d / "a.rule").write_text("c\n")
+        result = runner.invoke(main, [str(d), "--analyze-rules"])
+        assert result.exit_code != 0
+        assert "single file" in result.output
+
+    def test_verify_masks_rejects_directory(self, runner, tmp_path):
+        d = tmp_path / "masks"
+        d.mkdir()
+        (d / "a.hcmask").write_text("?d?d?d\n")
+        result = runner.invoke(main, [str(d), "--verify-masks"])
+        assert result.exit_code != 0
+        assert "single file" in result.output
+
+    def test_symlink_to_sibling_log_is_not_counted_twice(self, runner, tmp_path):
+        """A symlink and its target in the same directory are one log, not two."""
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.txt").write_text("password c Password\npassword u PASSWORD\n")
+        (d / "link.txt").symlink_to(d / "a.txt")
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code == 0
+        assert "Total Entries: 2" in result.output
+        assert "1 file" in result.output
+
+    def test_symlink_to_outside_log_is_followed(self, runner, tmp_path):
+        """Symlinking logs into a collection directory still works."""
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        real = elsewhere / "real.txt"
+        real.write_text("password c Password\npassword u PASSWORD\n")
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "link.txt").symlink_to(real)
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code == 0
+        assert "Total Entries: 2" in result.output
+
+    def test_parser_bug_is_not_downgraded_to_a_skipped_file(self, runner, tmp_path, monkeypatch):
+        """Only "not a debug log" failures are skipped; a code bug still aborts.
+
+        Swallowing AttributeError/TypeError here would turn a parser regression
+        that breaks every log in a directory into a tidy per-file warning plus a
+        successful-looking partial report -- the worst shape for a wrong answer,
+        since the whole output is aggregate counts.
+        """
+        from hashcat_rosetta.parser import DebugLogParser
+
+        original = DebugLogParser._parse_line
+
+        def broken(self, line):
+            if "admin" in line:
+                raise AttributeError("simulated parser bug")
+            return original(self, line)
+
+        monkeypatch.setattr(DebugLogParser, "_parse_line", broken)
+
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.txt").write_text("password c Password\n")
+        (d / "b.txt").write_text("admin c Admin\n")
+        result = runner.invoke(main, [str(d)])
+        assert result.exit_code != 0
+        assert isinstance(result.exception, AttributeError)
+
+    def test_unreadable_file_is_skipped_not_fatal(self, runner, tmp_path):
+        """An OSError is a property of the file, not a bug: skip and continue."""
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "good.txt").write_text("password c Password\npassword u PASSWORD\n")
+        bad = d / "noread.txt"
+        bad.write_text("admin c Admin\n")
+        bad.chmod(0o000)
+        try:
+            result = runner.invoke(main, [str(d)])
+            assert result.exit_code == 0
+            assert "skipping noread.txt" in result.output
+            assert "Total Entries: 2" in result.output
+        finally:
+            bad.chmod(0o644)
