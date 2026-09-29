@@ -303,7 +303,7 @@ class TestDebugAnalyzerEdgeCases:
         assert result["unique_basewords"] == 1
 
     def test_analyze_duplicate_entries(self):
-        """Test analyzing duplicate entries."""
+        """Test analyzing duplicate entries (dedup is enabled by default)."""
         analyzer = DebugAnalyzer()
         lines = [
             "password c P@ssword",
@@ -311,7 +311,9 @@ class TestDebugAnalyzerEdgeCases:
             "password c P@ssword",
         ]
         result = analyzer.analyze_debug_lines(lines)
-        assert result["total_entries"] == 3
+        # With dedup enabled by default, 3 identical lines collapse to 1
+        assert result["total_entries"] == 1
+        assert analyzer.collapsed_duplicates == 2
         assert result["unique_rules"] == 1
         assert result["unique_basewords"] == 1
 

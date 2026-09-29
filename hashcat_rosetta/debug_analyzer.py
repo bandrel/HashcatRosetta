@@ -1,10 +1,42 @@
 """Analyzer module for hashcat debug files."""
 
+import os
 from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from .parser import DebugLogParser
+from .parser import DebugLogParser, _WORDLIST_SENTINELS
+
+
+def _normalize_wordlist(wordlist: str | None) -> str | None:
+    """Normalize a wordlist path value.
+
+    Args:
+        wordlist: The wordlist value to normalize (path string or sentinel).
+                  None passes through unchanged (mode-4).
+
+    Returns:
+        Normalized wordlist: None unchanged, sentinels (<stdin>, <generic>, <none>)
+        unchanged, otherwise os.path.normpath applied.
+
+    Note:
+        Path normalization is lexical only; ``os.path.normpath`` must not be
+        changed to ``os.path.realpath``. Two scenarios occur. (A) A symlink
+        ``a`` → target dir ``real`` makes ``a/rockyou.txt`` and ``real/rockyou.txt``
+        refer to the same file; ``realpath`` merges counts, ``normpath`` keeps
+        them separate. (B) A symlink ``a`` pointing elsewhere makes
+        ``a/../rockyou.txt`` and ``rockyou.txt`` refer to different files, but
+        ``normpath`` merges their counts under the key ``rockyou.txt``. Both
+        inaccuracies are accepted: resolving symlinks would make the key depend
+        on transient filesystem state, not what hashcat wrote in the log.
+    """
+    if wordlist is None:
+        return None
+    # Sentinels survive unchanged
+    if wordlist in _WORDLIST_SENTINELS:
+        return wordlist
+    # Normalize paths using os.path.normpath
+    return os.path.normpath(wordlist)
 
 
 def _median(values: list[int]) -> float:
@@ -22,16 +54,22 @@ def _median(values: list[int]) -> float:
 class DebugAnalyzer:
     """Analyze hashcat debug files for rule efficiency and baseword patterns."""
 
-    def __init__(self, debug_mode: int | None = None) -> None:
+    def __init__(self, debug_mode: int | None = None, dedup: bool = True) -> None:
         """Initialize the debug analyzer.
 
         Args:
             debug_mode: Optional override for the hashcat debug mode passed
                 through to the parser. ``None`` auto-detects, ``4`` forces
                 mode-4 parsing, ``5`` forces mode-5 parsing (wordlist field).
+            dedup: When True (default), collapse exact duplicate entries
+                (same baseword, rule, candidate, and normalized wordlist).
+                When False, preserve all entries.
         """
         self.parser = DebugLogParser(debug_mode=debug_mode)
         self.entries: list[dict[str, Any]] = []
+        self.dedup = dedup
+        self.collapsed_duplicates = 0
+        self.total_entries = 0  # Computed once in _compute_analysis()
 
         # Rule statistics
         self.rule_stats: defaultdict[str, dict[str, Any]] = defaultdict(
@@ -122,12 +160,33 @@ class DebugAnalyzer:
         self.rule_stats.clear()
         self.baseword_stats.clear()
         self.wordlist_stats.clear()
+        self.collapsed_duplicates = 0
+
+        # Track seen entries for dedup
+        seen_entries: set[tuple[str, str, str, str | None]] = set()
 
         for entry in self.entries:
             baseword = entry["baseword"]
             rule = entry["rule"]
             candidate = entry["candidate"]
             wordlist = entry.get("wordlist")
+
+            # Normalize wordlist for dedup key
+            normalized_wordlist = _normalize_wordlist(wordlist)
+
+            # If dedup is enabled, check if we've seen this entry before
+            if self.dedup:
+                entry_key = (baseword, rule, candidate, normalized_wordlist)
+                if entry_key in seen_entries:
+                    # Skip duplicate entry and count it. Note: the 4-tuple omits
+                    # the `matched` flag; if two entries share the 4-tuple but
+                    # differ in `matched`, we keep the first occurrence and discard
+                    # the second's `matched` value. This is latent only — parser.py
+                    # currently always emits `matched: False` — but becomes real
+                    # if `matched` is ever populated by an upstream change.
+                    self.collapsed_duplicates += 1
+                    continue
+                seen_entries.add(entry_key)
 
             # Update rule statistics
             self.rule_stats[rule]["count"] += 1
@@ -151,16 +210,20 @@ class DebugAnalyzer:
                 self.baseword_stats[baseword]["match_count"] += 1
 
             # Update wordlist statistics (mode-5 only; skip mode-4 entries).
-            if wordlist is not None:
-                self.wordlist_stats[wordlist]["count"] += 1
-                self.wordlist_stats[wordlist]["basewords"].add(baseword)
-                self.wordlist_stats[wordlist]["candidates"].add(candidate)
-                self.wordlist_stats[wordlist]["rules"].add(rule)
+            # Use normalized wordlist as the key
+            if normalized_wordlist is not None:
+                self.wordlist_stats[normalized_wordlist]["count"] += 1
+                self.wordlist_stats[normalized_wordlist]["basewords"].add(baseword)
+                self.wordlist_stats[normalized_wordlist]["candidates"].add(candidate)
+                self.wordlist_stats[normalized_wordlist]["rules"].add(rule)
                 if entry.get("matched", False):
-                    self.wordlist_stats[wordlist]["match_count"] += 1
+                    self.wordlist_stats[normalized_wordlist]["match_count"] += 1
+
+        # Compute total entries once (used by both _compute_analysis return and export_to_dict)
+        self.total_entries = len(self.entries) - self.collapsed_duplicates
 
         return {
-            "total_entries": len(self.entries),
+            "total_entries": self.total_entries,
             "unique_rules": len(self.rule_stats),
             "unique_basewords": len(self.baseword_stats),
             "unique_wordlists": len(self.wordlist_stats),
@@ -424,7 +487,8 @@ class DebugAnalyzer:
         """
         data = {
             "summary": {
-                "total_entries": len(self.entries),
+                "total_entries": self.total_entries,
+                "collapsed_duplicates": self.collapsed_duplicates,
                 "rules": self.get_rule_statistics_summary(),
                 "basewords": self.get_baseword_statistics_summary(),
                 "wordlists": self.get_wordlist_statistics_summary(),

@@ -1209,6 +1209,12 @@ def _collect_debug_files(path: str) -> list[str]:
     default=False,
     help="Disable reasoning mode for --mask (needed for non-Ollama OpenAI-compatible servers)",
 )
+@click.option(
+    "--no-dedup",
+    is_flag=True,
+    default=False,
+    help="Disable deduplication of identical entries across both modes",
+)
 @click.pass_context
 def main(
     ctx,
@@ -1233,6 +1239,7 @@ def main(
     ollama_host,
     debug,
     no_think,
+    no_dedup,
 ):
     """Hashcat Rule Efficiency Analyzer - Analyze hashcat debug output files.
 
@@ -1486,7 +1493,7 @@ def main(
         return
 
     mode_map: dict[str, int | None] = {"auto": None, "4": 4, "5": 5}
-    analyzer = DebugAnalyzer(debug_mode=mode_map[debug_mode])
+    analyzer = DebugAnalyzer(debug_mode=mode_map[debug_mode], dedup=not no_dedup)
     debug_files = _collect_debug_files(file)
     is_directory = os.path.isdir(file)
 
@@ -1534,6 +1541,8 @@ def main(
         else:
             click.echo(f"\nDebug File Analysis: {file}")
         click.echo(f"   Total Entries: {result['total_entries']}")
+        if analyzer.collapsed_duplicates > 0:
+            click.echo(f"   Collapsed Duplicates: {analyzer.collapsed_duplicates}")
         click.echo(f"   Unique Rules: {result['unique_rules']}")
         click.echo(f"   Unique Basewords: {result['unique_basewords']}")
         click.echo()

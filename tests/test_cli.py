@@ -1084,3 +1084,45 @@ class TestDirectoryInput:
             assert "Total Entries: 2" in result.output
         finally:
             bad.chmod(0o644)
+
+
+# --- Deduplication tests ---
+
+
+class TestDedup:
+    """Test --no-dedup flag and deduplication behavior."""
+
+    def test_default_dedup_collapses_duplicates(self, runner, tmp_path):
+        """By default, identical entries are deduplicated."""
+        path = tmp_path / "debug_with_dupes.txt"
+        # Three entries: two are identical (password c Password appears twice)
+        path.write_text("password c Password\nadmin u ADMIN\npassword c Password\n")
+        result = runner.invoke(main, [str(path)])
+        assert result.exit_code == 0
+        # With dedup, total should be 2 (one dupe collapsed)
+        assert "Total Entries: 2" in result.output
+        # "Collapsed Duplicates" line should appear because collapsed_duplicates > 0
+        assert "Collapsed Duplicates: 1" in result.output
+
+    def test_no_dedup_flag_preserves_all_entries(self, runner, tmp_path):
+        """With --no-dedup, all entries are preserved including duplicates."""
+        path = tmp_path / "debug_with_dupes.txt"
+        # Three entries: two are identical
+        path.write_text("password c Password\nadmin u ADMIN\npassword c Password\n")
+        result = runner.invoke(main, [str(path), "--no-dedup"])
+        assert result.exit_code == 0
+        # Without dedup, total should be 3 (raw count)
+        assert "Total Entries: 3" in result.output
+        # "Collapsed Duplicates" line must be entirely absent
+        assert "Collapsed Duplicates" not in result.output
+
+    def test_collapsed_duplicates_absent_when_zero(self, runner, tmp_path):
+        """When no duplicates exist, 'Collapsed Duplicates' line is absent."""
+        path = tmp_path / "debug_no_dupes.txt"
+        path.write_text("password c Password\nadmin u ADMIN\ntest d testtest\n")
+        result = runner.invoke(main, [str(path)])
+        assert result.exit_code == 0
+        # Total should be 3 (no dupes)
+        assert "Total Entries: 3" in result.output
+        # "Collapsed Duplicates" line should not appear when zero
+        assert "Collapsed Duplicates" not in result.output

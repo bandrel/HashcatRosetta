@@ -582,5 +582,153 @@ class TestRuleAnalyzerInvariants:
         )
 
 
+class TestDebugAnalyzerDedup:
+    """Tests for DebugAnalyzer dedup functionality."""
+
+    def test_dedup_exact_duplicate_mode5_lines(self):
+        """Exact duplicate mode-5 lines collapse: 3 identical lines -> count == 1."""
+        analyzer = DebugAnalyzer(dedup=True)
+        lines = [
+            "password:c:P@ssword:rockyou.txt",
+            "password:c:P@ssword:rockyou.txt",
+            "password:c:P@ssword:rockyou.txt",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        # Should have 1 entry after dedup
+        assert result["total_entries"] == 1
+        # Summary should report 2 collapsed duplicates
+        assert analyzer.collapsed_duplicates == 2
+
+    def test_no_dedup_preserves_raw_count(self):
+        """--no-dedup preserves the old raw count of 3."""
+        analyzer = DebugAnalyzer(dedup=False)
+        lines = [
+            "password:c:P@ssword:rockyou.txt",
+            "password:c:P@ssword:rockyou.txt",
+            "password:c:P@ssword:rockyou.txt",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        # Should have 3 entries with dedup disabled
+        assert result["total_entries"] == 3
+        # No duplicates collapsed
+        assert analyzer.collapsed_duplicates == 0
+
+    def test_different_wordlists_stay_separate(self):
+        """Same (baseword, rule, candidate) under two wordlists stays 2 entries."""
+        analyzer = DebugAnalyzer(dedup=True)
+        lines = [
+            "password:c:P@ssword:rockyou.txt",
+            "password:c:P@ssword:other.txt",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        # Should have 2 entries (different wordlists)
+        assert result["total_entries"] == 2
+        # No duplicates collapsed
+        assert analyzer.collapsed_duplicates == 0
+
+    def test_path_normalization_relative_vs_no_prefix(self):
+        """./rockyou.txt and rockyou.txt rank as ONE wordlist."""
+        analyzer = DebugAnalyzer(dedup=True)
+        lines = [
+            "password:c:P@ssword:./rockyou.txt",
+            "password:c:P@ssword:rockyou.txt",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        # After normalization, these should be 1 entry
+        assert result["total_entries"] == 1
+        assert analyzer.collapsed_duplicates == 1
+        # Check that wordlist_stats has 1 entry
+        assert len(analyzer.wordlist_stats) == 1
+
+    def test_path_normalization_absolute_vs_relative_stay_separate(self):
+        """./rockyou.txt and /opt/rockyou.txt stay separate."""
+        analyzer = DebugAnalyzer(dedup=True)
+        lines = [
+            "password:c:P@ssword:rockyou.txt",
+            "password:c:P@ssword:/opt/rockyou.txt",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        # Should have 2 entries (different paths)
+        assert result["total_entries"] == 2
+        assert analyzer.collapsed_duplicates == 0
+        # Check that wordlist_stats has 2 entries
+        assert len(analyzer.wordlist_stats) == 2
+
+    def test_sentinels_survive_normalization(self):
+        """Sentinels <stdin>, <generic>, <none> survive normalization unchanged."""
+        analyzer = DebugAnalyzer(dedup=True)
+        lines = [
+            "password:c:P@ssword:<stdin>",
+            "password:c:P@ssword:<stdin>",
+            "admin:c:Admin:<generic>",
+            "admin:c:Admin:<generic>",
+            "user:c:User:<none>",
+            "user:c:User:<none>",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        # After dedup, should have 3 entries (one per sentinel)
+        assert result["total_entries"] == 3
+        assert analyzer.collapsed_duplicates == 3
+        # Check that wordlist_stats has 3 entries with sentinel names
+        assert len(analyzer.wordlist_stats) == 3
+        assert "<stdin>" in analyzer.wordlist_stats
+        assert "<generic>" in analyzer.wordlist_stats
+        assert "<none>" in analyzer.wordlist_stats
+
+    def test_mode4_dedup_on_3tuple(self):
+        """Mode-4 file dedup works on (baseword, rule, candidate) 3-tuple."""
+        analyzer = DebugAnalyzer(dedup=True)
+        lines = [
+            "password c P@ssword",
+            "password c P@ssword",
+            "admin u ADMIN",
+            "admin u ADMIN",
+            "admin u ADMIN",
+        ]
+        result = analyzer.analyze_debug_lines(lines)
+        # After dedup: 1 + 1 = 2 entries
+        assert result["total_entries"] == 2
+        # 1 + 2 = 3 collapsed duplicates
+        assert analyzer.collapsed_duplicates == 3
+        # No wordlist stats for mode-4
+        assert result["unique_wordlists"] == 0
+
+    def test_cross_file_dedup(self):
+        """Cross-file dedup: analyze_debug_files() collapses identical lines across files."""
+        file1 = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        file1.write("password:c:P@ssword:rockyou.txt\n")
+        file1.write("admin:u:ADMIN:rockyou.txt\n")
+        file1.close()
+
+        file2 = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        file2.write("password:c:P@ssword:rockyou.txt\n")
+        file2.write("user:l:user:rockyou.txt\n")
+        file2.close()
+
+        try:
+            analyzer = DebugAnalyzer(dedup=True)
+            result = analyzer.analyze_debug_files([file1.name, file2.name])
+            # file1: 2 entries; file2: 2 entries; 1 duplicate
+            # Total after dedup: 3 entries
+            assert result["total_entries"] == 3
+            assert analyzer.collapsed_duplicates == 1
+        finally:
+            os.unlink(file1.name)
+            os.unlink(file2.name)
+
+    def test_export_includes_collapsed_duplicates(self):
+        """export_to_dict() includes collapsed_duplicates in the summary."""
+        analyzer = DebugAnalyzer(dedup=True)
+        lines = [
+            "password:c:P@ssword:rockyou.txt",
+            "password:c:P@ssword:rockyou.txt",
+        ]
+        analyzer.analyze_debug_lines(lines)
+        data = analyzer.export_to_dict()
+        # Check that the summary includes collapsed_duplicates
+        assert "collapsed_duplicates" in data["summary"]
+        assert data["summary"]["collapsed_duplicates"] == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
