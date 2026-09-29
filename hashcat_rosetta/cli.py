@@ -1074,6 +1074,45 @@ def explain_rule(rule_str: str, baseword: str = "password") -> list | None:
     return simulated[0] if simulated else None
 
 
+def _collect_debug_files(path: str) -> list[str]:
+    """Expand a debug-log FILE argument into the list of logs to analyze.
+
+    A plain file is returned as-is. A directory is expanded to the regular
+    files directly inside it, sorted for deterministic output, skipping
+    dotfiles and subdirectories. Deliberately no extension filter: hashcat
+    debug logs have no conventional suffix (``debug.txt``, ``hashcat.debug``,
+    ``out``), so filtering would silently drop real logs. The cost is that a
+    stray non-log file gets picked up, which the caller's skip-and-warn
+    handling turns into a visible warning rather than a wrong answer.
+    """
+    if not os.path.isdir(path):
+        return [path]
+    # Symlinks are followed (collecting logs by symlinking them into one
+    # directory is a normal workflow) but deduplicated by real path: a symlink
+    # sitting next to its own target would otherwise be parsed twice and
+    # double every frequency count in the report.
+    # Sort before deduplicating, not after: os.scandir order is arbitrary, so
+    # deduplicating first would make *which* of two aliases survives (and thus
+    # the name in any warning) depend on directory layout.
+    candidates = sorted(
+        entry.path
+        for entry in os.scandir(path)
+        if entry.is_file() and not entry.name.startswith(".")
+    )
+    seen: set[str] = set()
+    files = []
+    for candidate in candidates:
+        real = os.path.realpath(candidate)
+        if real in seen:
+            continue
+        seen.add(real)
+        files.append(candidate)
+    if not files:
+        click.echo(f"Error: no files found in directory: {path}", err=True)
+        sys.exit(1)
+    return files
+
+
 @click.command()
 @click.argument("file", type=click.Path(exists=True), required=False)
 @click.option(
@@ -1202,14 +1241,22 @@ def main(
     use --debug-mode 4 or --debug-mode 5 to force a mode. Mode-5 files carry a
     trailing wordlist field, enabling per-wordlist analysis via --wordlists.
 
+    FILE may be a single debug log or a directory of them. A directory is
+    analyzed as one aggregate: every file directly inside it (non-recursive,
+    dotfiles skipped) is parsed on its own, so mode-4 and mode-5 logs can be
+    mixed freely, and a file that won't parse is warned about and skipped.
+
+    
     Basic usage:
         hashcat-rosetta debug.txt
+        hashcat-rosetta ./debug-logs/
         hashcat-rosetta debug.txt --rules --metric frequency
         hashcat-rosetta debug.txt --basewords --detail
         hashcat-rosetta debug.txt --wordlists --detail
         hashcat-rosetta debug.txt --debug-mode 5 --wordlists
         hashcat-rosetta debug.txt --export report.json --format json
 
+    
     Explain rules:
         hashcat-rosetta --explain "c"
         hashcat-rosetta --explain "i74i81i92iA3"
@@ -1217,13 +1264,16 @@ def main(
         hashcat-rosetta --explain "u$!" --baseword "myword"
         hashcat-rosetta --explain rules.txt --baseword "admin"
 
+    
     Analyze rule file opcodes:
         hashcat-rosetta rules.txt --analyze-rules
 
+    
     Generate masks:
         hashcat-rosetta --mask "The word 'Summer' followed by six digits."
         hashcat-rosetta --mask "a season and a year" -o seasons.hcmask
 
+    
     Verify mask files:
         hashcat-rosetta masks.hcmask --verify-masks
     """
@@ -1378,6 +1428,14 @@ def main(
         click.echo(ctx.get_help())
         sys.exit(1)
 
+    # Directory input is a debug-log convenience only: these two flags read a
+    # rule file and an hcmask file respectively, neither of which aggregates
+    # across files the way debug entries do.
+    if (verify_masks or analyze_rules) and os.path.isdir(file):
+        flag = "--verify-masks" if verify_masks else "--analyze-rules"
+        click.echo(f"Error: {flag} takes a single file, not a directory: {file}", err=True)
+        sys.exit(1)
+
     # Handle hcmask file verification
     if verify_masks:
         try:
@@ -1429,13 +1487,35 @@ def main(
 
     mode_map: dict[str, int | None] = {"auto": None, "4": 4, "5": 5}
     analyzer = DebugAnalyzer(debug_mode=mode_map[debug_mode])
+    debug_files = _collect_debug_files(file)
+    is_directory = os.path.isdir(file)
+
+    skipped_files: list[str] = []
+
+    def _warn_skip(path: str, exc: Exception) -> None:
+        # Only the first line of the message: a parse failure's detail can run
+        # to a multi-line "expected format" primer, which is noise repeated
+        # once per stray file in a directory.
+        reason = str(exc).splitlines()[0]
+        skipped_files.append(path)
+        click.echo(f"[!] skipping {os.path.basename(path)}: {reason}", err=True)
+
     try:
-        result = analyzer.analyze_debug_file(file)
+        # A directory is a convenience, so one unusable file in it is a warning
+        # and the rest still analyze. An explicitly named file is not: there,
+        # a parse failure stays fatal (on_error=None), as it always was.
+        result = analyzer.analyze_debug_files(
+            debug_files, on_error=_warn_skip if is_directory else None
+        )
     except FileNotFoundError:
         click.echo(f"Error: File not found: {file}", err=True)
         sys.exit(1)
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if result["total_entries"] == 0:
+        click.echo(f"Error: no valid debug entries found in any file under {file}", err=True)
         sys.exit(1)
 
     # Default behavior: show analysis summary
@@ -1444,7 +1524,15 @@ def main(
         bw_stats = analyzer.get_baseword_statistics_summary()
         wl_stats = analyzer.get_wordlist_statistics_summary()
 
-        click.echo(f"\nDebug File Analysis: {file}")
+        if is_directory:
+            # Count the files that actually contributed entries, not the ones
+            # found: reporting skipped files as analyzed would overstate what
+            # the numbers below are drawn from.
+            analyzed = len(debug_files) - len(skipped_files)
+            plural = "" if analyzed == 1 else "s"
+            click.echo(f"\nDebug File Analysis: {file} ({analyzed} file{plural})")
+        else:
+            click.echo(f"\nDebug File Analysis: {file}")
         click.echo(f"   Total Entries: {result['total_entries']}")
         click.echo(f"   Unique Rules: {result['unique_rules']}")
         click.echo(f"   Unique Basewords: {result['unique_basewords']}")

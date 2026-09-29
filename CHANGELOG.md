@@ -12,6 +12,44 @@ for exact timing.
 
 ### Added
 
+- **The `FILE` argument accepts a directory of debug logs, not just one log.**
+  Pointing the tool at a directory analyzes every regular file directly inside
+  it and aggregates the results into a single report, which is what a capture
+  split across several hashcat runs actually looks like on disk. The scan is
+  non-recursive and skips dotfiles; there is deliberately no extension filter,
+  because hashcat debug logs have no conventional suffix (`debug.txt`,
+  `hashcat.debug`, `out`) and filtering would silently drop real logs. Each
+  file's format (space vs colon) and debug mode (4 vs 5) is still detected
+  independently — dispatch goes through the existing
+  `DebugAnalyzer.analyze_debug_files()`, which exists precisely so a batch
+  spanning a mode switch can't let one file's sample decide the mode for
+  another — so a directory may freely mix mode-4 and mode-5 logs.
+
+  Symlinks are followed, since collecting logs by symlinking them into one
+  directory is a normal workflow, but the list is deduplicated by real path: a
+  symlink sitting beside its own target would otherwise be parsed twice and
+  double every frequency count in the report.
+
+  A file that yields no debug entries, or that cannot be read at all, is
+  reported on stderr and skipped rather than aborting the run; if no file
+  yields any entries, the command exits non-zero. This skip-and-warn behaviour
+  is opt-in at the library level (`parse_debug_files(..., on_error=...)`) and
+  is used *only* for directory input — naming a file explicitly still fails
+  fast exactly as before. The catch is narrow on purpose (`ValueError` and
+  `OSError`, never `TypeError`/`AttributeError`): those two mean "this file is
+  not a usable debug log", whereas swallowing a programming error would turn a
+  parser regression that breaks every log in a directory into a tidy per-file
+  warning plus a successful-looking partial report — the worst possible shape
+  for a wrong answer, given the entire output is aggregate counts.
+
+  Note that the parser is permissive about what counts as an entry: a prose
+  file with three or more whitespace-separated fields per line parses
+  "successfully", so skip-and-warn catches unusable files, not merely
+  irrelevant ones. Point the tool at a directory of logs, not at a working
+  directory. `--analyze-rules` and `--verify-masks` reject a directory
+  outright, as they read a rule file and an hcmask file respectively, neither
+  of which aggregates.
+
 - **`audit_hcmask_file()` and a `--verify-masks` CLI flag validate an existing
   `.hcmask` file line-by-line and total its keyspace.** Until now the mask
   support only ran one direction: `--mask` could generate and validate new
@@ -54,6 +92,15 @@ for exact timing.
   `parse_debug_lines`/`analyze_debug_lines`.
 
 ### Fixed
+
+- **`--help` no longer reflows the usage examples into run-on prose.** Click
+  rewraps docstring paragraphs, which collapsed each example block onto shared
+  lines (`Basic usage:     hashcat-rosetta debug.txt     hashcat-rosetta
+  debug.txt --rules ...`) and could even hyphenate `hashcat-rosetta` across a
+  wrap, so the output could not be copy-pasted. Each block is now preceded by
+  click's `\b` no-rewrap marker. Note those markers are literal `0x08` bytes in
+  `cli.py` and are invisible in an editor — a whitespace-stripping tool would
+  silently undo this.
 
 - **`DebugLogParser` now decodes the `$HEX[...]` wrapper hashcat puts on the
   debug file's RULE field, which was silently costing the Rosetta attack its

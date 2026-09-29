@@ -42,7 +42,19 @@ The package (`hashcat_rosetta/`) has two analysis paths that share a common pars
 - **`formatting.py`** - Rule opcode descriptions and display formatting for the `analyze-rules` CLI command.
 - **`mask.py`** - Deterministic hcmask grammar parsing, validation, and keyspace computation. No networking; pure unit-testable functions for `parse_hcmask_line()`, `validate_mask()`, `tokens()`, `keyspace()`, `describe()`, and `format_hcmask_line()`. `audit_hcmask_file()` validates a whole `.hcmask` file line-by-line and totals its keyspace, matching hashcat's own skip rules (`src/mpsp.c`): blank lines skipped, `#` a comment only as the first byte. Note the asymmetry: `format_hcmask_line()` is a pure string builder that does **not** validate, so `parse_hcmask_line()` is the only gate -- callers that build a line for hashcat must parse it back.
 - **`nlmask.py`** - The LLM boundary: calls a local Ollama server via the OpenAI-compatible API to turn a natural-language description into validated hcmask lines. The only module that imports `openai`. Validates all generated masks through `mask.py` before returning them. Raises `MaskGenerationError` on failures.
-- **`cli.py`** - Single Click command (`main`) with flags for different output modes (`--rules`, `--basewords`, `--wordlists`, `--export`, `--explain`, `--analyze-rules`, `--mask`, `--verify-masks`) plus `--debug-mode {auto,4,5}` to force/auto-detect the debug format (debug-file analysis only, not `--analyze-rules`). `--wordlists` shows top wordlists (mode 5 only; honors `--top`, and `--detail` adds per-wordlist unique basewords/candidates/rules). The `--mask` flag generates masks via `nlmask.generate_masks()`, with `-o`/`--mask-out` writing to a file, and `--model`/`--ollama-host` configuring the LLM endpoint. `--verify-masks` goes the other direction, auditing an existing `.hcmask` file via `mask.audit_hcmask_file()` and exiting non-zero if any line is one hashcat would reject. Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `hashcat-rosetta` in pyproject.toml.
+- **`cli.py`** - Single Click command (`main`). The `FILE` argument accepts a debug log *or* a
+  directory of them: `_collect_debug_files()` expands a directory to its regular files
+  (non-recursive, dotfiles skipped, sorted, no extension filter; symlinks followed but
+  deduplicated by `realpath` so an alias beside its target can't double every count) and dispatches
+  through `DebugAnalyzer.analyze_debug_files(paths, on_error=...)`. The `on_error` callback is
+  passed only for directory input, which switches the parser from fail-fast to warn-and-skip for
+  `ValueError`/`OSError` only -- `TypeError`/`AttributeError` still propagate, so a parser bug
+  can't masquerade as a stray file. A single named file keeps raising as before. Note the parser
+  is permissive about what counts
+  as an entry -- a prose file with 3+ whitespace-separated fields per line parses "successfully"
+  -- so skip-and-warn catches unusable files, not merely irrelevant ones. `--analyze-rules` and
+  `--verify-masks` reject a directory outright; they read a rule file and an hcmask file, neither
+  of which aggregates. Flags for different output modes (`--rules`, `--basewords`, `--wordlists`, `--export`, `--explain`, `--analyze-rules`, `--mask`, `--verify-masks`) plus `--debug-mode {auto,4,5}` to force/auto-detect the debug format (debug-file analysis only, not `--analyze-rules`). `--wordlists` shows top wordlists (mode 5 only; honors `--top`, and `--detail` adds per-wordlist unique basewords/candidates/rules). The `--mask` flag generates masks via `nlmask.generate_masks()`, with `-o`/`--mask-out` writing to a file, and `--model`/`--ollama-host` configuring the LLM endpoint. `--verify-masks` goes the other direction, auditing an existing `.hcmask` file via `mask.audit_hcmask_file()` and exiting non-zero if any line is one hashcat would reject. Also contains `explain_rule()` which simulates rule application step-by-step. Entry point registered as `hashcat-rosetta` in pyproject.toml.
 - **`scripts/sweep_opcodes.py`** - Systematic per-opcode correctness sweep. Generates ~230 rules covering every opcode in `_DEFAULT_IMPLEMENTED` against a canonical arg grid, runs them via `_verify.verify_corpus`, and emits a per-opcode matrix to `reports/opcode-sweep.md`. CI job `opcode-sweep` runs this on every PR; mismatches outside `KNOWN_LATENT` fail the build.
 
 The public API exports `RuleAnalyzer`, `RuleParser`, `DebugLogParser`, `DebugAnalyzer`, plus mask types (`HcmaskLine`, `MaskError`, `parse_hcmask_line`, `keyspace`, `describe`, `format_hcmask_line`, `audit_hcmask_file`, `HcmaskFileAudit`, `HcmaskFileEntry`, `generate_masks`, `MaskGenerationError`, `MaskSuggestion`) from `__init__.py`.
@@ -88,6 +100,7 @@ The CLI uses a single Click command with multiple flags rather than subcommands 
 
 ```bash
 hashcat-rosetta FILE                              # show analysis summary
+hashcat-rosetta DIR                               # aggregate every log in a directory
 hashcat-rosetta FILE --rules --metric frequency   # top rules
 hashcat-rosetta FILE --basewords --detail         # baseword analysis
 hashcat-rosetta FILE --wordlists --detail         # wordlist analysis (mode 5)

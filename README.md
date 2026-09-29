@@ -409,6 +409,7 @@ This helps identify:
 
 ```
 hashcat-rosetta FILE                                  Show analysis summary
+hashcat-rosetta DIR                                   Analyze every log in a directory
 hashcat-rosetta FILE --rules --metric frequency       Show top rules by metric
 hashcat-rosetta FILE --basewords --detail             Show baseword analysis
 hashcat-rosetta FILE --wordlists --detail             Show wordlist analysis (mode 5)
@@ -419,6 +420,31 @@ hashcat-rosetta rules.txt --analyze-rules             Analyze rule file opcodes
 ```
 
 ## Advanced Usage
+
+### Analyzing a directory of debug logs
+
+`FILE` may be a directory instead of a single log. Every regular file directly
+inside it is analyzed and the results aggregated into one report:
+
+```bash
+hashcat-rosetta ./debug-logs/
+hashcat-rosetta ./debug-logs/ --rules --metric frequency
+```
+
+The scan is non-recursive and skips dotfiles and subdirectories. Symlinks are
+followed, so you can gather logs by symlinking them into one directory, but a
+symlink sitting beside its own target is counted once. There is no
+extension filter, because hashcat debug logs have no conventional suffix --
+filtering would silently drop real logs. Each file's format (space vs colon)
+and debug mode (4 vs 5) is detected independently, so a directory may freely
+mix mode-4 and mode-5 logs. A file that yields no debug entries is reported on
+stderr and skipped rather than aborting the run:
+
+```
+[!] skipping notes.md: No valid debug entries found in ./debug-logs/notes.md.
+```
+
+If no file in the directory yields any entries, the command exits non-zero.
 
 ### Filtering basewords by minimum occurrences
 

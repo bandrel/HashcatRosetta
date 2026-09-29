@@ -2,6 +2,7 @@
 
 import logging
 import re
+from collections.abc import Callable
 
 from ._opcodes import (
     ALL_KNOWN_OPCODES,
@@ -302,7 +303,11 @@ class DebugLogParser:
         self.entries = entries
         return entries
 
-    def parse_debug_files(self, filepaths: list[str]) -> list:
+    def parse_debug_files(
+        self,
+        filepaths: list[str],
+        on_error: Callable[[str, Exception], None] | None = None,
+    ) -> list:
         """Parse multiple debug files, detecting format/mode independently per file.
 
         A capture spanning a ``--debug-mode`` switch (or simply two logs from
@@ -319,14 +324,38 @@ class DebugLogParser:
         Args:
             filepaths: Paths to the debug files, in the order to concatenate
                 their entries.
+            on_error: Optional callback invoked as ``on_error(filepath, exc)``
+                when a file fails to parse. Supplying it switches this method
+                from fail-fast to skip-the-file, which is what a caller that
+                was handed a whole directory wants: one stray notes.txt or
+                potfile sitting next to the logs shouldn't abort the run.
+                Left as ``None`` (the default), the exception propagates, so
+                a caller naming files explicitly still learns that one of the
+                paths it asked for was unusable.
 
         Returns:
             List of parsed entries, in file order, then line order within
-            each file. Structure matches :meth:`parse_debug_file`.
+            each file. Structure matches :meth:`parse_debug_file`. With
+            ``on_error`` set, entries from skipped files are simply absent,
+            and an all-skipped batch yields an empty list rather than raising.
         """
         entries: list = []
         for filepath in filepaths:
-            entries.extend(self.parse_debug_file(filepath))
+            try:
+                entries.extend(self.parse_debug_file(filepath))
+            except (ValueError, OSError) as e:
+                # Deliberately narrow. These two mean "this file is not a usable
+                # debug log" -- no parseable entries (ValueError), or it can't be
+                # read at all (OSError, e.g. PermissionError). A TypeError or
+                # AttributeError instead means this parser has a bug, and
+                # skipping past it would turn a regression that breaks every log
+                # in a directory into a tidy per-file warning plus a
+                # successful-looking partial report. parse_debug_file() re-raises
+                # those unwrapped (see its handler) precisely to keep them
+                # distinguishable here; don't widen this to bare Exception.
+                if on_error is None:
+                    raise
+                on_error(filepath, e)
         self.entries = entries
         return entries
 
