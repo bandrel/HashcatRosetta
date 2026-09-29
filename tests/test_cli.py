@@ -1113,11 +1113,8 @@ class TestDedup:
         assert result.exit_code == 0
         # Without dedup, total should be 3 (raw count)
         assert "Total Entries: 3" in result.output
-        # "Collapsed Duplicates" should not appear (or be 0)
-        assert (
-            "Collapsed Duplicates: 0" not in result.output
-            or "Collapsed Duplicates" not in result.output
-        )
+        # "Collapsed Duplicates" line must be entirely absent
+        assert "Collapsed Duplicates" not in result.output
 
     def test_collapsed_duplicates_absent_when_zero(self, runner, tmp_path):
         """When no duplicates exist, 'Collapsed Duplicates' line is absent."""

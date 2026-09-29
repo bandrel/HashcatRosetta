@@ -20,12 +20,15 @@ def _normalize_wordlist(wordlist: str | None) -> str | None:
         unchanged, otherwise os.path.normpath applied.
 
     Note:
-        Path normalization is lexical only (e.g., ``a/../rockyou.txt`` becomes
-        ``rockyou.txt``). This is deliberate: it does not follow symlinks or
-        resolve actual filesystem paths. If this ever changes, it becomes
-        important: a symlink ``a`` alongside its target would normally merge
-        both paths' counts into the target, but lexical normalization keeps
-        them separate.
+        Path normalization is lexical only; ``os.path.normpath`` must not be
+        changed to ``os.path.realpath``. Two scenarios occur. (A) A symlink
+        ``a`` → target dir ``real`` makes ``a/rockyou.txt`` and ``real/rockyou.txt``
+        refer to the same file; ``realpath`` merges counts, ``normpath`` keeps
+        them separate. (B) A symlink ``a`` pointing elsewhere makes
+        ``a/../rockyou.txt`` and ``rockyou.txt`` refer to different files, but
+        ``normpath`` merges their counts under the key ``rockyou.txt``. Both
+        inaccuracies are accepted: resolving symlinks would make the key depend
+        on transient filesystem state, not what hashcat wrote in the log.
     """
     if wordlist is None:
         return None
