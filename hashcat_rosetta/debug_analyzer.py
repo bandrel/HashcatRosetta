@@ -5,7 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any
 
-from .parser import DebugLogParser
+from .parser import DebugLogParser, _WORDLIST_SENTINELS
 
 
 def _normalize_wordlist(wordlist: str | None) -> str | None:
@@ -18,11 +18,19 @@ def _normalize_wordlist(wordlist: str | None) -> str | None:
     Returns:
         Normalized wordlist: None unchanged, sentinels (<stdin>, <generic>, <none>)
         unchanged, otherwise os.path.normpath applied.
+
+    Note:
+        Path normalization is lexical only (e.g., ``a/../rockyou.txt`` becomes
+        ``rockyou.txt``). This is deliberate: it does not follow symlinks or
+        resolve actual filesystem paths. If this ever changes, it becomes
+        important: a symlink ``a`` alongside its target would normally merge
+        both paths' counts into the target, but lexical normalization keeps
+        them separate.
     """
     if wordlist is None:
         return None
     # Sentinels survive unchanged
-    if wordlist in ("<stdin>", "<generic>", "<none>"):
+    if wordlist in _WORDLIST_SENTINELS:
         return wordlist
     # Normalize paths using os.path.normpath
     return os.path.normpath(wordlist)
@@ -58,6 +66,7 @@ class DebugAnalyzer:
         self.entries: list[dict[str, Any]] = []
         self.dedup = dedup
         self.collapsed_duplicates = 0
+        self.total_entries = 0  # Computed once in _compute_analysis()
 
         # Rule statistics
         self.rule_stats: defaultdict[str, dict[str, Any]] = defaultdict(
@@ -166,7 +175,12 @@ class DebugAnalyzer:
             if self.dedup:
                 entry_key = (baseword, rule, candidate, normalized_wordlist)
                 if entry_key in seen_entries:
-                    # Skip duplicate entry and count it
+                    # Skip duplicate entry and count it. Note: the 4-tuple omits
+                    # the `matched` flag; if two entries share the 4-tuple but
+                    # differ in `matched`, we keep the first occurrence and discard
+                    # the second's `matched` value. This is latent only — parser.py
+                    # currently always emits `matched: False` — but becomes real
+                    # if `matched` is ever populated by an upstream change.
                     self.collapsed_duplicates += 1
                     continue
                 seen_entries.add(entry_key)
@@ -202,8 +216,11 @@ class DebugAnalyzer:
                 if entry.get("matched", False):
                     self.wordlist_stats[normalized_wordlist]["match_count"] += 1
 
+        # Compute total entries once (used by both _compute_analysis return and export_to_dict)
+        self.total_entries = len(self.entries) - self.collapsed_duplicates
+
         return {
-            "total_entries": len(self.entries) - self.collapsed_duplicates,
+            "total_entries": self.total_entries,
             "unique_rules": len(self.rule_stats),
             "unique_basewords": len(self.baseword_stats),
             "unique_wordlists": len(self.wordlist_stats),
@@ -467,7 +484,7 @@ class DebugAnalyzer:
         """
         data = {
             "summary": {
-                "total_entries": len(self.entries) - self.collapsed_duplicates,
+                "total_entries": self.total_entries,
                 "collapsed_duplicates": self.collapsed_duplicates,
                 "rules": self.get_rule_statistics_summary(),
                 "basewords": self.get_baseword_statistics_summary(),

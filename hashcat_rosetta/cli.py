@@ -1213,7 +1213,7 @@ def _collect_debug_files(path: str) -> list[str]:
     "--no-dedup",
     is_flag=True,
     default=False,
-    help="Disable deduplication of identical entries (default: deduplicate mode-5 lines)",
+    help="Disable deduplication of identical entries across both modes",
 )
 @click.pass_context
 def main(
