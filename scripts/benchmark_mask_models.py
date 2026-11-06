@@ -45,7 +45,7 @@ judge model silently shifts every score and breaks comparison across sweeps.
 
 Judge backends (BENCHMARK_JUDGE_BACKEND=kev|ollama, default kev) are NOT
 score-comparable: Kev returns a calibrated 1-5 choice distribution (recorded
-in the results JSON and suggestions log as `judge_probabilities` /
+in the suggestions log as `judge_probabilities` /
 `judge_confidence`) while the Ollama judge returns a generated rationale and
 prompt-fix suggestion (Kev cannot generate free text, so
 `prompt_fix_suggestion` is always None under it). Results JSON records the
@@ -126,6 +126,8 @@ if JUDGE_BACKEND not in ("kev", "ollama"):
 KEV_HOST = os.environ.get("BENCHMARK_KEV_HOST", "http://127.0.0.1:8009")
 KEV_MODEL = os.environ.get("BENCHMARK_KEV_MODEL", "kev-latest")
 KEV_TIMEOUT_SECONDS = 180.0
+# The reachability preflight is deliberately short: fail fast, don't wait out a scoring call.
+KEV_PREFLIGHT_TIMEOUT_SECONDS = 10
 
 # Expanded to all non-tiny (>=8GB) models available on the candidate host,
 # excluding JUDGE_MODEL itself (never a candidate — self-grading bias).
@@ -552,7 +554,7 @@ def _judge_kev(
 
     Kev answers typed questions with calibrated probabilities and never free
     text, so this asks a single `choice` question over the labels 1-5 and
-    takes the argmax as the integer score. The full distribution and the
+    takes the server's chosen label as the integer score. The full distribution and the
     chosen label's confidence are preserved on the verdict; `reason` becomes
     a compact human-readable summary of that distribution and
     `prompt_fix_suggestion` is None (Kev cannot propose prompt wording).
@@ -1505,7 +1507,7 @@ def _kev_reachable(host: str = KEV_HOST) -> bool:
     """
     url = f"{host.rstrip('/')}/v1/models"
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
+        with urllib.request.urlopen(url, timeout=KEV_PREFLIGHT_TIMEOUT_SECONDS) as response:
             json.loads(response.read())
     except Exception:  # noqa: BLE001 - preflight must report, not raise
         return False
@@ -1518,7 +1520,7 @@ def main() -> None:
             "BENCHMARK_SKIP_JUDGE set: deterministic checks only, no model judge", file=sys.stderr
         )
     elif JUDGE_BACKEND == "kev":
-        if not _kev_reachable():
+        if not _kev_reachable(KEV_HOST):
             print(
                 f"FATAL: no Kev server answering at {KEV_HOST!r} (model {KEV_MODEL!r})",
                 file=sys.stderr,

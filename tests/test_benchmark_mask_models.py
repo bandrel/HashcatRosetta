@@ -838,6 +838,7 @@ class TestKevJudge:
         assert captured["body"]["model"] == "m"
 
     def test_kev_request_uses_named_timeout(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "KEV_TIMEOUT_SECONDS", 7.0)
         captured = self._patch_urlopen(monkeypatch, _kev_payload("3", {"3": 1.0}))
 
         benchmark_mask_models.judge_score(
@@ -848,7 +849,7 @@ class TestKevJudge:
             kev_model="m",
         )
 
-        assert captured["timeout"] == benchmark_mask_models.KEV_TIMEOUT_SECONDS
+        assert captured["timeout"] == 7.0
 
     def test_argmax_label_becomes_score(self, monkeypatch):
         probabilities = {"1": 0.04, "2": 0.03, "3": 0.06, "4": 0.10, "5": 0.77}
@@ -1014,13 +1015,20 @@ class TestMainPreflight:
         monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
         monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
         monkeypatch.setattr(benchmark_mask_models, "KEV_HOST", "http://127.0.0.1:1")
-        _patch_kev_urlopen(monkeypatch, OSError("connection refused"))
+        probed_hosts: list[str] = []
+
+        def fake_reachable(host):
+            probed_hosts.append(host)
+            return False
+
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", fake_reachable)
         self._no_benchmark(monkeypatch)
 
         with pytest.raises(SystemExit) as exc_info:
             benchmark_mask_models.main()
 
         assert exc_info.value.code == 1
+        assert probed_hosts == ["http://127.0.0.1:1"]
         assert "http://127.0.0.1:1" in capsys.readouterr().err
 
     def test_kev_reachable_proceeds_to_sweep(self, monkeypatch, capsys):
@@ -1078,6 +1086,32 @@ class TestMainPreflight:
 
 
 class TestRunPromptForModel:
+    def test_kev_requests_never_go_to_ollama_judge_host(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+        urls: list[str] = []
+
+        def fake_urlopen(req, timeout=None):
+            urls.append(req.full_url if hasattr(req, "full_url") else req)
+            return _FakeKevResponse(_kev_payload("3", {"3": 1.0}))
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+
+        benchmark_mask_models.run_prompt_for_model(
+            "some-model",
+            benchmark_mask_models.PROMPTS[0],
+            judge_host="http://ollama.example:11434",
+        )
+
+        assert len(urls) == 1
+        assert urls[0].startswith(benchmark_mask_models.KEV_HOST)
+        assert "ollama.example" not in urls[0]
+
     def test_hard_fail_when_generate_masks_raises(self, monkeypatch):
         def raising_generate_masks(description, **kwargs):
             raise benchmark_mask_models.MaskGenerationError("simulated failure")
