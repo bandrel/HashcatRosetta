@@ -971,6 +971,11 @@ class TestMainPreflight:
     not depend on the developer's shell environment.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_ambient_results_path(self, monkeypatch):
+        """main() appends to BENCHMARK_RESULTS_PATH when set; never let an ambient value write a real file."""
+        monkeypatch.delenv("BENCHMARK_RESULTS_PATH", raising=False)
+
     def _no_benchmark(self, monkeypatch):
         def boom(model, *, think=True):
             raise AssertionError("benchmark_model must not run after a failed preflight")
@@ -1396,6 +1401,11 @@ class TestFormatReport:
 
 
 class TestMain:
+    @pytest.fixture(autouse=True)
+    def _no_ambient_results_path(self, monkeypatch):
+        """main() appends to BENCHMARK_RESULTS_PATH when set; never let an ambient value write a real file."""
+        monkeypatch.delenv("BENCHMARK_RESULTS_PATH", raising=False)
+
     def test_main_wires_candidates_through_to_printed_report(self, monkeypatch, capsys):
         def fake_benchmark_model(model: str, *, think: bool = True):
             return benchmark_mask_models.ModelReport(
