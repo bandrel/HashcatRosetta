@@ -6,12 +6,15 @@ curated shortlist of
 small, non-thinking models via hashcat_rosetta.nlmask.generate_masks (the real
 production code path — same timeout/retry logic already shipped). Each
 prompt's output is checked deterministically first (hard gate: does it parse,
-does it match the hand-written expectation for that prompt), then judged by
-JUDGE_MODEL (deliberately not a candidate itself, to avoid self-grading bias)
-for overall correctness/plausibility. Every suggestion is also appended to
-SUGGESTIONS_LOG_PATH (if set) for manual/agent spot-checking alongside the
-automated score. Prints a report ranking candidates by disk size (a VRAM
-proxy) among those that pass the deterministic gate.
+does it match the hand-written expectation for that prompt), then judged for
+overall correctness/plausibility by a separate judge backend (deliberately
+not a candidate itself, to avoid self-grading bias) selected by
+BENCHMARK_JUDGE_BACKEND: "kev" (the default) calls a local Kev decision-model
+server, "ollama" calls JUDGE_MODEL over the OpenAI-compatible API. Every
+suggestion is also appended to SUGGESTIONS_LOG_PATH (if set) for
+manual/agent spot-checking alongside the automated score. Prints a report
+ranking candidates by disk size (a VRAM proxy) among those that pass the
+deterministic gate.
 
 This script is NOT part of the installed package and does NOT change
 nlmask.py's shipped default model — see
@@ -39,6 +42,16 @@ SUGGESTIONS_LOG_PATH, but scoring is left to whoever reads that log (a
 human, or the agent driving the sweep). Judge scores in the report are then
 all N/A. Use this when judge calibration is itself in question — a swapped
 judge model silently shifts every score and breaks comparison across sweeps.
+
+Judge backends (BENCHMARK_JUDGE_BACKEND=kev|ollama, default kev) are NOT
+score-comparable: Kev returns a calibrated 1-5 choice distribution (recorded
+in the results JSON and suggestions log as `judge_probabilities` /
+`judge_confidence`) while the Ollama judge returns a generated rationale and
+prompt-fix suggestion (Kev cannot generate free text, so
+`prompt_fix_suggestion` is always None under it). Results JSON records the
+backend as `judge_backend` so a sweep can't be silently compared against one
+from the other. Configure Kev with BENCHMARK_KEV_HOST (default
+http://127.0.0.1:8009) and BENCHMARK_KEV_MODEL (default kev-latest).
 
 Set BENCHMARK_THINK=both to sweep each candidate twice, once with
 generate_masks(think=True) (the shipped default) and once with think=False;
@@ -82,6 +95,36 @@ from hashcat_rosetta.nlmask import (
 # its own dedicated env var instead, defaulting to the local Ollama.
 CANDIDATE_HOST = os.environ.get("BENCHMARK_CANDIDATE_HOST", "http://localhost:11434")
 JUDGE_HOST = os.environ.get("BENCHMARK_JUDGE_HOST", "http://localhost:11434")
+
+# Which judge backend scores each (prompt, suggestions) pair. "kev" (the
+# default) calls a local Kev decision-model server; "ollama" calls the
+# original OpenAI-compatible Ollama judge. The two backends are NOT
+# score-comparable — Kev returns calibrated choice probabilities while the
+# Ollama judge returns a generated rationale — so results JSON records which
+# one produced a sweep (see JUDGE_BACKEND / the results file's
+# `judge_backend` field).
+JUDGE_BACKEND = os.environ.get("BENCHMARK_JUDGE_BACKEND", "kev").strip().lower()
+if JUDGE_BACKEND not in ("kev", "ollama"):
+    raise SystemExit(f"BENCHMARK_JUDGE_BACKEND must be kev or ollama — got {JUDGE_BACKEND!r}")
+
+# Kev serving details (only used when JUDGE_BACKEND == "kev"). The API is
+# TypeSafe-compatible: POST /v1/systemone with typed questions in, typed
+# answers out. Kev is a decision model — choice/score/noul, never free text —
+# so it grades but cannot explain itself.
+#
+# Kev is not the only model that speaks this protocol. Ollama serves
+# `clef:27b` (16.8 GiB) and `clef-flash:9b` on the same /v1/systemone
+# endpoint with the same {state, model, questions} body and the same
+# {choice, probabilities, confidence} answer shape that _judge_kev() builds
+# and parses below, so swapping judges needs no code change, only:
+#   BENCHMARK_KEV_HOST=http://<ollama-host>:11434 BENCHMARK_KEV_MODEL=clef:27b
+# Two caveats before doing that. Clef requires Ollama >= 0.35.1 and will 404
+# on older servers. And clef is fine-tuned from Qwen3.8-27B while this
+# CANDIDATES list contains two Qwen3.8-27B entries, which is self-grading
+# bias at the family level — the exact thing JUDGE_MODEL is kept out of
+# CANDIDATES to avoid. Record which judge produced a sweep before comparing.
+KEV_HOST = os.environ.get("BENCHMARK_KEV_HOST", "http://127.0.0.1:8009")
+KEV_MODEL = os.environ.get("BENCHMARK_KEV_MODEL", "kev-latest")
 
 # Expanded to all non-tiny (>=8GB) models available on the candidate host,
 # excluding JUDGE_MODEL itself (never a candidate — self-grading bias).
@@ -273,6 +316,34 @@ JUDGE_SYSTEM_PROMPT = (
     "though it looks different from a mask using only builtin tokens."
 )
 
+# Kev gets the same correctness-vs-quantity and custom-charset guidance as the
+# Ollama judge, expressed as the text state for a single `choice` question
+# over the labels 1-5. Kev returns no free text, so unlike JUDGE_SYSTEM_PROMPT
+# there is no `reason`/`prompt_fix_suggestion` instruction to give.
+KEV_SCORE_CRITERIA: dict[str, str] = {
+    "1": "does not satisfy the request at all",
+    "2": "mostly wrong",
+    "3": "partially satisfies the request",
+    "4": "mostly satisfies the request with a minor flaw",
+    "5": "fully and precisely satisfies the request",
+}
+
+KEV_SCORE_INSTRUCTIONS = (
+    "You grade whether a set of hashcat mask suggestions fully and correctly "
+    "satisfies an English request. Choose the single score that best applies. "
+    "Judge CORRECTNESS and QUANTITY separately, and never let a quantity "
+    "complaint drag down a correctness score: a single suggestion that "
+    "exactly and precisely matches the request is still fully correct even "
+    "if the request implied several variants would be welcome — that is a "
+    "quantity shortfall, not an error. Score purely on whether each given "
+    "suggestion, taken on its own, satisfies the pattern described. Before "
+    "concluding a custom-charset mask (a comma-separated hcmask line, e.g. "
+    "'aeiou,?1?1?1?1?d?d') is wrong, re-read the custom-charset definitions "
+    "given alongside it — a mask defining exactly the right charset content "
+    "and referencing it correctly is correct syntax, not an error, even "
+    "though it looks different from a mask using only builtin tokens."
+)
+
 
 class JudgeError(Exception):
     """Raised when the judge model call fails or returns unusable output."""
@@ -290,12 +361,21 @@ class JudgeVerdict:
             blindly.
         prompt_fix_suggestion: When score < 5, the judge's concrete
             suggestion for rewording generator's SYSTEM_PROMPT to prevent
-            this exact mistake. Empty string when score is 5.
+            this exact mistake. Empty string when score is 5. Always None
+            on the Kev backend, which cannot generate free text.
+        judge_probabilities: Kev's full calibrated distribution over the
+            "1"-"5" labels, or None on the Ollama backend. Kept so a
+            low-confidence verdict is distinguishable from a decisive one
+            rather than collapsed to the same integer.
+        judge_confidence: Kev's confidence in its chosen label, or None on
+            the Ollama backend.
     """
 
     score: int
     reason: str
-    prompt_fix_suggestion: str
+    prompt_fix_suggestion: str | None
+    judge_probabilities: dict[str, float] | None = None
+    judge_confidence: float | None = None
 
 
 def list_local_models(host: str = CANDIDATE_HOST) -> dict[str, int]:
@@ -377,6 +457,7 @@ def judge_score(
     model: str = JUDGE_MODEL,
     host: str = JUDGE_HOST,
     client: Any = None,
+    backend: str = JUDGE_BACKEND,
 ) -> JudgeVerdict:
     """Score how well `suggestions` satisfies `prompt`, via the judge model.
 
@@ -384,9 +465,30 @@ def judge_score(
     reason is what makes a surprising score auditable instead of an opaque
     number, so it must never be discarded by a caller.
 
+    `backend` selects which judge serves the verdict: "ollama" (the
+    OpenAI-compatible judge, `model`/`host`/`client` apply) or "kev" (the
+    local Kev decision-model server, `KEV_HOST`/`KEV_MODEL` apply). The two
+    are not score-comparable — see the module-level JUDGE_BACKEND comment.
+
     Raises JudgeError on any failure: the request itself failing, malformed
     JSON in the response, or a score outside 1-5.
     """
+    if backend == "kev":
+        return _judge_kev(prompt, suggestions)
+    if backend == "ollama":
+        return _judge_ollama(prompt, suggestions, model=model, host=host, client=client)
+    raise JudgeError(f"unknown judge backend: {backend!r}")
+
+
+def _judge_ollama(
+    prompt: BenchmarkPrompt,
+    suggestions: list[MaskSuggestion],
+    *,
+    model: str = JUDGE_MODEL,
+    host: str = JUDGE_HOST,
+    client: Any = None,
+) -> JudgeVerdict:
+    """The original Ollama/OpenAI-compatible judge: generates a JSON verdict."""
     active_client: Any = (
         client
         if client is not None
@@ -433,6 +535,75 @@ def judge_score(
     return JudgeVerdict(score=score, reason=reason, prompt_fix_suggestion=prompt_fix_suggestion)
 
 
+def _judge_kev(
+    prompt: BenchmarkPrompt,
+    suggestions: list[MaskSuggestion],
+    *,
+    host: str = KEV_HOST,
+    model: str = KEV_MODEL,
+) -> JudgeVerdict:
+    """Score via a local Kev decision-model server.
+
+    Kev answers typed questions with calibrated probabilities and never free
+    text, so this asks a single `choice` question over the labels 1-5 and
+    takes the argmax as the integer score. The full distribution and the
+    chosen label's confidence are preserved on the verdict; `reason` becomes
+    a compact human-readable summary of that distribution and
+    `prompt_fix_suggestion` is None (Kev cannot propose prompt wording).
+
+    Raises JudgeError on any failure: the request failing, a malformed body,
+    a missing label, or a label outside 1-5.
+    """
+    body = {
+        "state": _build_judge_prompt(prompt, suggestions),
+        "model": model,
+        "questions": {
+            "score": {
+                "type": "choice",
+                "instructions": KEV_SCORE_INSTRUCTIONS,
+                "criteria": KEV_SCORE_CRITERIA,
+            }
+        },
+    }
+    url = f"{host.rstrip('/')}/v1/systemone"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180.0) as response:
+            data = json.loads(response.read())
+    except Exception as exc:  # noqa: BLE001 - judge failures must not crash the benchmark
+        raise JudgeError(f"kev judge request failed: {exc}") from exc
+
+    try:
+        answer = data["answers"]["score"]
+        choice = str(answer["choice"])
+        probabilities = {str(k): float(v) for k, v in answer["probabilities"].items()}
+        confidence = float(answer["confidence"])
+    except (TypeError, ValueError, KeyError) as exc:
+        raise JudgeError(f"kev judge returned unusable output: {data!r}") from exc
+
+    try:
+        score = int(choice)
+    except ValueError as exc:
+        raise JudgeError(f"kev judge returned non-integer choice: {choice!r}") from exc
+    if not 1 <= score <= 5:
+        raise JudgeError(f"kev judge score out of range 1-5: {score}")
+
+    dist = ", ".join(f"{label}:{probabilities[label]:.2f}" for label in sorted(probabilities))
+    reason = f"kev choice={choice} p={confidence:.2f} dist={{{dist}}}"
+    return JudgeVerdict(
+        score=score,
+        reason=reason,
+        prompt_fix_suggestion=None,
+        judge_probabilities=probabilities,
+        judge_confidence=confidence,
+    )
+
+
 @dataclass
 class PromptResult:
     """The outcome of running one (model, prompt) pair.
@@ -463,6 +634,12 @@ class PromptResult:
             under the same conditions as judge_score.
         suggestion_count: Number of mask suggestions generate_masks() returned,
             or None if it hard-failed and returned nothing at all.
+        judge_probabilities: Kev's calibrated distribution over the "1"-"5"
+            labels, or None on the Ollama backend / when the judge failed.
+            Preserved so a low-confidence verdict is distinguishable from a
+            decisive one instead of collapsing to the same integer.
+        judge_confidence: Kev's confidence in its chosen label, or None under
+            the same conditions as judge_probabilities.
     """
 
     prompt_name: str
@@ -473,6 +650,8 @@ class PromptResult:
     suggestion_count: int | None = None
     judge_reason: str | None = None
     prompt_fix_suggestion: str | None = None
+    judge_probabilities: dict[str, float] | None = None
+    judge_confidence: float | None = None
 
 
 @dataclass
@@ -1046,6 +1225,8 @@ def _log_suggestions_for_manual_review(
     judge_reason: str | None,
     prompt_fix_suggestion: str | None,
     think: bool = True,
+    judge_probabilities: dict[str, float] | None = None,
+    judge_confidence: float | None = None,
 ) -> None:
     """Append raw suggestions to SUGGESTIONS_LOG_PATH for spot-checking.
 
@@ -1053,7 +1234,8 @@ def _log_suggestions_for_manual_review(
     suggested SYSTEM_PROMPT wording fix alongside the raw suggestions — a
     transparency log so any score (especially a low or surprising one) can
     be audited against both the actual model output and the judge's own
-    rationale, not trusted as an opaque number. No-op if
+    rationale, not trusted as an opaque number. On the Kev backend the
+    calibrated distribution and confidence are recorded too. No-op if
     SUGGESTIONS_LOG_PATH isn't set.
     """
     log_path = os.environ.get("SUGGESTIONS_LOG_PATH")
@@ -1067,9 +1249,12 @@ def _log_suggestions_for_manual_review(
                     "think": think,
                     "prompt": prompt.name,
                     "description": prompt.description,
+                    "judge_backend": JUDGE_BACKEND,
                     "soft_fail_reason": soft_fail_reason,
                     "judge_score": judge_score,
                     "judge_reason": judge_reason,
+                    "judge_probabilities": judge_probabilities,
+                    "judge_confidence": judge_confidence,
                     "prompt_fix_suggestion": prompt_fix_suggestion,
                     "suggestions": [
                         {
@@ -1124,20 +1309,32 @@ def run_prompt_for_model(
         # the judge-calibration problem where a swapped judge model silently
         # shifts every score and invalidates cross-sweep comparison.
         score, judge_reason, fix_suggestion = None, None, None
+        probabilities, confidence = None, None
     else:
         try:
-            verdict = judge_score(prompt, suggestions, host=judge_host)
+            verdict = judge_score(prompt, suggestions, host=judge_host, backend=JUDGE_BACKEND)
             score, judge_reason, fix_suggestion = (
                 verdict.score,
                 verdict.reason,
                 verdict.prompt_fix_suggestion,
             )
+            probabilities, confidence = verdict.judge_probabilities, verdict.judge_confidence
         except JudgeError as exc:
             print(f"  warning: judge failed for {model}/{prompt.name}: {exc}", file=sys.stderr)
             score, judge_reason, fix_suggestion = None, None, None
+            probabilities, confidence = None, None
 
     _log_suggestions_for_manual_review(
-        model, prompt, suggestions, soft_fail_reason, score, judge_reason, fix_suggestion, think
+        model,
+        prompt,
+        suggestions,
+        soft_fail_reason,
+        score,
+        judge_reason,
+        fix_suggestion,
+        think,
+        probabilities,
+        confidence,
     )
 
     return PromptResult(
@@ -1149,6 +1346,8 @@ def run_prompt_for_model(
         len(suggestions),
         judge_reason,
         fix_suggestion,
+        probabilities,
+        confidence,
     )
 
 
@@ -1282,11 +1481,34 @@ def format_report(reports: list[ModelReport]) -> str:
     return "\n".join(lines)
 
 
+def _kev_reachable(host: str = KEV_HOST) -> bool:
+    """Return True if a Kev server is answering on `host`.
+
+    Kev has no "pull" step (weights are loaded at serve time), so the
+    preflight is a plain reachability probe of GET /v1/models rather than
+    Ollama's ensure_model_pulled path.
+    """
+    url = f"{host.rstrip('/')}/v1/models"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            json.loads(response.read())
+    except Exception:  # noqa: BLE001 - preflight must report, not raise
+        return False
+    return True
+
+
 def main() -> None:
     if SKIP_JUDGE:
         print(
             "BENCHMARK_SKIP_JUDGE set: deterministic checks only, no model judge", file=sys.stderr
         )
+    elif JUDGE_BACKEND == "kev":
+        if not _kev_reachable():
+            print(
+                f"FATAL: no Kev server answering at {KEV_HOST!r} (model {KEV_MODEL!r})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     elif not ensure_model_pulled(JUDGE_MODEL, host=JUDGE_HOST):
         print(f"FATAL: judge model {JUDGE_MODEL!r} could not be pulled/found", file=sys.stderr)
         sys.exit(1)
@@ -1305,6 +1527,7 @@ def main() -> None:
                         {
                             "model": report.model,
                             "think": report.think,
+                            "judge_backend": JUDGE_BACKEND,
                             "disk_size_gb": report.disk_size_gb,
                             "hard_fail_count": report.hard_fail_count,
                             "soft_fail_count": report.soft_fail_count,

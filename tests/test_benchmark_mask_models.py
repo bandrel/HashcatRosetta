@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from hashcat_rosetta.mask import parse_hcmask_line
 from hashcat_rosetta.nlmask import MaskSuggestion
@@ -692,7 +693,7 @@ class TestJudgeScore:
         suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
 
         verdict = benchmark_mask_models.judge_score(
-            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
         )
 
         assert verdict.score == 4
@@ -709,7 +710,7 @@ class TestJudgeScore:
 
         try:
             benchmark_mask_models.judge_score(
-                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
             )
             raise AssertionError("expected JudgeError")
         except benchmark_mask_models.JudgeError:
@@ -722,7 +723,7 @@ class TestJudgeScore:
 
         try:
             benchmark_mask_models.judge_score(
-                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
             )
             raise AssertionError("expected JudgeError")
         except benchmark_mask_models.JudgeError:
@@ -737,7 +738,7 @@ class TestJudgeScore:
 
         try:
             benchmark_mask_models.judge_score(
-                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
             )
             raise AssertionError("expected JudgeError")
         except benchmark_mask_models.JudgeError:
@@ -751,12 +752,149 @@ class TestJudgeScore:
         suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
 
         benchmark_mask_models.judge_score(
-            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
         )
 
         user_message = completions.calls[0]["messages"][-1]["content"]
         assert "Summer?d?d?d?d?d?d" in user_message
         assert benchmark_mask_models.PROMPTS[0].description in user_message
+
+    def test_ollama_verdict_has_no_probability_fields(self):
+        completions = _FakeJudgeCompletions(
+            [json.dumps({"score": 5, "reason": "good", "prompt_fix_suggestion": ""})]
+        )
+        client = _FakeJudgeClient(completions)
+
+        verdict = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Summer?d?d?d?d?d?d")],
+            client=client,
+            backend="ollama",
+        )
+
+        assert verdict.judge_probabilities is None
+        assert verdict.judge_confidence is None
+
+
+class _FakeKevResponse:
+    """Minimal stand-in for urllib's http.client.HTTPResponse context manager."""
+
+    def __init__(self, payload: dict):
+        self._body = json.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _kev_payload(choice: str, probabilities: dict[str, float], confidence: float = 0.7) -> dict:
+    return {
+        "model": "kev-latest",
+        "answers": {
+            "score": {
+                "type": "choice",
+                "choice": choice,
+                "confidence": confidence,
+                "probabilities": probabilities,
+            }
+        },
+        "usage": {"input_tokens": 10, "output_tokens": 10},
+        "latency_ms": 100.0,
+    }
+
+
+class TestKevJudge:
+    def _patch_urlopen(self, monkeypatch, payload: dict):
+        captured: dict[str, Any] = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url if hasattr(req, "full_url") else req
+            captured["body"] = json.loads(req.data)
+            return _FakeKevResponse(payload)
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+        return captured
+
+    def test_argmax_label_becomes_score(self, monkeypatch):
+        probabilities = {"1": 0.04, "2": 0.03, "3": 0.06, "4": 0.10, "5": 0.77}
+        captured = self._patch_urlopen(monkeypatch, _kev_payload("5", probabilities))
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        verdict = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0], suggestions, backend="kev"
+        )
+
+        assert verdict.score == 5
+        assert verdict.judge_probabilities == probabilities
+        assert verdict.judge_confidence == 0.7
+        # Kev is a decision model: it produces no free-text rationale or fix.
+        assert verdict.prompt_fix_suggestion is None
+        assert "5" in verdict.reason
+        # The request actually hit the configured Kev endpoint.
+        assert captured["url"].endswith("/v1/systemone")
+        assert "score" in captured["body"]["questions"]
+
+    def test_low_label_is_preserved(self, monkeypatch):
+        probabilities = {"1": 0.70, "2": 0.20, "3": 0.06, "4": 0.03, "5": 0.01}
+        self._patch_urlopen(monkeypatch, _kev_payload("1", probabilities))
+
+        verdict = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Winter?d?d?d?d?d?d")],
+            backend="kev",
+        )
+
+        assert verdict.score == 1
+
+    def test_out_of_range_label_raises_judge_error(self, monkeypatch):
+        self._patch_urlopen(monkeypatch, _kev_payload("9", {"9": 1.0}))
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0],
+                [_suggestion("Summer?d?d?d?d?d?d")],
+                backend="kev",
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_malformed_body_raises_judge_error(self, monkeypatch):
+        self._patch_urlopen(monkeypatch, {"unexpected": "shape"})
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0],
+                [_suggestion("Summer?d?d?d?d?d?d")],
+                backend="kev",
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_network_failure_raises_judge_error(self, monkeypatch):
+        def boom(req, timeout=None):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", boom)
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0],
+                [_suggestion("Summer?d?d?d?d?d?d")],
+                backend="kev",
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_default_backend_is_kev(self):
+        assert benchmark_mask_models.JUDGE_BACKEND == "kev"
 
 
 class TestRunPromptForModel:
