@@ -1417,12 +1417,21 @@ def benchmark_model(
     return ModelReport(model, disk_size_gb, results, think)
 
 
+def _judge_label() -> str:
+    """Name the judge that produced the scores, so Kev and Ollama reports aren't compared blindly."""
+    if SKIP_JUDGE:
+        return "skipped (BENCHMARK_SKIP_JUDGE)"
+    if JUDGE_BACKEND == "kev":
+        return f"kev ({KEV_MODEL} @ {KEV_HOST})"
+    return f"ollama ({JUDGE_MODEL} @ {JUDGE_HOST})"
+
+
 def format_report(reports: list[ModelReport]) -> str:
     header = (
         f"{'model':<24}{'think':>7}{'size(GB)':>10}{'hard_fails':>12}{'soft_fails':>12}"
         f"{'mean_score':>12}{'min_score':>11}{'avg_sugg':>10}{'time(s)':>10}"
     )
-    lines = [header, "-" * len(header)]
+    lines = [f"Judge: {_judge_label()}", "", header, "-" * len(header)]
 
     def sort_key(r: ModelReport) -> float:
         return r.disk_size_gb if r.disk_size_gb is not None else float("inf")

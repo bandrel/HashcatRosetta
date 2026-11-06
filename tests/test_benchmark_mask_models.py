@@ -1428,6 +1428,60 @@ class TestFormatReport:
         assert report_text.index("big-model") < report_text.index("unpullable-model")
 
 
+class TestJudgeLabel:
+    """format_report names the judge; the label is read from module globals at call time."""
+
+    @pytest.fixture(autouse=True)
+    def _pin_judge_globals(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "KEV_MODEL", "kev-test")
+        monkeypatch.setattr(benchmark_mask_models, "KEV_HOST", "http://kev.example:8009")
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_MODEL", "judge-test")
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_HOST", "http://ollama.example:11434")
+
+    def _one_report(self):
+        return [
+            benchmark_mask_models.ModelReport(
+                "some-model",
+                2.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 5.0, None, 5)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            )
+        ]
+
+    def test_skip_judge_label(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "ollama")
+
+        report_text = benchmark_mask_models.format_report([])
+
+        assert report_text.splitlines()[0] == "Judge: skipped (BENCHMARK_SKIP_JUDGE)"
+
+    def test_kev_label(self):
+        report_text = benchmark_mask_models.format_report(self._one_report())
+
+        assert report_text.splitlines()[0] == "Judge: kev (kev-test @ http://kev.example:8009)"
+        assert report_text.splitlines()[1] == ""
+
+    def test_ollama_label(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "ollama")
+
+        report_text = benchmark_mask_models.format_report([])
+
+        assert report_text.splitlines()[0] == (
+            "Judge: ollama (judge-test @ http://ollama.example:11434)"
+        )
+
+    def test_skip_takes_precedence_over_backend(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+
+        assert benchmark_mask_models._judge_label() == "skipped (BENCHMARK_SKIP_JUDGE)"
+
+
 class TestMain:
     @pytest.fixture(autouse=True)
     def _no_ambient_results_path(self, monkeypatch):
