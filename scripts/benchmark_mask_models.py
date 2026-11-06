@@ -125,6 +125,7 @@ if JUDGE_BACKEND not in ("kev", "ollama"):
 # CANDIDATES to avoid. Record which judge produced a sweep before comparing.
 KEV_HOST = os.environ.get("BENCHMARK_KEV_HOST", "http://127.0.0.1:8009")
 KEV_MODEL = os.environ.get("BENCHMARK_KEV_MODEL", "kev-latest")
+KEV_TIMEOUT_SECONDS = 180.0
 
 # Expanded to all non-tiny (>=8GB) models available on the candidate host,
 # excluding JUDGE_MODEL itself (never a candidate — self-grading bias).
@@ -458,6 +459,8 @@ def judge_score(
     host: str = JUDGE_HOST,
     client: Any = None,
     backend: str = JUDGE_BACKEND,
+    kev_host: str = KEV_HOST,
+    kev_model: str = KEV_MODEL,
 ) -> JudgeVerdict:
     """Score how well `suggestions` satisfies `prompt`, via the judge model.
 
@@ -466,15 +469,18 @@ def judge_score(
     number, so it must never be discarded by a caller.
 
     `backend` selects which judge serves the verdict: "ollama" (the
-    OpenAI-compatible judge, `model`/`host`/`client` apply) or "kev" (the
-    local Kev decision-model server, `KEV_HOST`/`KEV_MODEL` apply). The two
-    are not score-comparable — see the module-level JUDGE_BACKEND comment.
+    OpenAI-compatible judge, `model`/`host`/`client` apply, Ollama-only) or
+    "kev" (the local Kev decision-model server, `kev_host`/`kev_model` apply,
+    Kev-only). `model`/`host`/`client` are ignored for "kev", and `kev_*` are
+    ignored for "ollama". Callers must not pass an Ollama `host` for Kev; the
+    two endpoints are independent. The two judges are not score-comparable —
+    see the module-level JUDGE_BACKEND comment.
 
     Raises JudgeError on any failure: the request itself failing, malformed
     JSON in the response, or a score outside 1-5.
     """
     if backend == "kev":
-        return _judge_kev(prompt, suggestions)
+        return _judge_kev(prompt, suggestions, host=kev_host, model=kev_model)
     if backend == "ollama":
         return _judge_ollama(prompt, suggestions, model=model, host=host, client=client)
     raise JudgeError(f"unknown judge backend: {backend!r}")
@@ -573,7 +579,7 @@ def _judge_kev(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180.0) as response:
+        with urllib.request.urlopen(request, timeout=KEV_TIMEOUT_SECONDS) as response:
             data = json.loads(response.read())
     except Exception as exc:  # noqa: BLE001 - judge failures must not crash the benchmark
         raise JudgeError(f"kev judge request failed: {exc}") from exc

@@ -817,10 +817,38 @@ class TestKevJudge:
         def fake_urlopen(req, timeout=None):
             captured["url"] = req.full_url if hasattr(req, "full_url") else req
             captured["body"] = json.loads(req.data)
+            captured["timeout"] = timeout
             return _FakeKevResponse(payload)
 
         monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
         return captured
+
+    def test_custom_kev_host_and_model_reach_request(self, monkeypatch):
+        captured = self._patch_urlopen(monkeypatch, _kev_payload("3", {"3": 1.0}))
+
+        benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Summer?d?d?d?d?d?d")],
+            backend="kev",
+            kev_host="http://x:1",
+            kev_model="m",
+        )
+
+        assert captured["url"] == "http://x:1/v1/systemone"
+        assert captured["body"]["model"] == "m"
+
+    def test_kev_request_uses_named_timeout(self, monkeypatch):
+        captured = self._patch_urlopen(monkeypatch, _kev_payload("3", {"3": 1.0}))
+
+        benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Summer?d?d?d?d?d?d")],
+            backend="kev",
+            kev_host="http://x:1",
+            kev_model="m",
+        )
+
+        assert captured["timeout"] == benchmark_mask_models.KEV_TIMEOUT_SECONDS
 
     def test_argmax_label_becomes_score(self, monkeypatch):
         probabilities = {"1": 0.04, "2": 0.03, "3": 0.06, "4": 0.10, "5": 0.77}
