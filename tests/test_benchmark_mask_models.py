@@ -14,6 +14,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from hashcat_rosetta.mask import parse_hcmask_line
 from hashcat_rosetta.nlmask import MaskSuggestion
 
@@ -893,8 +895,153 @@ class TestKevJudge:
         except benchmark_mask_models.JudgeError:
             pass
 
-    def test_default_backend_is_kev(self):
-        assert benchmark_mask_models.JUDGE_BACKEND == "kev"
+
+def _reload_script_with_env(monkeypatch, name: str, value: str | None):
+    """Re-execute the script under a set env var (module constants are read at import)."""
+    if value is None:
+        monkeypatch.delenv(name, raising=False)
+    else:
+        monkeypatch.setenv(name, value)
+    spec = importlib.util.spec_from_file_location("bm_reload_env", _SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["bm_reload_env"] = module
+    try:
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.modules.pop("bm_reload_env", None)
+
+
+class TestJudgeBackendEnv:
+    """BENCHMARK_JUDGE_BACKEND is read at import time and validated there."""
+
+    def test_unset_defaults_to_kev(self, monkeypatch):
+        module = _reload_script_with_env(monkeypatch, "BENCHMARK_JUDGE_BACKEND", None)
+        assert module.JUDGE_BACKEND == "kev"
+
+    def test_value_is_normalized(self, monkeypatch):
+        module = _reload_script_with_env(monkeypatch, "BENCHMARK_JUDGE_BACKEND", " OLLAMA ")
+        assert module.JUDGE_BACKEND == "ollama"
+
+    def test_unknown_backend_exits(self, monkeypatch):
+        with pytest.raises(SystemExit):
+            _reload_script_with_env(monkeypatch, "BENCHMARK_JUDGE_BACKEND", "bogus")
+
+
+def _patch_kev_urlopen(monkeypatch, response_or_exc):
+    """Stub urllib.request.urlopen for _kev_reachable; returns a dict capturing the URL."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(url, timeout=None):
+        captured["url"] = url
+        if isinstance(response_or_exc, BaseException):
+            raise response_or_exc
+        return response_or_exc
+
+    monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+    return captured
+
+
+class TestKevReachable:
+    def test_valid_json_is_reachable(self, monkeypatch):
+        _patch_kev_urlopen(monkeypatch, _FakeKevResponse({"data": []}))
+        assert benchmark_mask_models._kev_reachable("http://kev.example:8009") is True
+
+    def test_connection_error_is_unreachable(self, monkeypatch):
+        _patch_kev_urlopen(monkeypatch, OSError("connection refused"))
+        assert benchmark_mask_models._kev_reachable("http://kev.example:8009") is False
+
+    def test_non_json_body_is_unreachable(self, monkeypatch):
+        response = _FakeKevResponse({})
+        response._body = b"<html>not kev</html>"
+        _patch_kev_urlopen(monkeypatch, response)
+        assert benchmark_mask_models._kev_reachable("http://kev.example:8009") is False
+
+    def test_probes_models_endpoint(self, monkeypatch):
+        captured = _patch_kev_urlopen(monkeypatch, _FakeKevResponse({"data": []}))
+        benchmark_mask_models._kev_reachable("http://kev.example:8009/")
+        assert captured["url"] == "http://kev.example:8009/v1/models"
+
+
+class TestMainPreflight:
+    """main() gates the sweep on the judge backend's preflight.
+
+    Every test pins JUDGE_BACKEND and SKIP_JUDGE explicitly, so the result does
+    not depend on the developer's shell environment.
+    """
+
+    def _no_benchmark(self, monkeypatch):
+        def boom(model, *, think=True):
+            raise AssertionError("benchmark_model must not run after a failed preflight")
+
+        monkeypatch.setattr(benchmark_mask_models, "benchmark_model", boom)
+
+    def test_kev_unreachable_exits_one_and_names_host(self, monkeypatch, capsys):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "KEV_HOST", "http://127.0.0.1:1")
+        _patch_kev_urlopen(monkeypatch, OSError("connection refused"))
+        self._no_benchmark(monkeypatch)
+
+        with pytest.raises(SystemExit) as exc_info:
+            benchmark_mask_models.main()
+
+        assert exc_info.value.code == 1
+        assert "http://127.0.0.1:1" in capsys.readouterr().err
+
+    def test_kev_reachable_proceeds_to_sweep(self, monkeypatch, capsys):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", lambda *a, **k: True)
+        monkeypatch.setattr(benchmark_mask_models, "CANDIDATES", ["m1"])
+        monkeypatch.setattr(benchmark_mask_models, "THINK_SETTINGS", [False])
+        calls: list[str] = []
+
+        def fake_benchmark_model(model: str, *, think: bool = True):
+            calls.append(model)
+            return benchmark_mask_models.ModelReport(model, 1.0, [], think)
+
+        monkeypatch.setattr(benchmark_mask_models, "benchmark_model", fake_benchmark_model)
+
+        benchmark_mask_models.main()
+
+        assert calls == ["m1"]
+
+    def test_ollama_backend_pulls_judge_model_not_kev(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "ollama")
+        pulled: list[str] = []
+
+        def fake_ensure(model, **kwargs):
+            pulled.append(model)
+            return True
+
+        def no_kev(*a, **k):
+            raise AssertionError("_kev_reachable must not run for the ollama backend")
+
+        monkeypatch.setattr(benchmark_mask_models, "ensure_model_pulled", fake_ensure)
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", no_kev)
+        monkeypatch.setattr(benchmark_mask_models, "CANDIDATES", [])
+        monkeypatch.setattr(benchmark_mask_models, "THINK_SETTINGS", [False])
+
+        benchmark_mask_models.main()
+
+        assert pulled == [benchmark_mask_models.JUDGE_MODEL]
+
+    def test_skip_judge_checks_neither_backend(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+
+        def must_not_call(*a, **k):
+            raise AssertionError("no judge preflight when SKIP_JUDGE is set")
+
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", must_not_call)
+        monkeypatch.setattr(benchmark_mask_models, "ensure_model_pulled", must_not_call)
+        monkeypatch.setattr(benchmark_mask_models, "CANDIDATES", [])
+        monkeypatch.setattr(benchmark_mask_models, "THINK_SETTINGS", [False])
+
+        benchmark_mask_models.main()
 
 
 class TestRunPromptForModel:
@@ -1265,6 +1412,7 @@ class TestMain:
         monkeypatch.setattr(
             benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True
         )
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", lambda *a, **k: True)
 
         benchmark_mask_models.main()
 
