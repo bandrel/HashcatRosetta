@@ -104,19 +104,70 @@ JUDGE_HOST = os.environ.get("BENCHMARK_JUDGE_HOST", "http://localhost:11434")
 # at 2.8x the size, so it can't win a tie broken by size. Re-add that tier
 # only to answer "what's the ceiling", not "what should we default to".
 #
+# Caveat on that <=20GB rule, for whoever applies it next: it measures
+# weights, not footprint. The KV cache is not counted, and several of the
+# newer models here advertise 128K-1M contexts, where the cache can exceed
+# the weight differences the rule is policing (the same effect JUDGE_NUM_CTX
+# exists to contain on the judge host). It also conflates VRAM with speed:
+# an MoE model needs every expert resident but activates few, so it is
+# expensive on memory and cheap on latency. nemotron-3.5-lightning:30b-a3b
+# is the sharp case — 3B active parameters would likely make it the fastest
+# thing in the sweep, but every quantization ships >=23GB, so it is excluded
+# on a rule that is not measuring the axis it is actually good at. Revisit
+# if mask generation moves off the cracking box, which is the assumption the
+# cap rests on.
+#
 # qwen3.5:27b excluded on measured latency, not quality: in this sweep it
 # averaged ~4-5 minutes per prompt against devstral-small-2:24b's ~25s (and
 # timed out entirely on its first, cold-load request), which both disqualifies
 # it as an interactive default and consumes ~3h of sweep wall clock on its
 # own. Re-test it only if the latency changes.
+#
+# 2026-10-02 additions. Sizes are summed layer bytes from the registry
+# manifest (registry.ollama.ai/v2/library/<name>/manifests/<tag>), not the
+# rounded figure on the web page, since the report ranks on exact GiB:
+#   magistral:24b             13.3 GiB  Mistral-family reasoning model at the
+#                                       incumbent's parameter count and *under*
+#                                       its 15.2 GiB — the controlled test of
+#                                       whether reasoning tuning helps on
+#                                       grammar-constrained JSON.
+#   qwen3.8:27b-mtp-q4_K_M    17.7 GiB  Stock control for the abliterated
+#                                       Qwen3.8 entry below, which until now
+#                                       had none: without it a good or bad
+#                                       score confounds the Qwen3.8 generation
+#                                       with what abliteration did to it.
+#   lfm2.5:8b-a1b-q4_K_M       4.8 GiB  Explicitly built for reliable tool
+#                                       calling on small hardware. Clears the
+#                                       size tiebreak against everything here
+#                                       by 3x if it passes the gate at all.
+#   ornith:9b                  5.2 GiB  Second cheap shot at that same tiebreak.
+#   granite4.2:30b-q4_K_M     16.5 GiB  Newest Granite; the family has a long
+#                                       structured-output lineage.
+#   glm-4.7-flash:q4_K_M      17.7 GiB  Claims strongest-in-30B-class.
+#   gemma4:12b                 7.6 GiB  The list already had gemma4:31b; the
+#                                       12b is the one that could win on size.
+#   qwen3-coder:30b           18.6 GiB  A coder model on a formal-grammar task;
+#                                       reports no thinking capability, which
+#                                       matches the short-JSON framing above.
+# mistral-small:24b was REPLACED by mistral-small3.2:24b, not dropped: same
+# family and same 15.2 GiB at a newer point release, so testing the older tag
+# was only ever going to produce a stale measurement.
 CANDIDATES: list[str] = [
     "devstral-small-2:24b",
+    "magistral:24b",
+    "qwen3.8:27b-mtp-q4_K_M",
     "hf.co/daway845/Qwen3.8-27B-Abliterated-GGUF:Q4_K_M",
+    "lfm2.5:8b-a1b-q4_K_M",
+    "ornith:9b",
+    "gemma4:12b",
+    "granite4.2:30b-q4_K_M",
+    "glm-4.7-flash:q4_K_M",
+    "mistral-small3.2:24b",
+    "qwen3-coder:30b",
     "gemma4:31b",
     "qwen3:30b",
     "gemma3:27b",
     "dengcao/Qwen3-30B-A3B-Instruct-2507:latest",
-    "mistral-small:24b",
     "qwen3.5:9b",
     "phi4:14b",
 ]
@@ -130,6 +181,13 @@ _CANDIDATES_ENV = os.environ.get("BENCHMARK_CANDIDATES", "").strip()
 if _CANDIDATES_ENV:
     CANDIDATES = [name.strip() for name in _CANDIDATES_ENV.split(",") if name.strip()]
 
+# Candidate replacement worth testing: gpt-oss-safeguard:20b (12.8 GiB) is
+# the same base as this, but trained to grade free-form content against a
+# written policy and explain the verdict — which is exactly this judge's job,
+# and it is both smaller than the incumbent and sparser (3.6B active), easing
+# the GPU contention JUDGE_NUM_CTX exists to manage. Unlike the Kev/clef
+# backend it still generates text, so prompt_fix_suggestion keeps working.
+# Swapping it silently shifts every score: re-baseline, do not cross-compare.
 JUDGE_MODEL = "gpt-oss:20b"
 
 # Set BENCHMARK_SKIP_JUDGE=1 to run the deterministic checkers only and leave
