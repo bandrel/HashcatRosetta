@@ -12,6 +12,9 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
+
+import pytest
 
 from hashcat_rosetta.mask import parse_hcmask_line
 from hashcat_rosetta.nlmask import MaskSuggestion
@@ -692,7 +695,7 @@ class TestJudgeScore:
         suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
 
         verdict = benchmark_mask_models.judge_score(
-            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
         )
 
         assert verdict.score == 4
@@ -709,7 +712,7 @@ class TestJudgeScore:
 
         try:
             benchmark_mask_models.judge_score(
-                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
             )
             raise AssertionError("expected JudgeError")
         except benchmark_mask_models.JudgeError:
@@ -722,7 +725,7 @@ class TestJudgeScore:
 
         try:
             benchmark_mask_models.judge_score(
-                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
             )
             raise AssertionError("expected JudgeError")
         except benchmark_mask_models.JudgeError:
@@ -737,7 +740,7 @@ class TestJudgeScore:
 
         try:
             benchmark_mask_models.judge_score(
-                benchmark_mask_models.PROMPTS[0], suggestions, client=client
+                benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
             )
             raise AssertionError("expected JudgeError")
         except benchmark_mask_models.JudgeError:
@@ -751,15 +754,364 @@ class TestJudgeScore:
         suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
 
         benchmark_mask_models.judge_score(
-            benchmark_mask_models.PROMPTS[0], suggestions, client=client
+            benchmark_mask_models.PROMPTS[0], suggestions, client=client, backend="ollama"
         )
 
         user_message = completions.calls[0]["messages"][-1]["content"]
         assert "Summer?d?d?d?d?d?d" in user_message
         assert benchmark_mask_models.PROMPTS[0].description in user_message
 
+    def test_ollama_verdict_has_no_probability_fields(self):
+        completions = _FakeJudgeCompletions(
+            [json.dumps({"score": 5, "reason": "good", "prompt_fix_suggestion": ""})]
+        )
+        client = _FakeJudgeClient(completions)
+
+        verdict = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Summer?d?d?d?d?d?d")],
+            client=client,
+            backend="ollama",
+        )
+
+        assert verdict.judge_probabilities is None
+        assert verdict.judge_confidence is None
+
+
+class _FakeKevResponse:
+    """Minimal stand-in for urllib's http.client.HTTPResponse context manager."""
+
+    def __init__(self, payload: dict):
+        self._body = json.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _kev_payload(choice: str, probabilities: dict[str, float], confidence: float = 0.7) -> dict:
+    return {
+        "model": "kev-latest",
+        "answers": {
+            "score": {
+                "type": "choice",
+                "choice": choice,
+                "confidence": confidence,
+                "probabilities": probabilities,
+            }
+        },
+        "usage": {"input_tokens": 10, "output_tokens": 10},
+        "latency_ms": 100.0,
+    }
+
+
+class TestKevJudge:
+    def _patch_urlopen(self, monkeypatch, payload: dict):
+        captured: dict[str, Any] = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url if hasattr(req, "full_url") else req
+            captured["body"] = json.loads(req.data)
+            captured["timeout"] = timeout
+            return _FakeKevResponse(payload)
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+        return captured
+
+    def test_custom_kev_host_and_model_reach_request(self, monkeypatch):
+        captured = self._patch_urlopen(monkeypatch, _kev_payload("3", {"3": 1.0}))
+
+        benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Summer?d?d?d?d?d?d")],
+            backend="kev",
+            kev_host="http://x:1",
+            kev_model="m",
+        )
+
+        assert captured["url"] == "http://x:1/v1/systemone"
+        assert captured["body"]["model"] == "m"
+
+    def test_kev_request_uses_named_timeout(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "KEV_TIMEOUT_SECONDS", 7.0)
+        captured = self._patch_urlopen(monkeypatch, _kev_payload("3", {"3": 1.0}))
+
+        benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Summer?d?d?d?d?d?d")],
+            backend="kev",
+            kev_host="http://x:1",
+            kev_model="m",
+        )
+
+        assert captured["timeout"] == 7.0
+
+    def test_argmax_label_becomes_score(self, monkeypatch):
+        probabilities = {"1": 0.04, "2": 0.03, "3": 0.06, "4": 0.10, "5": 0.77}
+        captured = self._patch_urlopen(monkeypatch, _kev_payload("5", probabilities))
+        suggestions = [_suggestion("Summer?d?d?d?d?d?d")]
+
+        verdict = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0], suggestions, backend="kev"
+        )
+
+        assert verdict.score == 5
+        assert verdict.judge_probabilities == probabilities
+        assert verdict.judge_confidence == 0.7
+        # Kev is a decision model: it produces no free-text rationale or fix.
+        assert verdict.prompt_fix_suggestion is None
+        assert "5" in verdict.reason
+        # The request actually hit the configured Kev endpoint.
+        assert captured["url"].endswith("/v1/systemone")
+        assert "score" in captured["body"]["questions"]
+
+    def test_low_label_is_preserved(self, monkeypatch):
+        probabilities = {"1": 0.70, "2": 0.20, "3": 0.06, "4": 0.03, "5": 0.01}
+        self._patch_urlopen(monkeypatch, _kev_payload("1", probabilities))
+
+        verdict = benchmark_mask_models.judge_score(
+            benchmark_mask_models.PROMPTS[0],
+            [_suggestion("Winter?d?d?d?d?d?d")],
+            backend="kev",
+        )
+
+        assert verdict.score == 1
+
+    def test_out_of_range_label_raises_judge_error(self, monkeypatch):
+        self._patch_urlopen(monkeypatch, _kev_payload("9", {"9": 1.0}))
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0],
+                [_suggestion("Summer?d?d?d?d?d?d")],
+                backend="kev",
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_malformed_body_raises_judge_error(self, monkeypatch):
+        self._patch_urlopen(monkeypatch, {"unexpected": "shape"})
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0],
+                [_suggestion("Summer?d?d?d?d?d?d")],
+                backend="kev",
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+    def test_network_failure_raises_judge_error(self, monkeypatch):
+        def boom(req, timeout=None):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", boom)
+
+        try:
+            benchmark_mask_models.judge_score(
+                benchmark_mask_models.PROMPTS[0],
+                [_suggestion("Summer?d?d?d?d?d?d")],
+                backend="kev",
+            )
+            raise AssertionError("expected JudgeError")
+        except benchmark_mask_models.JudgeError:
+            pass
+
+
+def _reload_script_with_env(monkeypatch, name: str, value: str | None):
+    """Re-execute the script under a set env var (module constants are read at import)."""
+    if value is None:
+        monkeypatch.delenv(name, raising=False)
+    else:
+        monkeypatch.setenv(name, value)
+    spec = importlib.util.spec_from_file_location("bm_reload_env", _SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["bm_reload_env"] = module
+    try:
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.modules.pop("bm_reload_env", None)
+
+
+class TestJudgeBackendEnv:
+    """BENCHMARK_JUDGE_BACKEND is read at import time and validated there."""
+
+    def test_unset_defaults_to_kev(self, monkeypatch):
+        module = _reload_script_with_env(monkeypatch, "BENCHMARK_JUDGE_BACKEND", None)
+        assert module.JUDGE_BACKEND == "kev"
+
+    def test_value_is_normalized(self, monkeypatch):
+        module = _reload_script_with_env(monkeypatch, "BENCHMARK_JUDGE_BACKEND", " OLLAMA ")
+        assert module.JUDGE_BACKEND == "ollama"
+
+    def test_unknown_backend_exits(self, monkeypatch):
+        with pytest.raises(SystemExit):
+            _reload_script_with_env(monkeypatch, "BENCHMARK_JUDGE_BACKEND", "bogus")
+
+
+def _patch_kev_urlopen(monkeypatch, response_or_exc):
+    """Stub urllib.request.urlopen for _kev_reachable; returns a dict capturing the URL."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(url, timeout=None):
+        captured["url"] = url
+        if isinstance(response_or_exc, BaseException):
+            raise response_or_exc
+        return response_or_exc
+
+    monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+    return captured
+
+
+class TestKevReachable:
+    def test_valid_json_is_reachable(self, monkeypatch):
+        _patch_kev_urlopen(monkeypatch, _FakeKevResponse({"data": []}))
+        assert benchmark_mask_models._kev_reachable("http://kev.example:8009") is True
+
+    def test_connection_error_is_unreachable(self, monkeypatch):
+        _patch_kev_urlopen(monkeypatch, OSError("connection refused"))
+        assert benchmark_mask_models._kev_reachable("http://kev.example:8009") is False
+
+    def test_non_json_body_is_unreachable(self, monkeypatch):
+        response = _FakeKevResponse({})
+        response._body = b"<html>not kev</html>"
+        _patch_kev_urlopen(monkeypatch, response)
+        assert benchmark_mask_models._kev_reachable("http://kev.example:8009") is False
+
+    def test_probes_models_endpoint(self, monkeypatch):
+        captured = _patch_kev_urlopen(monkeypatch, _FakeKevResponse({"data": []}))
+        benchmark_mask_models._kev_reachable("http://kev.example:8009/")
+        assert captured["url"] == "http://kev.example:8009/v1/models"
+
+
+class TestMainPreflight:
+    """main() gates the sweep on the judge backend's preflight.
+
+    Every test pins JUDGE_BACKEND and SKIP_JUDGE explicitly, so the result does
+    not depend on the developer's shell environment.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_ambient_results_path(self, monkeypatch):
+        """main() appends to BENCHMARK_RESULTS_PATH when set; never let an ambient value write a real file."""
+        monkeypatch.delenv("BENCHMARK_RESULTS_PATH", raising=False)
+
+    def _no_benchmark(self, monkeypatch):
+        def boom(model, *, think=True):
+            raise AssertionError("benchmark_model must not run after a failed preflight")
+
+        monkeypatch.setattr(benchmark_mask_models, "benchmark_model", boom)
+
+    def test_kev_unreachable_exits_one_and_names_host(self, monkeypatch, capsys):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "KEV_HOST", "http://127.0.0.1:1")
+        probed_hosts: list[str] = []
+
+        def fake_reachable(host):
+            probed_hosts.append(host)
+            return False
+
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", fake_reachable)
+        self._no_benchmark(monkeypatch)
+
+        with pytest.raises(SystemExit) as exc_info:
+            benchmark_mask_models.main()
+
+        assert exc_info.value.code == 1
+        assert probed_hosts == ["http://127.0.0.1:1"]
+        assert "http://127.0.0.1:1" in capsys.readouterr().err
+
+    def test_kev_reachable_proceeds_to_sweep(self, monkeypatch, capsys):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", lambda *a, **k: True)
+        monkeypatch.setattr(benchmark_mask_models, "CANDIDATES", ["m1"])
+        monkeypatch.setattr(benchmark_mask_models, "THINK_SETTINGS", [False])
+        calls: list[str] = []
+
+        def fake_benchmark_model(model: str, *, think: bool = True):
+            calls.append(model)
+            return benchmark_mask_models.ModelReport(model, 1.0, [], think)
+
+        monkeypatch.setattr(benchmark_mask_models, "benchmark_model", fake_benchmark_model)
+
+        benchmark_mask_models.main()
+
+        assert calls == ["m1"]
+
+    def test_ollama_backend_pulls_judge_model_not_kev(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "ollama")
+        pulled: list[str] = []
+
+        def fake_ensure(model, **kwargs):
+            pulled.append(model)
+            return True
+
+        def no_kev(*a, **k):
+            raise AssertionError("_kev_reachable must not run for the ollama backend")
+
+        monkeypatch.setattr(benchmark_mask_models, "ensure_model_pulled", fake_ensure)
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", no_kev)
+        monkeypatch.setattr(benchmark_mask_models, "CANDIDATES", [])
+        monkeypatch.setattr(benchmark_mask_models, "THINK_SETTINGS", [False])
+
+        benchmark_mask_models.main()
+
+        assert pulled == [benchmark_mask_models.JUDGE_MODEL]
+
+    def test_skip_judge_checks_neither_backend(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+
+        def must_not_call(*a, **k):
+            raise AssertionError("no judge preflight when SKIP_JUDGE is set")
+
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", must_not_call)
+        monkeypatch.setattr(benchmark_mask_models, "ensure_model_pulled", must_not_call)
+        monkeypatch.setattr(benchmark_mask_models, "CANDIDATES", [])
+        monkeypatch.setattr(benchmark_mask_models, "THINK_SETTINGS", [False])
+
+        benchmark_mask_models.main()
+
 
 class TestRunPromptForModel:
+    def test_kev_requests_never_go_to_ollama_judge_host(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(
+            benchmark_mask_models,
+            "generate_masks",
+            lambda description, **kwargs: [_suggestion("Summer?d?d?d?d?d?d")],
+        )
+        urls: list[str] = []
+
+        def fake_urlopen(req, timeout=None):
+            urls.append(req.full_url if hasattr(req, "full_url") else req)
+            return _FakeKevResponse(_kev_payload("3", {"3": 1.0}))
+
+        monkeypatch.setattr(benchmark_mask_models.urllib.request, "urlopen", fake_urlopen)
+
+        benchmark_mask_models.run_prompt_for_model(
+            "some-model",
+            benchmark_mask_models.PROMPTS[0],
+            judge_host="http://ollama.example:11434",
+        )
+
+        assert len(urls) == 1
+        assert urls[0].startswith(benchmark_mask_models.KEV_HOST)
+        assert "ollama.example" not in urls[0]
+
     def test_hard_fail_when_generate_masks_raises(self, monkeypatch):
         def raising_generate_masks(description, **kwargs):
             raise benchmark_mask_models.MaskGenerationError("simulated failure")
@@ -1110,7 +1462,66 @@ class TestFormatReport:
         assert report_text.index("big-model") < report_text.index("unpullable-model")
 
 
+class TestJudgeLabel:
+    """format_report names the judge; the label is read from module globals at call time."""
+
+    @pytest.fixture(autouse=True)
+    def _pin_judge_globals(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", False)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+        monkeypatch.setattr(benchmark_mask_models, "KEV_MODEL", "kev-test")
+        monkeypatch.setattr(benchmark_mask_models, "KEV_HOST", "http://kev.example:8009")
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_MODEL", "judge-test")
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_HOST", "http://ollama.example:11434")
+
+    def _one_report(self):
+        return [
+            benchmark_mask_models.ModelReport(
+                "some-model",
+                2.0,
+                [
+                    benchmark_mask_models.PromptResult(p.name, 5.0, None, 5)
+                    for p in benchmark_mask_models.PROMPTS
+                ],
+            )
+        ]
+
+    def test_skip_judge_label(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "ollama")
+
+        report_text = benchmark_mask_models.format_report([])
+
+        assert report_text.splitlines()[0] == "Judge: skipped (BENCHMARK_SKIP_JUDGE)"
+
+    def test_kev_label(self):
+        report_text = benchmark_mask_models.format_report(self._one_report())
+
+        assert report_text.splitlines()[0] == "Judge: kev (kev-test @ http://kev.example:8009)"
+        assert report_text.splitlines()[1] == ""
+
+    def test_ollama_label(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "ollama")
+
+        report_text = benchmark_mask_models.format_report([])
+
+        assert report_text.splitlines()[0] == (
+            "Judge: ollama (judge-test @ http://ollama.example:11434)"
+        )
+
+    def test_skip_takes_precedence_over_backend(self, monkeypatch):
+        monkeypatch.setattr(benchmark_mask_models, "SKIP_JUDGE", True)
+        monkeypatch.setattr(benchmark_mask_models, "JUDGE_BACKEND", "kev")
+
+        assert benchmark_mask_models._judge_label() == "skipped (BENCHMARK_SKIP_JUDGE)"
+
+
 class TestMain:
+    @pytest.fixture(autouse=True)
+    def _no_ambient_results_path(self, monkeypatch):
+        """main() appends to BENCHMARK_RESULTS_PATH when set; never let an ambient value write a real file."""
+        monkeypatch.delenv("BENCHMARK_RESULTS_PATH", raising=False)
+
     def test_main_wires_candidates_through_to_printed_report(self, monkeypatch, capsys):
         def fake_benchmark_model(model: str, *, think: bool = True):
             return benchmark_mask_models.ModelReport(
@@ -1127,6 +1538,7 @@ class TestMain:
         monkeypatch.setattr(
             benchmark_mask_models, "ensure_model_pulled", lambda model, **kwargs: True
         )
+        monkeypatch.setattr(benchmark_mask_models, "_kev_reachable", lambda *a, **k: True)
 
         benchmark_mask_models.main()
 
